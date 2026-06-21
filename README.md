@@ -39,35 +39,62 @@ receiver-controlled adaptation.
 ks init                    # baby kernel born (appends kernel.initialized)
 ks plant examples/notes    # LLM compiles trio.declared, replays starter events
 ks invoke note "buy milk"  # run the compiled command, event appended
-ks project                 # replay events through the projector, emit HTML
+ks project                 # replay events through projector, emit HTML + persist to site/
+ks serve                   # HTTP server: static site/ + /live/<name> + /events
 ks log                     # show the event log
 ks seeds                   # list planted seeds (from seed.planted events)
 ```
 
 After planting the example notes seed, `ks project` already shows two notes —
-the starter events that came with the seed. Then `ks invoke note "buy milk"`
-adds a third. One stream, declarations and content together.
+the starter events that came with the seed — and writes `~/.ks/site/note.html`.
+Then `ks invoke note "buy milk"` adds a third. `ks serve` exposes the
+materialized projection at `http://localhost:7777/` and a live re-projection
+at `/live/note`. One stream, declarations and content together.
 
 ## pipe contract
 
 Compiled scripts are standalone executables orchestrated by the kernel via
-Unix pipelines:
+Unix pipelines. Any language works — Python, bash, node, Perl, anything
+`os.Exec` can run:
 
 - **command script**: receives args as `argv`, current events as JSONL on
   `stdin`, writes new events as JSONL on `stdout` (one per line, fields:
   `name`, `payload`). The kernel assigns `id`, `seq`, `occurred_at`.
 - **projector script**: receives all events as JSONL on `stdin`, writes
-  HTML on `stdout`.
+  HTML on `stdout`. The kernel persists the output to
+  `KS_HOME/site/<name>.html` — projectors don't write to disk, they just
+  emit HTML and the kernel decides where it goes.
 
-No embedded runtime, no plugin loader. The kernel is a pipe orchestrator.
+The kernel sets `KS_HOME` env var on every script. Commands that need
+persistent state between calls can write to `$KS_HOME/artefacts/<name>.json`.
+No helper module, no language assumptions, no embedded runtime.
+
+## artefacts on disk
+
+```
+KS_HOME/
+  events.jsonl               the only truth (append-only)
+  registry/
+    commands/<name>          compiled command scripts (any language)
+    projectors/<name>        compiled projector scripts (any language)
+  site/<name>.html           materialized HTML projections (written by ks project)
+  artefacts/<name>.json      structured state (written by commands via $KS_HOME)
+```
+
+Agents (opencode, grep, anything) read `site/` and `artefacts/` directly —
+plain files, no API. `ks serve` exposes them over HTTP with `/live/<name>`
+for on-demand re-projection against current events.
 
 ## what the kernel is
 
-Three things, irreducible:
+Four things, irreducible:
 
 1. **event store** — append-only JSONL log (the only truth)
 2. **LLM compiler** — reads `trio.declared` payloads, writes scripts at plant time
-3. **pipe orchestrator** — runs commands and projectors, moves events
+3. **pipe orchestrator** — runs commands and projectors, moves events,
+   persists projector output to `site/`
+4. **HTTP server** — `ks serve` exposes materialized site/ and re-runs
+   projectors on demand at `/live/<name>`
 
 The kernel knows one event: `trio.declared`. It writes two: `kernel.initialized`
 and `seed.planted`. Everything else comes from seeds.
@@ -85,14 +112,22 @@ the capabilities to project them). A full seed has both.
 
 ```
 KS_HOME        kernel home (default ~/.ks)
-KS_LLM_URL     LLM API base URL (default http://127.0.0.1:8080)
-KS_LLM_API_KEY LLM API key (if unset, ks writes stub scripts)
-KS_LLM_MODEL   LLM model name (default "local")
+KS_LLM_URL     LLM API base URL (auto-detected from opencode-go)
+KS_LLM_API_KEY LLM API key (auto-detected from opencode-go)
+KS_LLM_MODEL   LLM model name (auto-detected from opencode-go)
+KS_LLM_STUB    set to "1" to force stub scripts
 ```
 
-Without `KS_LLM_API_KEY`, `ks plant` writes trivial stub scripts so the pipe
-contract is demonstrable. Set the key and the LLM compiles real
-implementations from the declarations.
+Config precedence (highest first):
+
+1. `KS_LLM_*` env vars — explicit override of URL, key, or model
+2. opencode-go subscription — read from `~/.local/share/opencode/auth.json`
+   (endpoint `https://opencode.ai/zen/go`, model `glm-5.2`)
+3. stub scripts — no key, no network
+
+If you have an opencode-go subscription configured via opencode, `ks plant`
+uses it automatically — no extra setup. Set `KS_LLM_STUB=1` to force stub
+scripts without calling the LLM.
 
 ## status
 

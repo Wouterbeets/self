@@ -1,0 +1,116 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func runKs(t *testing.T, home string, args ...string) string {
+	t.Helper()
+	bin := os.Getenv("KS_TEST_BIN")
+	if bin == "" {
+		t.Skip("set KS_TEST_BIN to the ks binary to run integration tests")
+	}
+	cmd := exec.Command(bin, args...)
+	cmd.Env = append(os.Environ(), "KS_HOME="+home, "KS_LLM_STUB=1")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("ks %s: %v\n%s", strings.Join(args, " "), err, out.String())
+	}
+	return out.String()
+}
+
+func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
+	bin := os.Getenv("KS_TEST_BIN")
+	if bin == "" {
+		t.Skip("set KS_TEST_BIN to the ks binary to run integration tests")
+	}
+	home := t.TempDir()
+
+	runKs(t, home, "init")
+	if _, err := os.Stat(filepath.Join(home, "site")); err != nil {
+		t.Fatal("ks init did not create site/")
+	}
+
+	runKs(t, home, "plant", "examples/notes")
+
+	projPath := filepath.Join(home, "registry", "projectors", "notes")
+	if _, err := os.Stat(projPath); err != nil {
+		t.Fatal("plant did not write projector script at projectors/notes")
+	}
+
+	runKs(t, home, "invoke", "note", "from-test")
+
+	// project should write to KS_HOME/site/notes.html as a side effect
+	runKs(t, home, "project", "notes")
+	sitePath := filepath.Join(home, "site", "notes.html")
+	data, err := os.ReadFile(sitePath)
+	if err != nil {
+		t.Fatalf("projector did not write site file: %v", err)
+	}
+	if !strings.Contains(string(data), "from-test") {
+		t.Errorf("site HTML missing invoked note:\n%s", string(data))
+	}
+
+	// start ks serve in background
+	srv := exec.Command(bin, "serve", "18777")
+	srv.Env = append(os.Environ(), "KS_HOME="+home, "KS_LLM_STUB=1")
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Process.Kill()
+	t.Cleanup(func() { srv.Process.Kill() })
+
+	base := "http://localhost:18777"
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(3 * time.Second)
+	var ok bool
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(base + "/events")
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == 200 && strings.Contains(string(body), "note.captured") {
+				ok = true
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !ok {
+		t.Fatal("could not reach /events on ks serve")
+	}
+
+	resp, err := client.Get(base + "/live/notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	liveBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Errorf("/live/notes status %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(liveBody), "<ul>") {
+		t.Errorf("/live/notes did not return projector HTML:\n%s", string(liveBody))
+	}
+
+	resp2, err := client.Get(base + "/artefacts/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	var names []string
+	if err := json.NewDecoder(resp2.Body).Decode(&names); err != nil {
+		t.Errorf("/artefacts/ did not return JSON array: %v", err)
+	}
+}

@@ -31,7 +31,8 @@ func NewID() string {
 }
 
 const (
-	KernelInitialized = "kernel.initialized"
-	TrioDeclared      = "trio.declared"
-	SeedPlanted       = "seed.planted"
+	KernelInitialized  = "kernel.initialized"
+	CommandDeclared    = "command.declared"
+	ProjectorDeclared  = "projector.declared"
+	SeedPlanted        = "seed.planted"
 )

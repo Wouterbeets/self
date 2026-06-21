@@ -11,25 +11,18 @@ import (
 )
 
 type Manifest struct {
-	Name        string       `json:"-"`
-	Description string       `json:"-"`
-	Lineage     string       `json:"-"`
-	Version     string       `json:"-"`
-	SeedDir     string       `json:"-"`
-	Trios       []Trio       `json:"-"`
-	Events      []event.Event `json:"-"`
+	Name       string          `json:"-"`
+	SeedDir    string          `json:"-"`
+	Commands   []Command       `json:"-"`
+	Projectors []ProjectorDecl `json:"-"`
+	Events     []event.Event   `json:"-"`
 }
 
-type Trio struct {
-	Name      string          `json:"name"`
-	Command   CommandDecl     `json:"command"`
-	Event     EventDecl       `json:"event"`
-	Projector ProjectorDecl   `json:"projector"`
-}
-
-type CommandDecl struct {
+type Command struct {
+	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	Params      map[string]string `json:"params"`
+	Event       EventDecl         `json:"event"`
 }
 
 type EventDecl struct {
@@ -66,12 +59,19 @@ func Load(dir string) (*Manifest, error) {
 		}
 		m.Events = append(m.Events, e)
 
-		if e.Name == event.TrioDeclared {
-			var trio Trio
-			if err := json.Unmarshal(e.Payload, &trio); err != nil {
-				return nil, fmt.Errorf("parse trio.declared payload: %w", err)
+		switch e.Name {
+		case event.CommandDeclared:
+			var cmd Command
+			if err := json.Unmarshal(e.Payload, &cmd); err != nil {
+				return nil, fmt.Errorf("parse command.declared payload: %w", err)
 			}
-			m.Trios = append(m.Trios, trio)
+			m.Commands = append(m.Commands, cmd)
+		case event.ProjectorDeclared:
+			var proj ProjectorDecl
+			if err := json.Unmarshal(e.Payload, &proj); err != nil {
+				return nil, fmt.Errorf("parse projector.declared payload: %w", err)
+			}
+			m.Projectors = append(m.Projectors, proj)
 		}
 	}
 
