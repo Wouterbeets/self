@@ -37,7 +37,7 @@ func (c *Compiler) Available() bool {
 	if c.Stub {
 		return false
 	}
-	return c.Key != ""
+	return c.Key != "" || strings.HasPrefix(c.URL, "http://127.0.0.1") || strings.HasPrefix(c.URL, "http://localhost")
 }
 
 type BrainResult struct {
@@ -50,7 +50,7 @@ type BrainResult struct {
 // Used by `ks think`, which commands call for LLM access.
 func (c *Compiler) CallBrain(user string) (*BrainResult, error) {
 	if !c.Available() {
-		return nil, fmt.Errorf("no LLM configured (set KS_LLM_* or configure opencode-go)")
+		return nil, fmt.Errorf("no LLM available (ensure llama-server is running on localhost:8080, or set KS_LLM_*)")
 	}
 	return c.callBrainLLM(BrainSystemPrompt, user)
 }
@@ -79,11 +79,13 @@ func (c *Compiler) callBrainLLM(system, user string) (*BrainResult, error) {
 			return nil, err
 		}
 		r.Header.Set("Content-Type", "application/json")
-		r.Header.Set("Authorization", "Bearer "+c.Key)
+		if c.Key != "" {
+			r.Header.Set("Authorization", "Bearer "+c.Key)
+		}
 
 		resp, err := llmHTTPClient.Do(r)
 		if err != nil {
-			return nil, fmt.Errorf("llm call failed: %w (set KS_LLM_API_KEY or check KS_LLM_URL)", err)
+			return nil, fmt.Errorf("llm call failed: %w (check KS_LLM_URL)", err)
 		}
 
 		if resp.StatusCode != 200 {
@@ -176,10 +178,8 @@ type llmConfig struct {
 
 func defaultLLMConfig() (url, key, model string) {
 	url = "http://127.0.0.1:8080"
+	key = ""
 	model = "local"
-	if cfg, ok := loadOpencodeGoConfig(opencodeAuthPath()); ok {
-		url, key, model = cfg.URL, cfg.Key, cfg.Model
-	}
 	return
 }
 
@@ -243,11 +243,13 @@ func (c *Compiler) callLLM(system, user string, submitTool map[string]any) (stri
 			return "", err
 		}
 		r.Header.Set("Content-Type", "application/json")
-		r.Header.Set("Authorization", "Bearer "+c.Key)
+		if c.Key != "" {
+			r.Header.Set("Authorization", "Bearer "+c.Key)
+		}
 
 		resp, err := llmHTTPClient.Do(r)
 		if err != nil {
-			return "", fmt.Errorf("llm call failed: %w (set KS_LLM_API_KEY or check KS_LLM_URL)", err)
+			return "", fmt.Errorf("llm call failed: %w (check KS_LLM_URL)", err)
 		}
 
 		if resp.StatusCode != 200 {

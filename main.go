@@ -108,15 +108,14 @@ on disk:
 
 environment:
   KS_HOME        ks home directory (default ~/.ks)
-  KS_LLM_URL     llm api base url (auto-detected from opencode-go)
-  KS_LLM_API_KEY llm api key (auto-detected from opencode-go)
-  KS_LLM_MODEL   llm model name (auto-detected from opencode-go)
+  KS_LLM_URL     llm api base url (default http://127.0.0.1:8080)
+  KS_LLM_API_KEY llm api key (not needed for local llama-server)
+  KS_LLM_MODEL   llm model name (default "local")
   KS_LLM_STUB    set to "1" to force stub scripts
 
-If KS_LLM_* is unset, ks reads opencode-go credentials from
-~/.local/share/opencode/auth.json and uses the opencode-go endpoint
-(https://opencode.ai/zen/go, model glm-5.2). Set KS_LLM_STUB=1 to
-force stub scripts without calling the LLM.
+By default, ks connects to a local llama-server on port 8080.
+Override with KS_LLM_* env vars for a remote endpoint.
+Set KS_LLM_STUB=1 to force stub scripts without calling the LLM.
 
 kernel-known events:
   kernel.initialized   written by ks init
@@ -434,6 +433,25 @@ func cmdServe(home string, port string) error {
 	}
 
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
+
+	// Rebuild kernel.html
+	if err := kernel.RenderHTML(home); err != nil {
+		fmt.Fprintf(os.Stderr, "ks: warning: could not rebuild kernel.html: %s\n", err)
+	}
+
+	// Rebuild all projectors from the registry
+	projDir := filepath.Join(home, "registry", "projectors")
+	entries, err := os.ReadDir(projDir)
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				fmt.Fprintf(os.Stderr, "rebuilding projector %q...\n", e.Name())
+				if rebuildErr := runProjectorToSite(home, e.Name()); rebuildErr != nil {
+					fmt.Fprintf(os.Stderr, "ks: warning: projector %q failed: %s\n", e.Name(), rebuildErr)
+				}
+			}
+		}
+	}
 
 	mux := http.NewServeMux()
 
