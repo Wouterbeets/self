@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	htmlesc "html"
 	"io"
 	"net/http"
 	"net/url"
@@ -508,17 +509,71 @@ form{display:flex;flex-direction:column;gap:10px;max-width:520px}
 .msg .who{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 </style>`
 
-// enrich injects the shared stylesheet into <head> and the auto-reload script
-// before </body>, so bare semantic projector output renders styled and live
-// without the projector carrying any CSS of its own.
-func enrich(html []byte) []byte {
-	s := string(html)
+// navCSS styles the projection sidebar. Injected after the page's own styles
+// (so its body offset wins), with fallback colors for pages that don't define
+// the enrichment variables (e.g. kernel.html). Collapses to a top bar on narrow
+// screens.
+const navCSS = `<style>
+.ks-nav{position:fixed;left:0;top:0;bottom:0;width:180px;overflow:auto;box-sizing:border-box;
+  border-right:1px solid var(--border,#e2e4e8);padding:20px 14px;background:var(--card,#fff);font-size:14px}
+.ks-nav a{display:block;padding:5px 8px;border-radius:5px;color:var(--fg,#1f2328);text-decoration:none;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ks-nav a:hover{background:color-mix(in srgb,var(--accent,#2563eb) 12%,transparent)}
+.ks-nav .ks-brand{font-weight:700;font-family:ui-monospace,Menlo,monospace;font-size:1.1rem;margin-bottom:6px}
+.ks-nav .ks-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;opacity:.55;margin:14px 8px 4px}
+body{padding-left:210px}
+@media (max-width:640px){.ks-nav{position:static;width:auto;height:auto;border-right:0;border-bottom:1px solid var(--border,#e2e4e8)}body{padding-left:0}}
+</style>`
+
+// navHTML builds the projection sidebar from the planted projectors. Flat for
+// now (nested projections aren't modelled yet — they'd need a recursive walk).
+func navHTML(home string) string {
+	var b strings.Builder
+	b.WriteString(`<aside class="ks-nav"><a class="ks-brand" href="/">ks</a>`)
+	b.WriteString(`<div class="ks-label">projections</div>`)
+	entries, _ := os.ReadDir(filepath.Join(home, "registry", "projectors"))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		b.WriteString(fmt.Sprintf(`<a href="/%s">%s</a>`, n, htmlesc.EscapeString(n)))
+	}
+	b.WriteString(`<div class="ks-label">kernel</div><a href="/">wiring &amp; identity</a></aside>`)
+	return b.String()
+}
+
+// injectNav adds the projection sidebar (and its styles) to a served page —
+// universal chrome the kernel provides so projectors stay bare. Used for both
+// projector pages and kernel.html.
+func injectNav(home string, page []byte) []byte {
+	s := string(page)
+	if i := strings.Index(s, "</head>"); i >= 0 {
+		s = s[:i] + navCSS + s[i:]
+	} else {
+		s = navCSS + s
+	}
+	aside := navHTML(home)
+	if i := strings.Index(s, "<body"); i >= 0 {
+		if j := strings.Index(s[i:], ">"); j >= 0 {
+			pos := i + j + 1
+			return []byte(s[:pos] + aside + s[pos:])
+		}
+	}
+	return []byte(aside + s)
+}
+
+// enrich injects the shared stylesheet into <head>, the projection sidebar, and
+// the auto-reload script — so bare semantic projector output renders styled,
+// navigable, and live without the projector carrying any of it.
+func enrich(home string, page []byte) []byte {
+	s := string(page)
 	if i := strings.Index(s, "</head>"); i >= 0 {
 		s = s[:i] + enrichmentCSS + s[i:]
 	} else {
 		s = enrichmentCSS + s
 	}
-	return injectAutoReload([]byte(s))
+	return injectNav(home, injectAutoReload([]byte(s)))
 }
 
 func cmdServe(home string, port string) error {
@@ -569,7 +624,7 @@ func cmdServe(home string, port string) error {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(injectAutoReload(data))
+			w.Write(injectNav(home, injectAutoReload(data)))
 			return
 		}
 
@@ -580,7 +635,7 @@ func cmdServe(home string, port string) error {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(enrich(html))
+			w.Write(enrich(home, html))
 			return
 		}
 
