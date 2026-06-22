@@ -1,4 +1,0 @@
-{"name":"command.declared","payload":{"name":"note","description":"Capture a note. The title is the joined argv args.","params":{"title":"string — the note text, joined from argv"},"event":{"name":"note.captured","fields":{"title":"string — the note text"}}}}
-{"name":"projector.declared","payload":{"name":"notes","description":"Render all note.captured events as an HTML unordered list.","consumes":["note.captured"]}}
-{"name":"note.captured","payload":{"title":"welcome to ks — plant a seed, grow a capability"}}
-{"name":"note.captured","payload":{"title":"this starter event came with the seed"}}

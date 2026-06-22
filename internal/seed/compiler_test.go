@@ -158,7 +158,7 @@ func TestNewCompilerStubFlag(t *testing.T) {
 
 	clearLLMEnv(t)
 	os.Setenv("KS_LLM_STUB", "1")
-	c := NewCompiler()
+	c := NewCompiler("")
 	if !c.Stub {
 		t.Fatal("KS_LLM_STUB=1 should set Stub=true")
 	}

@@ -11,11 +11,12 @@ import (
 
 	"ks/internal/event"
 	"ks/internal/seed"
+	"ks/internal/store"
 )
 
 const PipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
 projector script: receives all events as JSONL on stdin, writes HTML on stdout. The kernel persists the output to KS_HOME/site/<projector_name>.html.
-The kernel sets the KS_HOME env var on every script. Commands may write persistent structured state to $KS_HOME/artefacts/<name>.json.
+The kernel sets the KS_HOME env var on every script.
 Scripts can be in any language os.Exec can run — Python, bash, node, anything with a shebang.`
 
 type CommandInfo struct {
@@ -38,6 +39,12 @@ type SeedInfo struct {
 	Seq        int
 }
 
+type CompiledInfo struct {
+	Type string
+	Name string
+	Seq  int
+}
+
 // RenderHTML reads the event log, extracts all command.declared,
 // projector.declared, and seed.planted events, and writes the kernel
 // wiring as HTML to KS_HOME/site/kernel.html. Called at init and plant.
@@ -51,6 +58,7 @@ func RenderHTML(home string) error {
 	var commands []CommandInfo
 	var projectors []ProjectorInfo
 	var seeds []SeedInfo
+	var compiled []CompiledInfo
 
 	for _, e := range events {
 		switch e.Name {
@@ -84,17 +92,28 @@ func RenderHTML(home string) error {
 				Projectors: rec.Projectors,
 				Seq:        e.Seq,
 			})
+		case event.ScriptCompiled:
+			var c struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			}
+			json.Unmarshal(e.Payload, &c)
+			compiled = append(compiled, CompiledInfo{
+				Type: c.Type,
+				Name: c.Name,
+				Seq:  e.Seq,
+			})
 		}
 	}
 
-	html := buildHTML(commands, projectors, seeds)
+	html := buildHTML(commands, projectors, seeds, compiled)
 
 	siteDir := filepath.Join(home, "site")
 	os.MkdirAll(siteDir, 0755)
 	return os.WriteFile(filepath.Join(siteDir, "kernel.html"), []byte(html), 0644)
 }
 
-func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedInfo) string {
+func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedInfo, compiled []CompiledInfo) string {
 	var b strings.Builder
 
 	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n")
@@ -134,6 +153,7 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 	b.WriteString("<dt>kernel.initialized</dt><dd>written by ks init</dd>\n")
 	b.WriteString("<dt>command.declared</dt><dd>read by ks plant to compile commands</dd>\n")
 	b.WriteString("<dt>projector.declared</dt><dd>read by ks plant to compile projectors</dd>\n")
+	b.WriteString("<dt>script.compiled</dt><dd>written by ks plant/invoke — logs the compiled script for rollback</dd>\n")
 	b.WriteString("<dt>seed.planted</dt><dd>written by ks plant as a receipt</dd>\n")
 	b.WriteString("</dl>\n")
 
@@ -230,6 +250,22 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 	}
 	b.WriteString("</section>\n")
 
+	// Compilation history
+	b.WriteString("<section id=\"compilations\">\n")
+	b.WriteString("<h2>compilation history</h2>\n")
+	if len(compiled) == 0 {
+		b.WriteString("<p>No scripts compiled yet.</p>\n")
+	} else {
+		b.WriteString("<table class=\"wiring-table\">\n")
+		b.WriteString("<tr><th>seq</th><th>type</th><th>name</th></tr>\n")
+		for _, c := range compiled {
+			b.WriteString(fmt.Sprintf("<tr><td>%d</td><td>%s</td><td>%s</td></tr>\n",
+				c.Seq, html.EscapeString(c.Type), html.EscapeString(c.Name)))
+		}
+		b.WriteString("</table>\n")
+	}
+	b.WriteString("</section>\n")
+
 	// Seeds
 	b.WriteString("<section id=\"seeds\">\n")
 	b.WriteString("<h2>seeds</h2>\n")
@@ -265,8 +301,15 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 // them on the fly. The event log keeps every version for audit;
 // the registry holds only the latest.
 func CompileDeclarations(home string, events []event.Event) (commands, projectors []string, err error) {
-	compiler := seed.NewCompiler()
+	compiler := seed.NewCompiler(home)
 	registry := filepath.Join(home, "registry")
+
+	type compiled struct {
+		Type   string `json:"type"`
+		Name   string `json:"name"`
+		Script string `json:"script"`
+	}
+	var compiledScripts []compiled
 
 	for _, e := range events {
 		switch e.Name {
@@ -286,6 +329,7 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 			}
 			fmt.Printf(" planted\n")
 			commands = append(commands, cmd.Name)
+			compiledScripts = append(compiledScripts, compiled{"command", cmd.Name, script})
 
 		case event.ProjectorDeclared:
 			var proj seed.ProjectorDecl
@@ -303,6 +347,18 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 			}
 			fmt.Printf(" planted\n")
 			projectors = append(projectors, proj.Name)
+			compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
+		}
+	}
+
+	if len(compiledScripts) > 0 {
+		st := store.Open(home)
+		for _, cs := range compiledScripts {
+			payload, _ := json.Marshal(cs)
+			e := event.New(event.ScriptCompiled, payload)
+			if aErr := st.Append(&e); aErr != nil {
+				return commands, projectors, fmt.Errorf("append script.compiled: %w", aErr)
+			}
 		}
 	}
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -42,27 +41,25 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 		t.Fatal("ks init did not create site/")
 	}
 
-	runKs(t, home, "plant", "examples/notes")
+	runKs(t, home, "plant", "seeds/chat")
 
-	projPath := filepath.Join(home, "registry", "projectors", "notes")
+	projPath := filepath.Join(home, "registry", "projectors", "chat")
 	if _, err := os.Stat(projPath); err != nil {
-		t.Fatal("plant did not write projector script at projectors/notes")
+		t.Fatal("plant did not write projector script at projectors/chat")
 	}
 
-	runKs(t, home, "invoke", "note", "from-test")
+	runKs(t, home, "invoke", "chat", "from-test")
 
-	// project should write to KS_HOME/site/notes.html as a side effect
-	runKs(t, home, "project", "notes")
-	sitePath := filepath.Join(home, "site", "notes.html")
+	runKs(t, home, "project", "chat")
+	sitePath := filepath.Join(home, "site", "chat.html")
 	data, err := os.ReadFile(sitePath)
 	if err != nil {
 		t.Fatalf("projector did not write site file: %v", err)
 	}
 	if !strings.Contains(string(data), "from-test") {
-		t.Errorf("site HTML missing invoked note:\n%s", string(data))
+		t.Errorf("site HTML missing invoked message:\n%s", string(data))
 	}
 
-	// start ks serve in background
 	srv := exec.Command(bin, "serve", "18777")
 	srv.Env = append(os.Environ(), "KS_HOME="+home, "KS_LLM_STUB=1")
 	if err := srv.Start(); err != nil {
@@ -80,7 +77,7 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 		if err == nil {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			if resp.StatusCode == 200 && strings.Contains(string(body), "note.captured") {
+			if resp.StatusCode == 200 && strings.Contains(string(body), "chat.message") {
 				ok = true
 				break
 			}
@@ -91,27 +88,17 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 		t.Fatal("could not reach /events on ks serve")
 	}
 
-	resp, err := client.Get(base + "/live/notes")
+	resp, err := client.Get(base + "/live/chat")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	liveBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		t.Errorf("/live/notes status %d", resp.StatusCode)
+		t.Errorf("/live/chat status %d", resp.StatusCode)
 	}
 	if !strings.Contains(string(liveBody), "<ul>") {
-		t.Errorf("/live/notes did not return projector HTML:\n%s", string(liveBody))
-	}
-
-	resp2, err := client.Get(base + "/artefacts/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp2.Body.Close()
-	var names []string
-	if err := json.NewDecoder(resp2.Body).Decode(&names); err != nil {
-		t.Errorf("/artefacts/ did not return JSON array: %v", err)
+		t.Errorf("/live/chat did not return projector HTML:\n%s", string(liveBody))
 	}
 }
 
@@ -123,13 +110,12 @@ func TestStrangeLoopCommandDeclaresNewCommand(t *testing.T) {
 	home := t.TempDir()
 
 	runKs(t, home, "init")
-	runKs(t, home, "plant", "examples/notes")
+	runKs(t, home, "plant", "seeds/chat")
 
-	// Replace the note command with a script that emits a declaration
-	// for a new "echo" command — simulating self-improvement.
 	echoScript := `#!/usr/bin/env python3
 import sys, json
-print(json.dumps({"name": "note.captured", "payload": {"title": " ".join(sys.argv[1:])}}))
+print(json.dumps({"name": "chat.message", "payload": {"role": "user", "content": " ".join(sys.argv[1:])}}))
+print(json.dumps({"name": "chat.message", "payload": {"role": "assistant", "content": "ok"}}))
 print(json.dumps({"name": "command.declared", "payload": {
     "name": "echo",
     "description": "echo a message",
@@ -137,20 +123,17 @@ print(json.dumps({"name": "command.declared", "payload": {
     "event": {"name": "echo.said", "fields": {"text": "string"}}
 }}))
 `
-	notePath := filepath.Join(home, "registry", "commands", "note")
-	if err := os.WriteFile(notePath, []byte(echoScript), 0755); err != nil {
+	chatPath := filepath.Join(home, "registry", "commands", "chat")
+	if err := os.WriteFile(chatPath, []byte(echoScript), 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	// Invoke note — it should emit note.captured + command.declared.
-	// The kernel should compile the "echo" command on the fly.
-	runKs(t, home, "invoke", "note", "trigger")
+	runKs(t, home, "invoke", "chat", "trigger")
 
 	echoPath := filepath.Join(home, "registry", "commands", "echo")
 	if _, err := os.Stat(echoPath); err != nil {
 		t.Fatalf("echo command not compiled to registry: %v", err)
 	}
 
-	// The newly compiled echo command should be immediately usable.
 	runKs(t, home, "invoke", "echo", "it-works")
 }

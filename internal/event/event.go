@@ -34,5 +34,6 @@ const (
 	KernelInitialized  = "kernel.initialized"
 	CommandDeclared    = "command.declared"
 	ProjectorDeclared  = "projector.declared"
+	ScriptCompiled     = "script.compiled"
 	SeedPlanted        = "seed.planted"
 )

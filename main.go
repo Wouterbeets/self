@@ -53,6 +53,9 @@ func main() {
 		err = cmdLog(home)
 	case "seeds":
 		err = cmdSeeds(home)
+	case "think":
+		prompt := strings.Join(args, " ")
+		err = cmdThink(home, prompt)
 	case "serve":
 		port := ""
 		if len(args) >= 1 {
@@ -87,16 +90,21 @@ usage: ks <command> [args]
 
 commands:
   init                    create a fresh ks home (appends kernel.initialized)
-  plant <seed-dir>        compile trio.declared events, replay seed's events
-  invoke <command> [args] run a registered command, append its events
-  project [projector]     replay events through a projector, emit HTML
+  plant <seed-dir>        compile declared commands/projectors, replay seed's events
+  invoke <command> [args] run a command, append events, auto-run affected projectors
+  project [projector]     replay events through a projector, emit HTML to site/
   log                     show the event log
   seeds                   list planted seeds (from seed.planted events)
-  serve [port]            serve KS_HOME/site over HTTP with /live/<projector>
+  think <prompt>          call the kernel's brain (LLM + garden exploration)
+  serve [port]            serve KS_HOME/site over HTTP (see routes below)
 
-artefacts (written by compiled scripts via ks_common):
-  KS_HOME/site/           materialized HTML projections (written by ks project)
-  KS_HOME/artefacts/      structured JSON state (written by commands via $KS_HOME env var)
+http routes (ks serve, default port 7777):
+  /                       kernel.html — wiring + projections
+  /live/<projector>       re-run projector against current events
+  /events                 raw events.jsonl
+
+on disk:
+  KS_HOME/site/           materialized HTML projections (current state, written by ks project)
 
 environment:
   KS_HOME        ks home directory (default ~/.ks)
@@ -114,8 +122,15 @@ kernel-known events:
   kernel.initialized   written by ks init
   command.declared     compiled by ks plant AND ks invoke (self-improvement)
   projector.declared   compiled by ks plant AND ks invoke (self-improvement)
+  script.compiled      written by ks plant/invoke — logs compiled script for rollback
   seed.planted         written by ks plant as a receipt
   everything else      comes from seeds or from commands that emit declarations
+
+at compile time and via 'ks think', the LLM gets a read-only bash tool
+(cwd=KS_HOME) to explore the garden — existing commands, projectors,
+events, wiring, projections — and adapt to the receiver's current state.
+commands that need LLM access call 'ks think' instead of making their own
+HTTP calls — the kernel is the sole steward of LLM credentials.
 `)
 }
 
@@ -129,10 +144,6 @@ func cmdInit(home string) error {
 	if err := os.MkdirAll(filepath.Join(home, "site"), 0755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(home, "artefacts"), 0755); err != nil {
-		return err
-	}
-
 	st := store.Open(home)
 	payload, _ := json.Marshal(map[string]string{
 		"version": "ks/v0",
@@ -154,8 +165,15 @@ func cmdPlant(home string, seedDir string) error {
 		return err
 	}
 
-	compiler := seed.NewCompiler()
+	compiler := seed.NewCompiler(home)
 	registry := filepath.Join(home, "registry")
+
+	type compiled struct {
+		Type   string `json:"type"`
+		Name   string `json:"name"`
+		Script string `json:"script"`
+	}
+	var compiledScripts []compiled
 
 	for _, cmd := range manifest.Commands {
 		fmt.Printf("compiling command %q...", cmd.Name)
@@ -168,6 +186,7 @@ func cmdPlant(home string, seedDir string) error {
 			return err
 		}
 		fmt.Printf(" planted\n")
+		compiledScripts = append(compiledScripts, compiled{"command", cmd.Name, script})
 	}
 
 	for _, proj := range manifest.Projectors {
@@ -181,6 +200,7 @@ func cmdPlant(home string, seedDir string) error {
 			return err
 		}
 		fmt.Printf(" planted\n")
+		compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
 	}
 
 	st := store.Open(home)
@@ -194,6 +214,14 @@ func cmdPlant(home string, seedDir string) error {
 		}
 		if !isDeclaration {
 			contentCount++
+		}
+	}
+
+	for _, cs := range compiledScripts {
+		payload, _ := json.Marshal(cs)
+		e := event.New(event.ScriptCompiled, payload)
+		if err := st.Append(&e); err != nil {
+			return err
 		}
 	}
 
@@ -225,13 +253,8 @@ func cmdInvoke(home string, command string, args []string) error {
 		return err
 	}
 
-	compiler := seed.NewCompiler()
-
 	cmd := exec.Command(scriptPath, args...)
 	cmd.Env = append(os.Environ(), "KS_HOME="+home)
-	if vars := compiler.EnvVars(); vars != nil {
-		cmd.Env = append(cmd.Env, vars...)
-	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -472,37 +495,11 @@ func cmdServe(home string, port string) error {
 		http.ServeFile(w, r, filepath.Join(home, "events.jsonl"))
 	})
 
-	// /artefacts[/<name>] — list or serve structured artefacts.
-	mux.HandleFunc("/artefacts/", func(w http.ResponseWriter, r *http.Request) {
-		name := strings.TrimPrefix(r.URL.Path, "/artefacts/")
-		artDir := filepath.Join(home, "artefacts")
-		if name == "" {
-			entries, err := os.ReadDir(artDir)
-			if err != nil {
-				http.Error(w, "no artefacts", http.StatusNotFound)
-				return
-			}
-			names := make([]string, 0, len(entries))
-			for _, e := range entries {
-				n := e.Name()
-				if strings.HasSuffix(n, ".json") {
-					n = strings.TrimSuffix(n, ".json")
-				}
-				names = append(names, n)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(names)
-			return
-		}
-		http.ServeFile(w, r, filepath.Join(artDir, name+".json"))
-	})
-
 	addr := ":" + port
 	fmt.Fprintf(os.Stderr, "ks serving %s on http://localhost:%s\n", filepath.Join(home, "site"), port)
 	fmt.Fprintf(os.Stderr, "  /              kernel wiring + projections (kernel.html)\n")
 	fmt.Fprintf(os.Stderr, "  /live/<name>   re-run projector against current events\n")
 	fmt.Fprintf(os.Stderr, "  /events        raw events.jsonl\n")
-	fmt.Fprintf(os.Stderr, "  /artefacts/    list structured artefacts\n")
 	return http.ListenAndServe(addr, mux)
 }
 
@@ -552,6 +549,37 @@ func cmdSeeds(home string) error {
 		fmt.Println("(no seeds planted)")
 	}
 	return nil
+}
+
+func cmdThink(home string, prompt string) error {
+	if prompt == "" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		prompt = strings.TrimSpace(string(data))
+	}
+	if prompt == "" {
+		return fmt.Errorf("usage: ks think <prompt> (or pipe prompt on stdin)")
+	}
+
+	compiler := seed.NewCompiler(home)
+	result, err := compiler.CallBrain(prompt)
+	if err != nil {
+		return err
+	}
+
+	output := map[string]any{
+		"response":     result.Response,
+		"declarations": result.Declarations,
+	}
+	if output["declarations"] == nil {
+		output["declarations"] = []any{}
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(output)
 }
 
 func commandNames(commands []seed.Command) []string {

@@ -39,19 +39,19 @@ receiver-controlled adaptation.
 
 ```
 ks init                    # baby kernel born (appends kernel.initialized)
-ks plant examples/notes    # LLM compiles trio.declared, replays starter events
-ks invoke note "buy milk"  # run the compiled command, event appended
-ks project                 # replay events through projector, emit HTML + persist to site/
+ks plant seeds/chat        # LLM compiles the chat interface — the only seed you need
+ks invoke chat "add a..."  # chat calls ks think, brain suggests new capabilities
+ks project                 # replay events through projector, emit HTML to site/
+ks think "summarize..."    # call the kernel's brain directly (LLM + garden exploration)
 ks serve                   # HTTP server: static site/ + /live/<name> + /events
 ks log                     # show the event log
 ks seeds                   # list planted seeds (from seed.planted events)
 ```
 
-After planting the example notes seed, `ks project` already shows two notes —
-the starter events that came with the seed — and writes `~/.ks/site/note.html`.
-Then `ks invoke note "buy milk"` adds a third. `ks serve` exposes the
-materialized projection at `http://localhost:7777/` and a live re-projection
-at `/live/note`. One stream, declarations and content together.
+Plant the chat seed and the kernel can grow everything else. Ask the chat
+to add a note command, a todo projector, a finance tracker — the brain
+reads the garden, produces valid declarations, the kernel compiles them.
+One seed, infinite capabilities. That's the strange loop.
 
 ## self-improvement (the strange loop)
 
@@ -63,15 +63,17 @@ plant new capabilities, including re-declaring itself.
 ```
 ks plant seeds/chat        # install the chat interface (command + projector)
 ks invoke chat "add a summarize command that ..."
+# → chat calls ks think, brain reads site/chat.html + garden, suggests declarations
 # → chat emits chat.message + command.declared + projector.declared
 # → kernel compiles the new command/projector immediately
 ks invoke summarize "..."  # the new command works right away
 ```
 
-The event log keeps every declaration — old and new. The registry holds only
-the latest. Re-planting an older `command.declared` from the log is rollback.
-The chat interface is the constitution, and it's editable from inside the
-chat.
+The event log keeps every declaration and every compiled script. The
+registry holds only the latest. Re-planting from the log is rollback:
+find the `script.compiled` event for the capability, restore that exact
+script to the registry — no re-compilation, no drift. The chat interface
+is the constitution, and it's editable from inside the chat.
 
 ## pipe contract
 
@@ -87,13 +89,52 @@ Unix pipelines. Any language works — Python, bash, node, Perl, anything
   `KS_HOME/site/<name>.html` — projectors don't write to disk, they just
   emit HTML and the kernel decides where it goes.
 
-The kernel sets `KS_HOME` env var on every script. Commands that need
-persistent state between calls can write to `$KS_HOME/artefacts/<name>.json`.
-The kernel also passes `KS_LLM_URL`, `KS_LLM_API_KEY`, and `KS_LLM_MODEL` to
-command scripts — so commands like `chat` can call the LLM directly.
-No helper module, no language assumptions, no embedded runtime.
+The kernel sets `KS_HOME` env var on every script. Commands that need LLM
+intelligence call `ks think` — the kernel's brain — instead of making their
+own HTTP calls. The kernel is the sole steward of LLM credentials. No helper
+module, no language assumptions, no embedded runtime.
 
-## artefacts on disk
+## ks think — the kernel's brain
+
+The kernel exposes its LLM as a callable pipe. Commands that need
+intelligence call `ks think` instead of reinventing HTTP calls, auth, and
+system prompts:
+
+```
+echo "add a todo command" | ks think
+→ {"response": "I've added a todo command...", "declarations": [...]}
+```
+
+The brain is the same LLM infrastructure as the compiler — bash tool,
+garden exploration, schema knowledge — with a general-purpose prompt.
+It reads `site/*.html` for current state (the projector output IS the
+memory: chat projector renders `site/chat.html`, brain reads it before
+responding, conversation persists across invocations). When the brain
+suggests new capabilities, it produces valid declarations that flow
+through the existing strange-loop hook and get compiled.
+
+This collapses the complexity: the chat seed's declaration is ~200 chars
+("call ks think, emit the response, forward declarations") instead of
+~2000 chars of embedded HTTP/auth/prompt/parsing logic. The brain knows
+the schema, so declarations are valid. The brain knows the garden, so
+suggestions integrate.
+
+## garden-aware compilation
+
+At plant time (and at invoke time via the strange loop), the compiler gives
+the LLM a read-only `bash` tool with cwd set to `KS_HOME`. The LLM explores
+the garden — `ls registry/commands/`, `head events.jsonl`, `cat site/kernel.html`
+— before writing the script. This is how a seed adapts to the receiver: if
+a finance projector declares consumption of `finance.expenditure_added` but
+the stream already has `shopping_bill_uploaded` events with `{vendor, amount,
+date}`, the LLM extends the projector's filter to consume both, mapping
+`vendor→category`. Same seed, different garden, different binary.
+
+The bash tool is sandboxed: restricted bash (`-r`), a denylist of
+destructive/network/interpreter commands, no redirection, 10s timeout,
+10KB output cap. The LLM can look but not touch.
+
+## on disk
 
 ```
 KS_HOME/
@@ -102,29 +143,33 @@ KS_HOME/
     commands/<name>          compiled command scripts (any language)
     projectors/<name>        compiled projector scripts (any language)
   site/<name>.html           materialized HTML projections (written by ks project)
-  artefacts/<name>.json      structured state (written by commands via $KS_HOME)
 ```
 
-Agents (opencode, grep, anything) read `site/` and `artefacts/` directly —
-plain files, no API. `ks serve` exposes them over HTTP with `/live/<name>`
-for on-demand re-projection against current events.
+Agents (opencode, grep, anything) read `site/` directly — plain files, no
+API. `ks serve` exposes them over HTTP with `/live/<name>` for on-demand
+re-projection against current events.
 
 ## what the kernel is
 
-Four things, irreducible:
+Five things, irreducible:
 
 1. **event store** — append-only JSONL log (the only truth)
-2. **LLM compiler** — reads `trio.declared` payloads, writes scripts at plant
-   time **and at invoke time** (if a command emits declarations)
-3. **pipe orchestrator** — runs commands and projectors, moves events,
+2. **LLM compiler** — reads `command.declared` and `projector.declared` payloads,
+   explores the garden via a read-only bash tool, writes scripts at plant time
+   **and at invoke time** (if a command emits declarations). Logs every compiled
+   script as a `script.compiled` event for audit-faithful rollback.
+3. **LLM brain** (`ks think`) — the same LLM infrastructure as the compiler,
+   exposed as a callable pipe. Commands call it for intelligence; it reads
+   `site/*.html` for current state and produces valid declarations.
+4. **pipe orchestrator** — runs commands and projectors, moves events,
    persists projector output to `site/`
-4. **HTTP server** — `ks serve` exposes materialized site/ and re-runs
+5. **HTTP server** — `ks serve` exposes materialized site/ and re-runs
    projectors on demand at `/live/<name>`
 
 The kernel knows two events: `command.declared` and `projector.declared` (it
-compiles them). It writes two: `kernel.initialized` and `seed.planted`.
-Everything else comes from seeds — or from commands that emit declarations
-at invoke time.
+compiles them). It writes three: `kernel.initialized`, `script.compiled`,
+and `seed.planted`. Everything else comes from seeds — or from commands
+that emit declarations at invoke time.
 
 ## seed format
 
@@ -153,8 +198,9 @@ Config precedence (highest first):
 3. stub scripts — no key, no network
 
 If you have an opencode-go subscription configured via opencode, `ks plant`
-uses it automatically — no extra setup. Set `KS_LLM_STUB=1` to force stub
-scripts without calling the LLM.
+and `ks think` use it automatically — no extra setup. Set `KS_LLM_STUB=1`
+to force stub scripts without calling the LLM. Commands don't receive
+LLM credentials — they call `ks think` for intelligence.
 
 ## status
 
