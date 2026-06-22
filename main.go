@@ -458,6 +458,54 @@ func injectAutoReload(html []byte) []byte {
 	return append(html, []byte(autoReloadSnippet)...)
 }
 
+// enrichmentCSS is the kernel's one shared stylesheet — the "enrichment layer".
+// Projectors emit bare semantic HTML (no styling); the kernel injects this so
+// every projection is themed consistently. Classless-first (elements styled
+// directly) plus a tiny stable class vocabulary: muted, card, row, stack, tag
+// (+accent), msg (+who), num, button.secondary/.danger. Themes = override :root.
+const enrichmentCSS = `<style>
+:root{--bg:#fbfbfa;--fg:#1f2328;--muted:#6a737d;--border:#e2e4e8;--accent:#2563eb;--accent-fg:#fff;--card:#fff;--danger:#b42318;--radius:6px;--gap:16px;--maxw:880px}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1116;--fg:#e6edf3;--muted:#8b949e;--border:#30363d;--accent:#4493f8;--card:#161b22}}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);max-width:var(--maxw);margin:0 auto;padding:28px 24px 64px;line-height:1.55;font-size:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+h1,h2,h3{line-height:1.25;margin:1.5em 0 .5em;font-weight:650}h1{font-size:1.7rem;margin-top:0}h2{font-size:1.25rem}
+p{margin:.6em 0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+hr{border:0;border-top:1px solid var(--border);margin:28px 0}
+nav{display:flex;gap:18px;align-items:baseline;padding-bottom:14px;border-bottom:1px solid var(--border)}
+nav .brand{font-weight:700;margin-right:auto;font-family:ui-monospace,Menlo,monospace}
+code{font-family:ui-monospace,Menlo,monospace;font-size:.88em;background:var(--card);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}
+th{font-size:.74rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+tbody tr:hover{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}tfoot td{font-weight:700;border-top:2px solid var(--fg)}
+button,input,select,textarea{font:inherit;color:inherit}
+input,textarea,select{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:8px 11px;width:100%}
+input:focus,textarea:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+button{background:var(--accent);color:var(--accent-fg);border:1px solid var(--accent);border-radius:var(--radius);padding:8px 16px;cursor:pointer;font-weight:600}
+button:hover{filter:brightness(1.08)}button.secondary{background:transparent;color:var(--accent)}button.danger{background:var(--danger);border-color:var(--danger)}
+form{display:flex;flex-direction:column;gap:10px;max-width:520px}
+.muted{color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin:14px 0}
+.row{display:flex;gap:var(--gap);align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:10px}
+.tag{display:inline-block;font-size:.72rem;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
+.tag.accent{color:var(--accent);border-color:var(--accent)}
+.msg{padding:8px 0;border-bottom:1px solid var(--border)}.msg:last-child{border-bottom:0}
+.msg .who{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+</style>`
+
+// enrich injects the shared stylesheet into <head> and the auto-reload script
+// before </body>, so bare semantic projector output renders styled and live
+// without the projector carrying any CSS of its own.
+func enrich(html []byte) []byte {
+	s := string(html)
+	if i := strings.Index(s, "</head>"); i >= 0 {
+		s = s[:i] + enrichmentCSS + s[i:]
+	} else {
+		s = enrichmentCSS + s
+	}
+	return injectAutoReload([]byte(s))
+}
+
 func cmdServe(home string, port string) error {
 	if port == "" {
 		port = "7777"
@@ -517,7 +565,7 @@ func cmdServe(home string, port string) error {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(injectAutoReload(html))
+			w.Write(enrich(html))
 			return
 		}
 

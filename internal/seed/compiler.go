@@ -416,7 +416,7 @@ const ProjectorSystemPrompt = `You are the ks compiler. You read a projector dec
 The kernel runs projector scripts as Unix pipeline processes:
 - Receives all events as JSONL on stdin. Writes HTML on stdout. The kernel persists the output to KS_HOME/site/<projector_name>.html — do not write to disk yourself, just emit HTML on stdout.
 
-The projector must build its state from the event stream by filtering for the consumed event names. It should render clean, valid HTML with inline CSS.
+The projector must build its state from the event stream by filtering for the consumed event names. Emit BARE semantic HTML — do NOT write any CSS, <style> blocks, or inline style attributes. The kernel injects one shared stylesheet at serve time (the enrichment layer), so styling is not your job; styling you emit will only fight it. Use plain semantic elements (h1-h3, p, nav, table/th/td/tfoot, form, input, button, code, hr) and only this small, stable class vocabulary where semantics aren't enough: muted (secondary text), card (bordered panel), row / stack (horizontal / vertical grouping), tag (+ tag accent) (pill labels), msg (+ who) (a chat line), num (on numeric table cells), and on buttons: secondary, danger. That keeps each projector tiny and uniformly themed. Put forms/links in the markup as the affordances — a form posting to /invoke/<command> is the action surface.
 
 Write scripts in any language available on the system. Python 3 and bash are safe portable choices. Include the appropriate shebang. Use only standard libraries / builtins — no external dependencies.
 
