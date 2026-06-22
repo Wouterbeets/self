@@ -112,10 +112,10 @@ force stub scripts without calling the LLM.
 
 kernel-known events:
   kernel.initialized   written by ks init
-  command.declared     read by ks plant to compile commands
-  projector.declared   read by ks plant to compile projectors
+  command.declared     compiled by ks plant AND ks invoke (self-improvement)
+  projector.declared   compiled by ks plant AND ks invoke (self-improvement)
   seed.planted         written by ks plant as a receipt
-  everything else      comes from seeds
+  everything else      comes from seeds or from commands that emit declarations
 `)
 }
 
@@ -225,7 +225,13 @@ func cmdInvoke(home string, command string, args []string) error {
 		return err
 	}
 
+	compiler := seed.NewCompiler()
+
 	cmd := exec.Command(scriptPath, args...)
+	cmd.Env = append(os.Environ(), "KS_HOME="+home)
+	if vars := compiler.EnvVars(); vars != nil {
+		cmd.Env = append(cmd.Env, vars...)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -282,6 +288,19 @@ func cmdInvoke(home string, command string, args []string) error {
 			return err
 		}
 		fmt.Printf("%s appended seq %d %s\n", newEvents[i].ID, newEvents[i].Seq, newEvents[i].Name)
+	}
+
+	// Strange-loop hook: if the command emitted any command.declared or
+	// projector.declared events, compile them now. This is how chat (or any
+	// command) plants new capabilities — including re-declaring itself.
+	// Latest declaration wins; the event log keeps every version for audit.
+	compiledCmds, compiledProjs, err := kernel.CompileDeclarations(home, newEvents)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ks: warning: declaration compile failed: %s\n", err)
+	}
+	if len(compiledCmds) > 0 || len(compiledProjs) > 0 {
+		fmt.Printf("self-improved: %d command(s), %d projector(s) compiled from invoke\n",
+			len(compiledCmds), len(compiledProjs))
 	}
 
 	// Auto-run projectors that consume the new events.

@@ -37,6 +37,20 @@ func (c *Compiler) Available() bool {
 	return c.Key != ""
 }
 
+// EnvVars returns the resolved LLM config as KEY=VALUE strings suitable
+// for passing to exec.Command.Env. Returns nil if no LLM is configured
+// (stub mode), so scripts can detect the absence and degrade gracefully.
+func (c *Compiler) EnvVars() []string {
+	if c.Stub || c.Key == "" {
+		return nil
+	}
+	return []string{
+		"KS_LLM_URL=" + c.URL,
+		"KS_LLM_API_KEY=" + c.Key,
+		"KS_LLM_MODEL=" + c.Model,
+	}
+}
+
 type llmConfig struct {
 	URL, Key, Model string
 }

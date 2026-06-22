@@ -11,20 +11,22 @@ A seed is a single event stream (`events.jsonl`). The first events declare
 capabilities; the rest use them. There are no two halves — declarations and
 content are the same stream.
 
-The kernel is born knowing **one event it acts on**: `trio.declared`. When it
-sees one, it reads the trio spec from the payload and hands it to the LLM
-compiler, which writes the scripts that implement it. Two provenance events
-the kernel writes but doesn't interpret: `kernel.initialized` (at birth) and
-`seed.planted` (receipt after planting).
+The kernel is born knowing **two events it acts on**: `command.declared` and
+`projector.declared`. When it sees one, it reads the spec from the payload
+and hands it to the LLM compiler, which writes the scripts that implement it.
+Two provenance events the kernel writes but doesn't interpret:
+`kernel.initialized` (at birth) and `seed.planted` (receipt after planting).
 
-Everything else — `note.captured`, `task.created`, `meal.planned` — comes from
-seeds. A fresh `ks init` is a baby with no capabilities. Plant seeds, it grows.
+Everything else — `note.captured`, `task.created`, `chat.message` — comes
+from seeds or from commands that emit declarations at invoke time. A fresh
+`ks init` is a baby with no capabilities. Plant seeds, it grows.
 
 ## the trio
 
-The atomic unit of a seed is a **trio**, declared via a `trio.declared` event:
+The atomic unit of a seed is a **trio**, declared via separate
+`command.declared` and `projector.declared` events:
 
-- **command** — what the user invokes (params, intent)
+- **command** — what the user invokes (params, intent, the event it produces)
 - **event** — what the command produces (name, payload schema)
 - **projector** — how events become a view (consumed events, desired output)
 
@@ -51,6 +53,26 @@ Then `ks invoke note "buy milk"` adds a third. `ks serve` exposes the
 materialized projection at `http://localhost:7777/` and a live re-projection
 at `/live/note`. One stream, declarations and content together.
 
+## self-improvement (the strange loop)
+
+`ks invoke` doesn't just append events — it scans them for `command.declared`
+and `projector.declared`. If a command emits either, the kernel compiles them
+on the spot and writes the scripts to the registry. This means a command can
+plant new capabilities, including re-declaring itself.
+
+```
+ks plant seeds/chat        # install the chat interface (command + projector)
+ks invoke chat "add a summarize command that ..."
+# → chat emits chat.message + command.declared + projector.declared
+# → kernel compiles the new command/projector immediately
+ks invoke summarize "..."  # the new command works right away
+```
+
+The event log keeps every declaration — old and new. The registry holds only
+the latest. Re-planting an older `command.declared` from the log is rollback.
+The chat interface is the constitution, and it's editable from inside the
+chat.
+
 ## pipe contract
 
 Compiled scripts are standalone executables orchestrated by the kernel via
@@ -67,6 +89,8 @@ Unix pipelines. Any language works — Python, bash, node, Perl, anything
 
 The kernel sets `KS_HOME` env var on every script. Commands that need
 persistent state between calls can write to `$KS_HOME/artefacts/<name>.json`.
+The kernel also passes `KS_LLM_URL`, `KS_LLM_API_KEY`, and `KS_LLM_MODEL` to
+command scripts — so commands like `chat` can call the LLM directly.
 No helper module, no language assumptions, no embedded runtime.
 
 ## artefacts on disk
@@ -90,14 +114,17 @@ for on-demand re-projection against current events.
 Four things, irreducible:
 
 1. **event store** — append-only JSONL log (the only truth)
-2. **LLM compiler** — reads `trio.declared` payloads, writes scripts at plant time
+2. **LLM compiler** — reads `trio.declared` payloads, writes scripts at plant
+   time **and at invoke time** (if a command emits declarations)
 3. **pipe orchestrator** — runs commands and projectors, moves events,
    persists projector output to `site/`
 4. **HTTP server** — `ks serve` exposes materialized site/ and re-runs
    projectors on demand at `/live/<name>`
 
-The kernel knows one event: `trio.declared`. It writes two: `kernel.initialized`
-and `seed.planted`. Everything else comes from seeds.
+The kernel knows two events: `command.declared` and `projector.declared` (it
+compiles them). It writes two: `kernel.initialized` and `seed.planted`.
+Everything else comes from seeds — or from commands that emit declarations
+at invoke time.
 
 ## seed format
 
@@ -131,6 +158,7 @@ scripts without calling the LLM.
 
 ## status
 
-Experimental MVP. The thesis: the kernel is a baby that knows one event, the
-LLM is the compiler that teaches it, the seed is the curriculum. This repo
-proves the loop with the smallest thing that makes it undeniable.
+Experimental MVP. The thesis: the kernel is a baby that knows two events,
+the LLM is the compiler that teaches it, the seed is the curriculum. This
+repo proves the loop with the smallest thing that makes it undeniable —
+including the strange loop: a command that plants commands.

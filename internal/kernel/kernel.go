@@ -254,6 +254,66 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 	return b.String()
 }
 
+// CompileDeclarations scans events for command.declared and
+// projector.declared, compiles any it finds via the LLM compiler,
+// writes the scripts to the registry, and re-renders kernel.html.
+// Latest declaration wins — a re-declaration overwrites the script.
+// Returns the names of commands and projectors compiled.
+//
+// This is the strange-loop hook: a command (e.g. chat) can emit
+// declarations for new commands/projectors, and the kernel compiles
+// them on the fly. The event log keeps every version for audit;
+// the registry holds only the latest.
+func CompileDeclarations(home string, events []event.Event) (commands, projectors []string, err error) {
+	compiler := seed.NewCompiler()
+	registry := filepath.Join(home, "registry")
+
+	for _, e := range events {
+		switch e.Name {
+		case event.CommandDeclared:
+			var cmd seed.Command
+			if err := json.Unmarshal(e.Payload, &cmd); err != nil {
+				return nil, nil, fmt.Errorf("parse command.declared: %w", err)
+			}
+			fmt.Printf("compiling command %q...", cmd.Name)
+			script, cErr := compiler.CompileCommand(cmd)
+			if cErr != nil {
+				fmt.Printf(" failed\n")
+				return nil, nil, fmt.Errorf("command %q: %w", cmd.Name, cErr)
+			}
+			if wErr := seed.WriteCommandScript(registry, cmd.Name, script); wErr != nil {
+				return nil, nil, wErr
+			}
+			fmt.Printf(" planted\n")
+			commands = append(commands, cmd.Name)
+
+		case event.ProjectorDeclared:
+			var proj seed.ProjectorDecl
+			if err := json.Unmarshal(e.Payload, &proj); err != nil {
+				return nil, nil, fmt.Errorf("parse projector.declared: %w", err)
+			}
+			fmt.Printf("compiling projector %q...", proj.Name)
+			script, cErr := compiler.CompileProjector(proj)
+			if cErr != nil {
+				fmt.Printf(" failed\n")
+				return nil, nil, fmt.Errorf("projector %q: %w", proj.Name, cErr)
+			}
+			if wErr := seed.WriteProjectorScript(registry, proj.Name, script); wErr != nil {
+				return nil, nil, wErr
+			}
+			fmt.Printf(" planted\n")
+			projectors = append(projectors, proj.Name)
+		}
+	}
+
+	if len(commands) > 0 || len(projectors) > 0 {
+		if rErr := RenderHTML(home); rErr != nil {
+			return commands, projectors, fmt.Errorf("re-render kernel.html: %w", rErr)
+		}
+	}
+	return commands, projectors, nil
+}
+
 // Wiring is the parsed event→projector map extracted from kernel.html.
 type Wiring struct {
 	// ProjectorsByEvent maps an event name to the projectors that consume it.

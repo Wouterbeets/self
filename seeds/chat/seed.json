@@ -1,5 +1,5 @@
 {
-  "name": "chat-interface",
-  "description": "Adds a natural language chat command and HTML interface to KS",
-  "version": "0.1.0"
+  "name": "chat",
+  "description": "Chat interface seed. Installs a chat command (calls local LLM, emits chat.message events) and a chat projector (renders HTML bubbles). The chat command may emit command.declared/projector.declared events to plant new capabilities — the kernel compiles them on invoke. This is the self-improvement seed.",
+  "version": "0.2.0"
 }

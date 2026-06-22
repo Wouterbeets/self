@@ -114,3 +114,43 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 		t.Errorf("/artefacts/ did not return JSON array: %v", err)
 	}
 }
+
+func TestStrangeLoopCommandDeclaresNewCommand(t *testing.T) {
+	bin := os.Getenv("KS_TEST_BIN")
+	if bin == "" {
+		t.Skip("set KS_TEST_BIN to the ks binary to run integration tests")
+	}
+	home := t.TempDir()
+
+	runKs(t, home, "init")
+	runKs(t, home, "plant", "examples/notes")
+
+	// Replace the note command with a script that emits a declaration
+	// for a new "echo" command — simulating self-improvement.
+	echoScript := `#!/usr/bin/env python3
+import sys, json
+print(json.dumps({"name": "note.captured", "payload": {"title": " ".join(sys.argv[1:])}}))
+print(json.dumps({"name": "command.declared", "payload": {
+    "name": "echo",
+    "description": "echo a message",
+    "params": {"text": "string"},
+    "event": {"name": "echo.said", "fields": {"text": "string"}}
+}}))
+`
+	notePath := filepath.Join(home, "registry", "commands", "note")
+	if err := os.WriteFile(notePath, []byte(echoScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Invoke note — it should emit note.captured + command.declared.
+	// The kernel should compile the "echo" command on the fly.
+	runKs(t, home, "invoke", "note", "trigger")
+
+	echoPath := filepath.Join(home, "registry", "commands", "echo")
+	if _, err := os.Stat(echoPath); err != nil {
+		t.Fatalf("echo command not compiled to registry: %v", err)
+	}
+
+	// The newly compiled echo command should be immediately usable.
+	runKs(t, home, "invoke", "echo", "it-works")
+}
