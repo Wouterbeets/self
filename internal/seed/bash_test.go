@@ -137,16 +137,34 @@ func TestBashBlocksSedInPlace(t *testing.T) {
 	}
 }
 
-func TestBashAllowsSedReadOnly(t *testing.T) {
+func TestBashBlocksSed(t *testing.T) {
+	// sed is no longer allowlisted: its w/W (write-to-file) commands and the
+	// GNU `e` flag (execute) are shell-exec/file-write escapes. Read-only line
+	// selection is covered by head/tail/grep/cut, which are allowlisted.
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "test.txt"), []byte("hello world"), 0644)
 
-	out, err := runBash(dir, "sed -n '1p' test.txt")
-	if err != nil {
-		t.Fatalf("sed -n should work: %v", err)
+	if _, err := runBash(dir, "sed -n '1p' test.txt"); err == nil {
+		t.Error("sed should be blocked (not on the read-only allowlist)")
 	}
-	if strings.TrimSpace(out) != "hello world" {
-		t.Errorf("sed output = %q, want %q", out, "hello world")
+}
+
+func TestBashAllowsInspectionPipelines(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "events.jsonl"),
+		[]byte("a note.captured\nb other\nc note.captured\n"), 0644)
+
+	ok := []string{
+		"ls",
+		"head -2 events.jsonl",
+		"cat events.jsonl | grep note.captured | wc -l",
+		"ls; echo done",
+		"find . -maxdepth 1 -name '*.jsonl'",
+	}
+	for _, cmd := range ok {
+		if _, err := runBash(dir, cmd); err != nil {
+			t.Errorf("command %q should be allowed: %v", cmd, err)
+		}
 	}
 }
 
