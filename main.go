@@ -268,16 +268,7 @@ func cmdInvoke(home string, command string, args []string) error {
 		return fmt.Errorf("start command: %w", err)
 	}
 
-	go func() {
-		w := bufio.NewWriter(stdin)
-		for _, e := range current {
-			line, _ := json.Marshal(e)
-			w.Write(line)
-			w.WriteByte('\n')
-		}
-		w.Flush()
-		stdin.Close()
-	}()
+	feedEvents(stdin, current)
 
 	var newEvents []event.Event
 	sc := bufio.NewScanner(stdout)
@@ -413,6 +404,14 @@ func runProjector(home string, name string, showStdout bool) error {
 		return err
 	}
 
+	feedEvents(stdin, events)
+
+	return cmd.Wait()
+}
+
+// feedEvents writes events as JSONL to a child process's stdin in a goroutine,
+// closing stdin when done. Shared by the command and projector pipelines.
+func feedEvents(stdin io.WriteCloser, events []event.Event) {
 	go func() {
 		w := bufio.NewWriter(stdin)
 		for _, e := range events {
@@ -423,8 +422,6 @@ func runProjector(home string, name string, showStdout bool) error {
 		w.Flush()
 		stdin.Close()
 	}()
-
-	return cmd.Wait()
 }
 
 // projectHTML runs a projector against the current event log and returns its
@@ -443,16 +440,7 @@ func projectHTML(home, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	go func() {
-		w := bufio.NewWriter(stdin)
-		for _, e := range events {
-			line, _ := json.Marshal(e)
-			w.Write(line)
-			w.WriteByte('\n')
-		}
-		w.Flush()
-		stdin.Close()
-	}()
+	feedEvents(stdin, events)
 	return cmd.Output()
 }
 
@@ -536,15 +524,16 @@ func cmdServe(home string, port string) error {
 		http.FileServer(http.Dir(filepath.Join(home, "site"))).ServeHTTP(w, r)
 	})
 
-	// /version — a cheap change token (last event seq). The injected auto-reload
-	// script polls this and reloads the page when it changes.
+	// /version — a cheap change token: the byte size of the append-only event
+	// log. Stat is O(1) and catches appends from any writer (including other
+	// processes), where reading + parsing the whole log for the last seq is
+	// O(n) on every 1s poll. The injected auto-reload script polls this.
 	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
-		events, _ := store.Open(home).Read()
-		seq := 0
-		if len(events) > 0 {
-			seq = events[len(events)-1].Seq
+		var size int64
+		if fi, err := os.Stat(filepath.Join(home, "events.jsonl")); err == nil {
+			size = fi.Size()
 		}
-		fmt.Fprintf(w, "%d", seq)
+		fmt.Fprintf(w, "%d", size)
 	})
 
 	// /live/<projector> — re-run projector against current events.jsonl.
@@ -577,16 +566,7 @@ func cmdServe(home string, port string) error {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		go func() {
-			bw := bufio.NewWriter(stdin)
-			for _, e := range events {
-				line, _ := json.Marshal(e)
-				bw.Write(line)
-				bw.WriteByte('\n')
-			}
-			bw.Flush()
-			stdin.Close()
-		}()
+		feedEvents(stdin, events)
 		c.Wait()
 	})
 
