@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -640,13 +641,35 @@ func cmdServe(home string, port string) error {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
-		msg := strings.TrimSpace(string(body))
+		// A plain HTML <form> posts application/x-www-form-urlencoded: each
+		// field's value becomes a positional command argument, in submission
+		// order (which the projector author controls). Any other body (e.g. a
+		// raw fetch) is passed as a single argument. Field names are for humans;
+		// position is the contract.
 		var args []string
-		if msg != "" {
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+			for _, pair := range strings.Split(string(body), "&") {
+				if pair == "" {
+					continue
+				}
+				_, v, _ := strings.Cut(pair, "=")
+				v = strings.ReplaceAll(v, "+", " ")
+				if dec, err := url.QueryUnescape(v); err == nil {
+					v = dec
+				}
+				args = append(args, v)
+			}
+		} else if msg := strings.TrimSpace(string(body)); msg != "" {
 			args = []string{msg}
 		}
 		if err := cmdInvoke(home, command, args); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Post/Redirect/Get: send a browser form back to the page it came from
+		// so a full reload shows the new state. Zero JavaScript required.
+		if ref := r.Header.Get("Referer"); ref != "" {
+			http.Redirect(w, r, ref, http.StatusSeeOther)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
