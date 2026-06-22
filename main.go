@@ -427,6 +427,49 @@ func runProjector(home string, name string, showStdout bool) error {
 	return cmd.Wait()
 }
 
+// projectHTML runs a projector against the current event log and returns its
+// HTML output, without persisting to site/. Used by ks serve to render fresh
+// projections on every request.
+func projectHTML(home, name string) ([]byte, error) {
+	scriptPath := filepath.Join(home, "registry", "projectors", name)
+	events, err := store.Open(home).Read()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(scriptPath)
+	cmd.Env = append(os.Environ(), "KS_HOME="+home)
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		w := bufio.NewWriter(stdin)
+		for _, e := range events {
+			line, _ := json.Marshal(e)
+			w.Write(line)
+			w.WriteByte('\n')
+		}
+		w.Flush()
+		stdin.Close()
+	}()
+	return cmd.Output()
+}
+
+// autoReloadSnippet polls /version and reloads the page when the event log
+// grows, so served projections update hands-free.
+const autoReloadSnippet = `<script>(function(){var c=null;function p(){fetch('/version').then(function(r){return r.text()}).then(function(v){if(c===null){c=v}else if(v!==c){location.reload()}}).catch(function(){});setTimeout(p,1000)}p()})();</script>`
+
+// injectAutoReload inserts the auto-reload script before </body> (or appends it
+// if there's no body tag), so any served HTML page live-updates.
+func injectAutoReload(html []byte) []byte {
+	s := string(html)
+	if i := strings.LastIndex(s, "</body>"); i >= 0 {
+		return []byte(s[:i] + autoReloadSnippet + s[i:])
+	}
+	return append(html, []byte(autoReloadSnippet)...)
+}
+
 func cmdServe(home string, port string) error {
 	if port == "" {
 		port = "7777"
@@ -455,14 +498,53 @@ func cmdServe(home string, port string) error {
 
 	mux := http.NewServeMux()
 
-	// / serves kernel.html (the system's self-description and wiring diagram).
-	// Other site/ files are served at their paths.
+	// / serves a live view. "/" and "/kernel" re-render the kernel wiring; any
+	// path matching a planted projector re-runs it against current events so
+	// the page is never stale. Everything else falls back to static site/ files.
+	// HTML responses get a small auto-reload script injected: the browser polls
+	// /version and reloads when the event log grows, so projections update hands-
+	// free as new events land.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.ServeFile(w, r, filepath.Join(home, "site", "kernel.html"))
+		name := strings.TrimSuffix(strings.Trim(r.URL.Path, "/"), ".html")
+
+		if name == "" || name == "kernel" {
+			if err := kernel.RenderHTML(home); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			data, err := os.ReadFile(filepath.Join(home, "site", "kernel.html"))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(injectAutoReload(data))
 			return
 		}
+
+		if _, err := os.Stat(filepath.Join(home, "registry", "projectors", name)); err == nil {
+			html, err := projectHTML(home, name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(injectAutoReload(html))
+			return
+		}
+
 		http.FileServer(http.Dir(filepath.Join(home, "site"))).ServeHTTP(w, r)
+	})
+
+	// /version — a cheap change token (last event seq). The injected auto-reload
+	// script polls this and reloads the page when it changes.
+	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
+		events, _ := store.Open(home).Read()
+		seq := 0
+		if len(events) > 0 {
+			seq = events[len(events)-1].Seq
+		}
+		fmt.Fprintf(w, "%d", seq)
 	})
 
 	// /live/<projector> — re-run projector against current events.jsonl.
@@ -511,6 +593,36 @@ func cmdServe(home string, port string) error {
 	// /events — raw events.jsonl.
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(home, "events.jsonl"))
+	})
+
+	// POST /invoke/<command> — run a command from the browser. The raw request
+	// body is passed as the command's single argument. This makes projections a
+	// read+write surface: a projector can emit a form that POSTs here, the
+	// command runs through the normal pipeline (append events, strange-loop
+	// compile, auto-run projectors), and the auto-reload script then refreshes
+	// the page to show the new events.
+	mux.HandleFunc("/invoke/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		command := strings.TrimPrefix(r.URL.Path, "/invoke/")
+		if command == "" {
+			http.Error(w, "command required (e.g. /invoke/chat)", http.StatusBadRequest)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		msg := strings.TrimSpace(string(body))
+		var args []string
+		if msg != "" {
+			args = []string{msg}
+		}
+		if err := cmdInvoke(home, command, args); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "ok")
 	})
 
 	addr := ":" + port
