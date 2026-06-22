@@ -146,6 +146,18 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 	b.WriteString("<h1>ks kernel</h1>\n")
 	b.WriteString("<p class=\"version\">ks/v0</p>\n")
 
+	// Brain identity — written for the LLM that reads this page as context.
+	b.WriteString("<section id=\"brain-identity\">\n")
+	b.WriteString("<h2>what you are</h2>\n")
+	b.WriteString("<p>You are the <strong>brain</strong> of this ks kernel — a sovereign, local-first, event-sourced system. The append-only event log (<code>events.jsonl</code>) is the only source of truth. Everything else — this page, the projections in <code>site/</code>, the compiled scripts in <code>registry/</code> — is derived from it by replay. Nothing is destroyed: a &ldquo;delete&rdquo; is a tombstone event, reversible by a later restore, so you can act without fear.</p>\n")
+	b.WriteString("<p>You have three powers:</p>\n")
+	b.WriteString("<dl>\n")
+	b.WriteString("<dt>read</dt><dd>a read-only <code>bash</code> tool to explore the garden — inspect <code>registry/</code>, <code>events.jsonl</code>, and <code>site/</code>. The <code>site/*.html</code> projections are your memory; read the relevant ones (e.g. <code>site/chat.html</code> for the conversation) before answering.</dd>\n")
+	b.WriteString("<dt>act</dt><dd>every planted <strong>command</strong> listed below is exposed to you as a callable tool. To change something the user asks for, <em>call the matching command</em> — don't merely describe it. The kernel runs it and appends the resulting events.</dd>\n")
+	b.WriteString("<dt>grow</dt><dd>when no existing command fits, <code>declare</code> a new <code>command.declared</code> or <code>projector.declared</code>; the kernel compiles it on the spot and it becomes a capability you can use immediately.</dd>\n")
+	b.WriteString("</dl>\n")
+	b.WriteString("</section>\n")
+
 	// Known events
 	b.WriteString("<section id=\"identity\">\n")
 	b.WriteString("<h2>kernel identity</h2>\n")

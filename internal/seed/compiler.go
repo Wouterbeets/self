@@ -45,22 +45,34 @@ type BrainResult struct {
 	Declarations []map[string]any
 }
 
-// CallBrain calls the kernel's brain — a general-purpose agent that
-// explores the garden and responds with text + optional declarations.
+// CommandInvoker runs a planted command by name with a space-separated arg
+// string and returns a short result summary for the brain. Supplied by the
+// caller (main) so the seed package needn't import the invoke pipeline.
+type CommandInvoker func(name, args string) (string, error)
+
+// CallBrain calls the kernel's brain — a general-purpose agent that explores
+// the garden (read), declares new capabilities (grow), and CALLS planted
+// commands as tools (act). Each command in `commands` becomes a callable tool;
+// when the brain calls one, `invoke` runs it and the result is fed back.
 // Used by `ks think`, which commands call for LLM access.
-func (c *Compiler) CallBrain(user string) (*BrainResult, error) {
+func (c *Compiler) CallBrain(user string, commands []Command, invoke CommandInvoker) (*BrainResult, error) {
 	if !c.Available() {
 		return nil, fmt.Errorf("no LLM available (ensure llama-server is running on localhost:8080, or set KS_LLM_*)")
 	}
-	return c.callBrainLLM(BrainSystemPrompt, user)
+	return c.callBrainLLM(BrainSystemPrompt, user, commands, invoke)
 }
 
-func (c *Compiler) callBrainLLM(system, user string) (*BrainResult, error) {
+func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke CommandInvoker) (*BrainResult, error) {
 	messages := []map[string]any{
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},
 	}
 	tools := []map[string]any{bashToolDef, declareTool}
+	isCommand := map[string]bool{}
+	for _, cmd := range commands {
+		tools = append(tools, commandToolDef(cmd))
+		isCommand[cmd.Name] = true
+	}
 
 	var declarations []map[string]any
 
@@ -145,7 +157,20 @@ func (c *Compiler) callBrainLLM(system, user string) (*BrainResult, error) {
 					output = "declaration recorded"
 				}
 			default:
-				output = fmt.Sprintf("error: unknown tool %q", tc.Function.Name)
+				if isCommand[tc.Function.Name] && invoke != nil {
+					var a struct {
+						Args string `json:"args"`
+					}
+					json.Unmarshal([]byte(tc.Function.Arguments), &a)
+					out, err := invoke(tc.Function.Name, a.Args)
+					if err != nil {
+						output = fmt.Sprintf("error running %q: %s", tc.Function.Name, err)
+					} else {
+						output = out
+					}
+				} else {
+					output = fmt.Sprintf("error: unknown tool %q", tc.Function.Name)
+				}
 			}
 			messages = append(messages, map[string]any{
 				"role":         "tool",
@@ -156,6 +181,35 @@ func (c *Compiler) callBrainLLM(system, user string) (*BrainResult, error) {
 	}
 
 	return nil, fmt.Errorf("exceeded %d tool rounds without a final response", maxToolRounds)
+}
+
+// commandToolDef turns a planted command declaration into a brain-callable
+// tool. The command takes one space-separated `args` string (matching how the
+// CLI and HTML forms invoke it); the declared params are described so the brain
+// knows what to pass and in what order.
+func commandToolDef(cmd Command) map[string]any {
+	desc := cmd.Description
+	if len(cmd.Params) > 0 {
+		desc += " Params (pass space-separated, in order): " + jsonRepr(cmd.Params)
+	}
+	desc += " Calling this runs the command and appends its events to the log."
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":        cmd.Name,
+			"description": desc,
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"args": map[string]any{
+						"type":        "string",
+						"description": "Arguments to the command, space-separated, in the order its params expect. Empty string if none.",
+					},
+				},
+				"required": []string{"args"},
+			},
+		},
+	}
 }
 
 func (c *Compiler) executeBash(args string) string {
@@ -460,7 +514,12 @@ Write the projector_script. It must filter events by the consumed names and rend
 	)
 }
 
-const BrainSystemPrompt = `You are the ks kernel's brain — a general-purpose agent that lives inside the kernel. You have a bash tool to explore the garden (cwd=KS_HOME). Commands call you via 'ks think' when they need intelligence.
+const BrainSystemPrompt = `You are the ks kernel's brain — a general-purpose agent that lives inside the kernel. Commands call you via 'ks think' when they need intelligence.
+
+You have three powers:
+- READ: a bash tool to explore the garden (cwd=KS_HOME) — read-only inspection of registry/, events.jsonl, and site/.
+- ACT: every planted command is exposed to you as a tool. To DO something the user asks (delete an item, capture a note, set a meal), CALL the matching command tool with its args — do not just describe it or emit a button. The kernel runs it and appends the resulting events, then tells you what happened. The event log is append-only, so actions are safe and reversible: a "delete" is a tombstone event, undoable by a later restore. Prefer acting over explaining when the user asks you to change something.
+- GROW: when the user asks for a NEW capability that no existing command provides, call the declare tool (see below) to add it.
 
 Explore the garden with bash before responding:
 - ls site/ — what projections exist? These are the current state. Read the relevant ones.

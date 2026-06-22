@@ -241,32 +241,38 @@ func cmdPlant(home string, seedDir string) error {
 	return kernel.RenderHTML(home)
 }
 
-func cmdInvoke(home string, command string, args []string) error {
+// invokeCommand runs a command end-to-end: executes the script, appends the
+// events it emits, compiles any declarations it produced (the strange loop),
+// and auto-runs the projectors that consume those events. Returns the events
+// produced. Progress is logged to stderr; callers format their own output.
+// Shared by the CLI (cmdInvoke), the HTTP /invoke route, and the brain's
+// command tools — one invoke pipeline, three callers.
+func invokeCommand(home string, command string, args []string) ([]event.Event, error) {
 	scriptPath := filepath.Join(home, "registry", "commands", command)
 	if _, err := os.Stat(scriptPath); err != nil {
-		return fmt.Errorf("command %q not found (plant a seed that declares it)", command)
+		return nil, fmt.Errorf("command %q not found (plant a seed that declares it)", command)
 	}
 
 	st := store.Open(home)
 	current, err := st.Read()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	cmd := exec.Command(scriptPath, args...)
 	cmd.Env = append(os.Environ(), "KS_HOME="+home)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start command: %w", err)
+		return nil, fmt.Errorf("start command: %w", err)
 	}
 
 	feedEvents(stdin, current)
@@ -284,47 +290,42 @@ func cmdInvoke(home string, command string, args []string) error {
 			Payload json.RawMessage `json:"payload"`
 		}
 		if err := json.Unmarshal([]byte(line), &partial); err != nil {
-			return fmt.Errorf("command output parse error: %w", err)
+			return nil, fmt.Errorf("command output parse error: %w", err)
 		}
 		if partial.Name == "" {
-			return fmt.Errorf("command output missing event name: %s", line)
+			return nil, fmt.Errorf("command output missing event name: %s", line)
 		}
-		e := event.New(partial.Name, partial.Payload)
-		newEvents = append(newEvents, e)
+		newEvents = append(newEvents, event.New(partial.Name, partial.Payload))
 	}
 
 	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("command exited: %w", err)
+		return nil, fmt.Errorf("command exited: %w", err)
 	}
 
 	for i := range newEvents {
 		if err := st.Append(&newEvents[i]); err != nil {
-			return err
+			return nil, err
 		}
-		fmt.Printf("%s appended seq %d %s\n", newEvents[i].ID, newEvents[i].Seq, newEvents[i].Name)
 	}
 
-	// Strange-loop hook: if the command emitted any command.declared or
-	// projector.declared events, compile them now. This is how chat (or any
-	// command) plants new capabilities — including re-declaring itself.
-	// Latest declaration wins; the event log keeps every version for audit.
-	compiledCmds, compiledProjs, err := kernel.CompileDeclarations(home, newEvents)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ks: warning: declaration compile failed: %s\n", err)
+	// Strange-loop hook: compile any command.declared / projector.declared the
+	// command emitted, so a command can plant new capabilities at invoke time.
+	compiledCmds, compiledProjs, cErr := kernel.CompileDeclarations(home, newEvents)
+	if cErr != nil {
+		fmt.Fprintf(os.Stderr, "ks: warning: declaration compile failed: %s\n", cErr)
 	}
 	if len(compiledCmds) > 0 || len(compiledProjs) > 0 {
-		fmt.Printf("self-improved: %d command(s), %d projector(s) compiled from invoke\n",
+		fmt.Fprintf(os.Stderr, "ks: self-improved: %d command(s), %d projector(s) compiled\n",
 			len(compiledCmds), len(compiledProjs))
 	}
 
-	// Auto-run projectors that consume the new events.
-	// The kernel reads its own projection (site/kernel.html) to determine
-	// which projectors care about which events. Burn kernel.html, replay
-	// events, it comes back — the projection IS the aggregate.
-	wiring, err := kernel.ReadWiring(home)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ks: warning: could not read kernel wiring: %s\n", err)
-		return nil
+	// Auto-run projectors that consume the new events. The kernel reads its own
+	// projection (site/kernel.html) to know which projectors care about which
+	// events — burn kernel.html, replay events, it comes back.
+	wiring, wErr := kernel.ReadWiring(home)
+	if wErr != nil {
+		fmt.Fprintf(os.Stderr, "ks: warning: could not read kernel wiring: %s\n", wErr)
+		return newEvents, nil
 	}
 	ran := map[string]bool{}
 	for _, e := range newEvents {
@@ -333,13 +334,26 @@ func cmdInvoke(home string, command string, args []string) error {
 				continue
 			}
 			ran[projName] = true
-			fmt.Printf("auto-running projector %q...\n", projName)
-			if err := runProjectorToSite(home, projName); err != nil {
-				fmt.Fprintf(os.Stderr, "ks: projector %q failed: %s\n", projName, err)
+			fmt.Fprintf(os.Stderr, "ks: auto-running projector %q\n", projName)
+			if pErr := runProjectorToSite(home, projName); pErr != nil {
+				fmt.Fprintf(os.Stderr, "ks: projector %q failed: %s\n", projName, pErr)
 			}
 		}
 	}
 
+	return newEvents, nil
+}
+
+// cmdInvoke is the CLI wrapper around invokeCommand: it prints each appended
+// event to stdout.
+func cmdInvoke(home string, command string, args []string) error {
+	newEvents, err := invokeCommand(home, command, args)
+	if err != nil {
+		return err
+	}
+	for _, e := range newEvents {
+		fmt.Printf("%s appended seq %d %s\n", e.ID, e.Seq, e.Name)
+	}
 	return nil
 }
 
@@ -745,7 +759,40 @@ func cmdThink(home string, prompt string) error {
 	}
 
 	compiler := seed.NewCompiler(home)
-	result, err := compiler.CallBrain(prompt)
+
+	// The brain can act by calling planted commands as tools. Guard against
+	// recursion (a brain-invoked command may itself call `ks think`): bound the
+	// depth via KS_THINK_DEPTH. Past the cap, the brain may still talk and
+	// declare but gets no command tools, so it cannot act and cannot recurse.
+	depth := 0
+	fmt.Sscanf(os.Getenv("KS_THINK_DEPTH"), "%d", &depth)
+
+	var commands []seed.Command
+	var invoke seed.CommandInvoker
+	if depth < 3 {
+		commands = plantedCommands(home)
+		os.Setenv("KS_THINK_DEPTH", fmt.Sprintf("%d", depth+1))
+		invoke = func(name, args string) (string, error) {
+			var argv []string
+			if strings.TrimSpace(args) != "" {
+				argv = []string{args}
+			}
+			evs, err := invokeCommand(home, name, argv)
+			if err != nil {
+				return "", err
+			}
+			if len(evs) == 0 {
+				return fmt.Sprintf("ran %q (no events emitted)", name), nil
+			}
+			names := make([]string, len(evs))
+			for i, e := range evs {
+				names[i] = e.Name
+			}
+			return fmt.Sprintf("ran %q — appended %d event(s): %s", name, len(evs), strings.Join(names, ", ")), nil
+		}
+	}
+
+	result, err := compiler.CallBrain(prompt, commands, invoke)
 	if err != nil {
 		return err
 	}
@@ -761,6 +808,39 @@ func cmdThink(home string, prompt string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)
+}
+
+// plantedCommands reads the command declarations from the event log, latest
+// wins, in first-seen order. The chat command is excluded — the brain calling
+// chat would just re-enter itself.
+func plantedCommands(home string) []seed.Command {
+	events, err := store.Open(home).Read()
+	if err != nil {
+		return nil
+	}
+	byName := map[string]seed.Command{}
+	var order []string
+	for _, e := range events {
+		if e.Name != event.CommandDeclared {
+			continue
+		}
+		var cmd seed.Command
+		if json.Unmarshal(e.Payload, &cmd) != nil || cmd.Name == "" {
+			continue
+		}
+		if _, seen := byName[cmd.Name]; !seen {
+			order = append(order, cmd.Name)
+		}
+		byName[cmd.Name] = cmd
+	}
+	var out []seed.Command
+	for _, n := range order {
+		if n == "chat" {
+			continue
+		}
+		out = append(out, byName[n])
+	}
+	return out
 }
 
 func commandNames(commands []seed.Command) []string {
