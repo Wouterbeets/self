@@ -219,7 +219,19 @@ func opencodeAuthPath() string {
 
 const maxToolRounds = 15
 
-var llmHTTPClient = &http.Client{Timeout: 120 * time.Second}
+var llmHTTPClient = &http.Client{Timeout: llmTimeout()}
+
+// llmTimeout is the per-request HTTP timeout. Defaults to 120s; override with
+// KS_LLM_TIMEOUT (any Go duration, e.g. "1h") — useful when a human is in the
+// loop authoring responses by hand.
+func llmTimeout() time.Duration {
+	if v := os.Getenv("KS_LLM_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return 120 * time.Second
+}
 
 func (c *Compiler) callLLM(system, user string, submitTool map[string]any) (string, error) {
 	messages := []map[string]any{
