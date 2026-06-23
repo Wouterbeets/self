@@ -110,6 +110,43 @@ emera stays a sovereign compute node that *emits events into* a ks commons).
 
 ---
 
+## Slice 3 — the seed format upgrades itself (VALIDATED)
+
+**Hypothesis.** Planting from a *holistic spec* needs zero kernel change. A
+planted `plant-spec` command logs the spec (`seed.spec`, provenance) and calls
+the brain to derive the atomic `command.declared`/`projector.declared` events;
+the kernel's existing strange-loop hook compiles them. So the higher-level seed
+format is itself a seed.
+
+**Slice.** `board` re-expressed as one holistic markdown spec
+(`poc/plant-spec/board-spec.example.md`: Intent / Capabilities / Behavior /
+Examples / Content). A `plant-spec` command (planted normally). Then
+`ks invoke plant-spec board-spec.md`.
+
+**Evidence.**
+- `plant-spec` is a **planted command** — a seed, not kernel code.
+- One invocation derived **4 declarations** (capture/move/resolve/board) from
+  the spec via the brain and the kernel compiled them — **0 hand-written
+  declarations** (slice 2 used 7 hand-written declaration lines for the same
+  board).
+- Full **lineage in the log**: `seed.spec → command.declared → script.compiled`.
+- The spec-installed board **works** (capture + project).
+- **Kernel Go changed: 0** — the seed format upgraded itself.
+
+**Decision: keep.** The irreducible floor stays tiny — LLM compiler + the one
+hook turning a `*.declared` event into a `script.compiled` + a raw bootstrap
+plant — and *everything above it is a seed*, including the spec compiler. Honest
+gaps: the spec's `## Content` was not replayed (only `## Capabilities` derived),
+and `## Examples` were not yet used to verify the compiled scripts (no
+`script.verified` step).
+
+**Next (slice 4 candidates).** `script.verified` — gate compilation on the
+spec's `## Examples` (the verified-free sharing tier); replay `## Content` from
+the spec; then cross-node — export a spec seed, plant it on a *foreign* garden,
+and verify conformance (usability + emergence + protocol all meeting).
+
+---
+
 ## How to reproduce
 
 ```sh
