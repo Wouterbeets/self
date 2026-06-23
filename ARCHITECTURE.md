@@ -72,6 +72,44 @@ credit.
 
 ---
 
+## Slice 2 — household board as a seed (VALIDATED)
+
+**Hypothesis.** household's kanban domain (capture/move/resolve over memory
+items, grouped into lanes) can run as a ks seed — three commands + a `board`
+projector — with zero kernel changes, driven by plain HTML forms AND by the
+brain calling the commands as tools.
+
+**Slice.** A seed declaring `capture`, `move`, `resolve` commands and a `board`
+projector (folds `memory.captured` / `item.stage_changed` / `item.resolved`
+into lanes inbox/this_week/waiting/done; each card carries a move `<select>` +
+resolve button as plain forms posting to `/invoke`).
+
+**Evidence.**
+- CLI `capture` works; **form-driven move & resolve via Post/Redirect/Get**
+  (303 back to `/board`, zero JS).
+- **The brain drove the board in plain language**: "add a task to call the
+  plumber" → the brain called the `capture` command tool → the item appeared in
+  the inbox lane. (Commands-as-tools from the act-verb work.)
+- **Complexity (view layer, apples-to-apples)**: ks `board` projector = **46
+  LOC**; household's kanban projection = **279 LOC of Go**. The whole ks board
+  capability is a **7-line declaration** → 62 LOC of compiled scripts. To change
+  a capability: household edits Go + rebuilds; ks edits a declaration, recompiled
+  live. (Honest: household's command/aggregate Go is shared across its whole
+  domain — meals, recipes, sync — not just the board, so only the projection
+  layer is a clean comparison.)
+- **Replay deterministic** ✓. **Kernel Go changed: 0** ✓.
+
+**Decision: keep.** The accessible-entry-point anchor and the household→ks port
+both hold; an everyday surface runs as a seed, form-driven and brain-driven,
+with zero kernel change. Limit: board slice only (no meals/recipes/Planka/relay).
+
+**Next (slice 3 candidates).** Receiver-adaptation across nodes (plant the board
+seed into a foreign garden whose vocabulary differs); or port a second household
+surface (meals) to test breadth; or the deepen-emergence path (kept out of ks —
+emera stays a sovereign compute node that *emits events into* a ks commons).
+
+---
+
 ## How to reproduce
 
 ```sh
