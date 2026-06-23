@@ -184,9 +184,9 @@ the capabilities to project them). A full seed has both.
 
 ```
 KS_HOME        kernel home (default ~/.ks)
-KS_LLM_URL     LLM API base URL (auto-detected from opencode-go)
-KS_LLM_API_KEY LLM API key (auto-detected from opencode-go)
-KS_LLM_MODEL   LLM model name (auto-detected from opencode-go)
+KS_LLM_URL     LLM API base URL (overrides the opencode-go default)
+KS_LLM_API_KEY LLM API key (overrides the opencode-go default)
+KS_LLM_MODEL   LLM model name (overrides the opencode-go default)
 KS_LLM_STUB    set to "1" to force stub scripts
 ```
 
@@ -195,12 +195,17 @@ Config precedence (highest first):
 1. `KS_LLM_*` env vars — explicit override of URL, key, or model
 2. opencode-go subscription — read from `~/.local/share/opencode/auth.json`
    (endpoint `https://opencode.ai/zen/go`, model `glm-5.2`)
-3. stub scripts — no key, no network
+3. local llama-server — `http://127.0.0.1:8080`, used when opencode-go isn't
+   configured, and as the automatic fallback when an opencode-go request is
+   refused with a quota-exceeded / rate-limit error (HTTP 429/402, or a quota
+   hint in the response body)
+4. stub scripts — `KS_LLM_STUB=1`, no key, no network
 
 If you have an opencode-go subscription configured via opencode, `ks plant`
-and `ks think` use it automatically — no extra setup. Set `KS_LLM_STUB=1`
-to force stub scripts without calling the LLM. Commands don't receive
-LLM credentials — they call `ks think` for intelligence.
+and `ks think` use it automatically — no extra setup. When opencode-go returns
+a quota error, ks retries the same call against the local llama-server and
+continues. Set `KS_LLM_STUB=1` to force stub scripts without calling the LLM.
+Commands don't receive LLM credentials — they call `ks think` for intelligence.
 
 ## status
 

@@ -1,6 +1,9 @@
 package seed
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,20 +171,213 @@ func TestNewCompilerStubFlag(t *testing.T) {
 }
 
 func clearLLMEnv(t *testing.T) {
-	for _, k := range []string{"KS_LLM_URL", "KS_LLM_API_KEY", "KS_LLM_MODEL", "KS_LLM_STUB"} {
+	for _, k := range []string{"KS_LLM_URL", "KS_LLM_API_KEY", "KS_LLM_MODEL", "KS_LLM_STUB", "XDG_DATA_HOME"} {
 		os.Unsetenv(k)
 	}
 }
 
 func resetEnv(original []string) {
-	for _, k := range []string{"KS_LLM_URL", "KS_LLM_API_KEY", "KS_LLM_MODEL", "KS_LLM_STUB"} {
+	for _, k := range []string{"KS_LLM_URL", "KS_LLM_API_KEY", "KS_LLM_MODEL", "KS_LLM_STUB", "XDG_DATA_HOME"} {
 		os.Unsetenv(k)
 	}
 	for _, kv := range original {
-		for _, k := range []string{"KS_LLM_URL", "KS_LLM_API_KEY", "KS_LLM_MODEL", "KS_LLM_STUB"} {
+		for _, k := range []string{"KS_LLM_URL", "KS_LLM_API_KEY", "KS_LLM_MODEL", "KS_LLM_STUB", "XDG_DATA_HOME"} {
 			if len(kv) > len(k)+1 && kv[:len(k)+1] == k+"=" {
 				os.Setenv(k, kv[len(k)+1:])
 			}
 		}
+	}
+}
+
+// writeAuthJSON writes an opencode auth.json with the given provider entries
+// under a temp dir and points XDG_DATA_HOME at it, so NewCompiler's
+// opencode-go auto-detection resolves against a controlled fixture instead of
+// the developer's real ~/.local/share/opencode/auth.json.
+func writeAuthJSON(t *testing.T, body string) {
+	t.Helper()
+	dir := t.TempDir()
+	authDir := filepath.Join(dir, "opencode")
+	if err := os.MkdirAll(authDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	os.Setenv("XDG_DATA_HOME", dir)
+}
+
+func TestNewCompilerDefaultsToOpencodeGo(t *testing.T) {
+	original := os.Environ()
+	t.Cleanup(func() { resetEnv(original) })
+	clearLLMEnv(t)
+	writeAuthJSON(t, `{"opencode-go": {"type": "api", "key": "sk-test-123"}}`)
+
+	c := NewCompiler("")
+	if c.Stub {
+		t.Fatal("should not be stub")
+	}
+	if c.URL != "https://opencode.ai/zen/go" {
+		t.Errorf("URL = %q, want https://opencode.ai/zen/go", c.URL)
+	}
+	if c.Key != "sk-test-123" {
+		t.Errorf("Key = %q, want sk-test-123", c.Key)
+	}
+	if c.Model != "glm-5.2" {
+		t.Errorf("Model = %q, want glm-5.2", c.Model)
+	}
+	if c.fallback == nil {
+		t.Fatal("fallback should be set when primary is opencode-go")
+	}
+	if c.fallback.URL != "http://127.0.0.1:8080" {
+		t.Errorf("fallback URL = %q, want http://127.0.0.1:8080", c.fallback.URL)
+	}
+	if c.fallback.Model != "local" {
+		t.Errorf("fallback Model = %q, want local", c.fallback.Model)
+	}
+	if !c.Available() {
+		t.Error("opencode-go with a key should be available")
+	}
+}
+
+func TestNewCompilerLocalWhenNoAuth(t *testing.T) {
+	original := os.Environ()
+	t.Cleanup(func() { resetEnv(original) })
+	clearLLMEnv(t)
+	// XDG_DATA_HOME points at an empty temp dir (set by clearLLMEnv unsetting
+	// it would fall back to $HOME/.local/share; instead force an empty dir).
+	dir := t.TempDir()
+	os.Setenv("XDG_DATA_HOME", dir)
+
+	c := NewCompiler("")
+	if c.URL != "http://127.0.0.1:8080" {
+		t.Errorf("URL = %q, want http://127.0.0.1:8080", c.URL)
+	}
+	if c.Model != "local" {
+		t.Errorf("Model = %q, want local", c.Model)
+	}
+	if c.fallback != nil {
+		t.Errorf("fallback should be nil when primary is already local, got %+v", c.fallback)
+	}
+	if !c.Available() {
+		t.Error("local llama-server should be available without a key")
+	}
+}
+
+func TestIsQuotaExceeded(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"zero-value http error", &llmHTTPError{Status: 0, Body: ""}, false},
+		{"429", &llmHTTPError{Status: 429, Body: `{"error":"rate limited"}`}, true},
+		{"402 payment required", &llmHTTPError{Status: 402, Body: "payment required"}, true},
+		{"403 with quota body", &llmHTTPError{Status: 403, Body: `{"error":"quota exceeded"}`}, true},
+		{"403 with exceeded body", &llmHTTPError{Status: 403, Body: "Monthly limit reached"}, true},
+		{"500 server error", &llmHTTPError{Status: 500, Body: "internal error"}, false},
+		{"400 bad request", &llmHTTPError{Status: 400, Body: "invalid model"}, false},
+		{"non-http error", errPlain("some network failure"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isQuotaExceeded(tc.err); got != tc.want {
+				t.Errorf("isQuotaExceeded(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+type errPlain string
+
+func (e errPlain) Error() string { return string(e) }
+
+// TestCallLLMFallsBackOnQuotaError stands up two httptest servers: a primary
+// that refuses every request with HTTP 429 (quota exceeded) and a fallback
+// that returns a valid submit_command tool call. callLLM should detect the
+// quota error, switch to the fallback endpoint, and return the fallback's
+// submitted script.
+func TestCallLLMFallsBackOnQuotaError(t *testing.T) {
+	primaryHits := 0
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryHits++
+		w.WriteHeader(429)
+		w.Write([]byte(`{"error":"quota exceeded"}`))
+	}))
+	defer primary.Close()
+
+	fallbackHits := 0
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackHits++
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"tool_calls": []map[string]any{
+							{
+								"id":   "call_1",
+								"type": "function",
+								"function": map[string]any{
+									"name":      "submit_command",
+									"arguments": `{"command_script":"#!/usr/bin/env python3\nprint(\"from fallback\")"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer fallback.Close()
+
+	c := &Compiler{
+		URL:   primary.URL,
+		Key:   "sk-test",
+		Model: "glm-5.2",
+		Home:  t.TempDir(),
+		fallback: &llmEndpoint{
+			URL:   fallback.URL,
+			Key:   "",
+			Model: "local",
+		},
+	}
+
+	out, err := c.callLLM(CommandSystemPrompt, "compile a command", submitCommandTool)
+	if err != nil {
+		t.Fatalf("callLLM failed: %v", err)
+	}
+	if primaryHits == 0 {
+		t.Error("primary endpoint should have been tried first")
+	}
+	if fallbackHits == 0 {
+		t.Error("fallback endpoint should have been hit after quota error")
+	}
+	if !strings.Contains(out, "from fallback") {
+		t.Errorf("expected the fallback's submitted script, got %q", out)
+	}
+}
+
+// TestCallLLMNoFallbackWhenPrimaryIsLocal verifies that a quota error from a
+// local-only compiler (no fallback configured) propagates instead of being
+// swallowed or retried.
+func TestCallLLMNoFallbackWhenPrimaryIsLocal(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(429)
+		w.Write([]byte(`{"error":"rate limit exceeded"}`))
+	}))
+	defer primary.Close()
+
+	c := &Compiler{URL: primary.URL, Model: "local"}
+	// No fallback set: a local-ish URL would normally leave fallback nil, but
+	// here the URL is 127.0.0.1 (httptest) yet we intentionally leave fallback
+	// nil to assert the error path.
+	_, err := c.callLLM(CommandSystemPrompt, "compile a command", submitCommandTool)
+	if err == nil {
+		t.Fatal("expected an error when no fallback is configured")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("error should mention 429, got %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package seed
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,16 @@ type Compiler struct {
 	Model string
 	Stub  bool
 	Home  string
+
+	// fallback is the local llama-server endpoint used when the primary
+	// (opencode-go by default) refuses a request with a quota-exceeded /
+	// rate-limit error. Nil when the primary is already the local endpoint.
+	fallback *llmEndpoint
+}
+
+// llmEndpoint holds the connection details for one OpenAI-compatible endpoint.
+type llmEndpoint struct {
+	URL, Key, Model string
 }
 
 func NewCompiler(home string) *Compiler {
@@ -25,19 +36,37 @@ func NewCompiler(home string) *Compiler {
 		return &Compiler{Stub: true, Home: home}
 	}
 	url, key, model := defaultLLMConfig()
-	return &Compiler{
+	c := &Compiler{
 		URL:   envOr("KS_LLM_URL", url),
 		Key:   envOr("KS_LLM_API_KEY", key),
 		Model: envOr("KS_LLM_MODEL", model),
 		Home:  home,
 	}
+	// The local llama-server is the quota-exceeded fallback whenever the
+	// primary is something else (opencode-go by default, or an env override
+	// pointing at a remote endpoint). When the primary is already local,
+	// there's nowhere to fall back to.
+	if !isLocalLLMURL(c.URL) {
+		c.fallback = &llmEndpoint{
+			URL:   "http://127.0.0.1:8080",
+			Key:   "",
+			Model: "local",
+		}
+	}
+	return c
+}
+
+// isLocalLLMURL reports whether the URL points at a localhost endpoint, in
+// which case there's no useful local fallback to retry on.
+func isLocalLLMURL(url string) bool {
+	return strings.HasPrefix(url, "http://127.0.0.1") || strings.HasPrefix(url, "http://localhost")
 }
 
 func (c *Compiler) Available() bool {
 	if c.Stub {
 		return false
 	}
-	return c.Key != "" || strings.HasPrefix(c.URL, "http://127.0.0.1") || strings.HasPrefix(c.URL, "http://localhost")
+	return c.Key != "" || isLocalLLMURL(c.URL)
 }
 
 type BrainResult struct {
@@ -75,63 +104,18 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 	}
 
 	var declarations []map[string]any
+	ep := llmEndpoint{c.URL, c.Key, c.Model}
 
 	for round := 0; round < maxToolRounds; round++ {
-		req := map[string]any{
-			"model":       c.Model,
-			"messages":    messages,
-			"temperature": 0.2,
-			"tools":       tools,
+		msg, err := c.doRound(ep, messages, tools)
+		if err != nil && isQuotaExceeded(err) && c.fallback != nil {
+			fmt.Fprintf(os.Stderr, "ks: %v — falling back to %s\n", err, c.fallback.URL)
+			ep = *c.fallback
+			msg, err = c.doRound(ep, messages, tools)
 		}
-		body, _ := json.Marshal(req)
-
-		url := strings.TrimRight(c.URL, "/") + "/v1/chat/completions"
-		r, err := http.NewRequest("POST", url, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
-		r.Header.Set("Content-Type", "application/json")
-		if c.Key != "" {
-			r.Header.Set("Authorization", "Bearer "+c.Key)
-		}
-
-		resp, err := llmHTTPClient.Do(r)
-		if err != nil {
-			return nil, fmt.Errorf("llm call failed: %w (check KS_LLM_URL)", err)
-		}
-
-		if resp.StatusCode != 200 {
-			b, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			return nil, fmt.Errorf("llm returned %d: %s", resp.StatusCode, string(b))
-		}
-
-		var result struct {
-			Choices []struct {
-				Message struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
-						ID       string `json:"id"`
-						Type     string `json:"type"`
-						Function struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						} `json:"function"`
-					} `json:"tool_calls"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			resp.Body.Close()
-			return nil, err
-		}
-		resp.Body.Close()
-
-		if len(result.Choices) == 0 {
-			return nil, fmt.Errorf("llm returned no choices")
-		}
-
-		msg := result.Choices[0].Message
 
 		if len(msg.ToolCalls) == 0 {
 			return &BrainResult{Response: msg.Content, Declarations: declarations}, nil
@@ -230,7 +214,13 @@ type llmConfig struct {
 	URL, Key, Model string
 }
 
+// defaultLLMConfig returns the default LLM endpoint when no KS_LLM_* env var
+// overrides are set. opencode-go (read from ~/.local/share/opencode/auth.json)
+// is the default; if it isn't configured, the local llama-server is used.
 func defaultLLMConfig() (url, key, model string) {
+	if cfg, ok := loadOpencodeGoConfig(opencodeAuthPath()); ok {
+		return cfg.URL, cfg.Key, cfg.Model
+	}
 	url = "http://127.0.0.1:8080"
 	key = ""
 	model = "local"
@@ -293,63 +283,18 @@ func (c *Compiler) callLLM(system, user string, submitTool map[string]any) (stri
 		{"role": "user", "content": user},
 	}
 	tools := []map[string]any{bashToolDef, submitTool}
+	ep := llmEndpoint{c.URL, c.Key, c.Model}
 
 	for round := 0; round < maxToolRounds; round++ {
-		req := map[string]any{
-			"model":       c.Model,
-			"messages":    messages,
-			"temperature": 0.2,
-			"tools":       tools,
+		msg, err := c.doRound(ep, messages, tools)
+		if err != nil && isQuotaExceeded(err) && c.fallback != nil {
+			fmt.Fprintf(os.Stderr, "ks: %v — falling back to %s\n", err, c.fallback.URL)
+			ep = *c.fallback
+			msg, err = c.doRound(ep, messages, tools)
 		}
-		body, _ := json.Marshal(req)
-
-		url := strings.TrimRight(c.URL, "/") + "/v1/chat/completions"
-		r, err := http.NewRequest("POST", url, bytes.NewReader(body))
 		if err != nil {
 			return "", err
 		}
-		r.Header.Set("Content-Type", "application/json")
-		if c.Key != "" {
-			r.Header.Set("Authorization", "Bearer "+c.Key)
-		}
-
-		resp, err := llmHTTPClient.Do(r)
-		if err != nil {
-			return "", fmt.Errorf("llm call failed: %w (check KS_LLM_URL)", err)
-		}
-
-		if resp.StatusCode != 200 {
-			b, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			return "", fmt.Errorf("llm returned %d: %s", resp.StatusCode, string(b))
-		}
-
-		var result struct {
-			Choices []struct {
-				Message struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
-						ID       string `json:"id"`
-						Type     string `json:"type"`
-						Function struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						} `json:"function"`
-					} `json:"tool_calls"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			resp.Body.Close()
-			return "", err
-		}
-		resp.Body.Close()
-
-		if len(result.Choices) == 0 {
-			return "", fmt.Errorf("llm returned no choices")
-		}
-
-		msg := result.Choices[0].Message
 
 		submitName, _ := submitTool["function"].(map[string]any)["name"].(string)
 
@@ -380,6 +325,108 @@ func (c *Compiler) callLLM(system, user string, submitTool map[string]any) (stri
 	}
 
 	return "", fmt.Errorf("exceeded %d tool rounds without a final response", maxToolRounds)
+}
+
+// toolCall is the OpenAI-compatible tool_calls entry returned by the endpoint.
+type toolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// assistantMessage is the message field of the first choice in a chat
+// completions response.
+type assistantMessage struct {
+	Content   string     `json:"content"`
+	ToolCalls []toolCall `json:"tool_calls"`
+}
+
+// llmHTTPError is returned by doRound when the endpoint responds with a
+// non-200 status, so callers can inspect the status code to decide whether
+// to retry against a fallback endpoint.
+type llmHTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e *llmHTTPError) Error() string {
+	return fmt.Sprintf("llm returned %d: %s", e.Status, e.Body)
+}
+
+// doRound sends one chat-completions request to ep and returns the assistant
+// message from the first choice. A non-200 response is returned as a
+// *llmHTTPError so callers can distinguish quota-exceeded errors from network
+// failures.
+func (c *Compiler) doRound(ep llmEndpoint, messages []map[string]any, tools []map[string]any) (*assistantMessage, error) {
+	body, _ := json.Marshal(map[string]any{
+		"model":       ep.Model,
+		"messages":    messages,
+		"temperature": 0.2,
+		"tools":       tools,
+	})
+
+	url := strings.TrimRight(ep.URL, "/") + "/v1/chat/completions"
+	r, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	r.Header.Set("Content-Type", "application/json")
+	if ep.Key != "" {
+		r.Header.Set("Authorization", "Bearer "+ep.Key)
+	}
+
+	resp, err := llmHTTPClient.Do(r)
+	if err != nil {
+		return nil, fmt.Errorf("llm call failed: %w (check KS_LLM_URL)", err)
+	}
+
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, &llmHTTPError{Status: resp.StatusCode, Body: string(b)}
+	}
+
+	var result struct {
+		Choices []struct {
+			Message assistantMessage `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
+	resp.Body.Close()
+
+	if len(result.Choices) == 0 {
+		return nil, fmt.Errorf("llm returned no choices")
+	}
+	return &result.Choices[0].Message, nil
+}
+
+// isQuotaExceeded reports whether err indicates the endpoint refused the
+// request due to a quota / rate-limit / billing error, in which case a local
+// fallback endpoint is worth trying. HTTP 429 (Too Many Requests) and 402
+// (Payment Required) are the standard codes; some gateways surface quota
+// exhaustion via 403 with a textual hint, so the response body is also
+// scanned for quota-related keywords.
+func isQuotaExceeded(err error) bool {
+	var httpErr *llmHTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+	if httpErr.Status == 429 || httpErr.Status == 402 {
+		return true
+	}
+	lower := strings.ToLower(httpErr.Body)
+	for _, hint := range []string{"quota", "rate limit", "ratelimit", "exceeded", "insufficient", "billing", "limit reached"} {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compiler) CompileCommand(cmd Command) (string, error) {

@@ -110,13 +110,16 @@ on disk:
 
 environment:
   KS_HOME        ks home directory (default ~/.ks)
-  KS_LLM_URL     llm api base url (default http://127.0.0.1:8080)
+  KS_LLM_URL     llm api base url (overrides the opencode-go default)
   KS_LLM_API_KEY llm api key (not needed for local llama-server)
-  KS_LLM_MODEL   llm model name (default "local")
+  KS_LLM_MODEL   llm model name (overrides the opencode-go default)
   KS_LLM_STUB    set to "1" to force stub scripts
 
-By default, ks connects to a local llama-server on port 8080.
-Override with KS_LLM_* env vars for a remote endpoint.
+By default, ks uses the opencode-go subscription (read from
+~/.local/share/opencode/auth.json, endpoint https://opencode.ai/zen/go,
+model glm-5.2). If a request hits a quota-exceeded / rate-limit error,
+ks falls back to a local llama-server on port 8080 for that call.
+Override the primary with KS_LLM_* env vars for another endpoint.
 Set KS_LLM_STUB=1 to force stub scripts without calling the LLM.
 
 kernel-known events:
