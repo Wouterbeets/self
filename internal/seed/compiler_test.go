@@ -24,8 +24,8 @@ func TestStubCommandPureStdout(t *testing.T) {
 	if !strings.Contains(script, "sys.argv") {
 		t.Error("stub command should read argv")
 	}
-	if strings.Contains(script, "ks_common") {
-		t.Error("stub command should not reference ks_common")
+	if strings.Contains(script, "self_common") {
+		t.Error("stub command should not reference self_common")
 	}
 }
 
@@ -42,8 +42,8 @@ func TestStubProjectorPureStdout(t *testing.T) {
 	if !strings.Contains(script, "sys.stdin") {
 		t.Error("stub projector should read from stdin")
 	}
-	if strings.Contains(script, "ks_common") {
-		t.Error("stub projector should not reference ks_common")
+	if strings.Contains(script, "self_common") {
+		t.Error("stub projector should not reference self_common")
 	}
 	if strings.Contains(script, "write_site") {
 		t.Error("stub projector should not call write_site — kernel manages persistence")
@@ -160,10 +160,10 @@ func TestNewCompilerStubFlag(t *testing.T) {
 	t.Cleanup(func() { resetEnv(original) })
 
 	clearLLMEnv(t)
-	os.Setenv("KS_LLM_STUB", "1")
+	os.Setenv("SELF_LLM_STUB", "1")
 	c := NewCompiler("")
 	if !c.Stub {
-		t.Fatal("KS_LLM_STUB=1 should set Stub=true")
+		t.Fatal("SELF_LLM_STUB=1 should set Stub=true")
 	}
 	if c.Available() {
 		t.Fatal("stub compiler should not be available")
@@ -171,17 +171,17 @@ func TestNewCompilerStubFlag(t *testing.T) {
 }
 
 func clearLLMEnv(t *testing.T) {
-	for _, k := range []string{"KS_LLM_URL", "KS_LLM_API_KEY", "KS_LLM_MODEL", "KS_LLM_STUB", "XDG_DATA_HOME"} {
+	for _, k := range []string{"SELF_LLM_URL", "SELF_LLM_API_KEY", "SELF_LLM_MODEL", "SELF_LLM_STUB", "XDG_DATA_HOME"} {
 		os.Unsetenv(k)
 	}
 }
 
 func resetEnv(original []string) {
-	for _, k := range []string{"KS_LLM_URL", "KS_LLM_API_KEY", "KS_LLM_MODEL", "KS_LLM_STUB", "XDG_DATA_HOME"} {
+	for _, k := range []string{"SELF_LLM_URL", "SELF_LLM_API_KEY", "SELF_LLM_MODEL", "SELF_LLM_STUB", "XDG_DATA_HOME"} {
 		os.Unsetenv(k)
 	}
 	for _, kv := range original {
-		for _, k := range []string{"KS_LLM_URL", "KS_LLM_API_KEY", "KS_LLM_MODEL", "KS_LLM_STUB", "XDG_DATA_HOME"} {
+		for _, k := range []string{"SELF_LLM_URL", "SELF_LLM_API_KEY", "SELF_LLM_MODEL", "SELF_LLM_STUB", "XDG_DATA_HOME"} {
 			if len(kv) > len(k)+1 && kv[:len(k)+1] == k+"=" {
 				os.Setenv(k, kv[len(k)+1:])
 			}

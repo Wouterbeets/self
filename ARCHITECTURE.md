@@ -1,8 +1,8 @@
-# ks PoC — evolving architecture spec
+# self PoC — evolving architecture spec
 
 A living spec, updated after each validated slice. The thesis under test: the
 five-repo body of work (cubff → emera → knowledge-seed-protocol → household →
-ks) converges on **ks as the minimal kernel**, and everything else — emergence
+self) converges on **self as the minimal kernel**, and everything else — emergence
 dynamics, household-style surfaces, sharing — can be added **as seeds**
 (LLM-compiled commands/projectors over an append-only log) rather than as
 compiled-in subsystems. Re-growing the kernel instead of the seed layer is a
@@ -10,7 +10,7 @@ failure, not progress.
 
 Build method: small testable slices. Hypothesis → minimal slice → evidence →
 validate against the anchors → keep/refine/refute → log it. The build log is
-itself a ks seed (`build.hypothesis` / `build.evidence` / `build.decision`
+itself a self seed (`build.hypothesis` / `build.evidence` / `build.decision`
 events, rendered by a `buildlog` projector) — the process is a projection of
 itself.
 
@@ -22,7 +22,7 @@ qualitative.
 
 ## Slice 1 — emergence as a seed (VALIDATED)
 
-**Hypothesis.** emera's energy/selection ecology can run as a ks seed (a `tick`
+**Hypothesis.** emera's energy/selection ecology can run as a self seed (a `tick`
 command + a `population` projector, compiled from declarations) with **zero
 kernel changes**. Predicted evidence: the surviving population's
 guessed-character distribution converges toward the book-world's real character
@@ -40,7 +40,7 @@ target distribution coded anywhere.
 - `population` projector — renders the latest snapshot: per character, how many
   organisms guess it vs. that character's real frequency in the world.
 
-Run: `ks invoke tick` × 120.
+Run: `self run tick` × 120.
 
 **Evidence.**
 - **Pearson r(organisms-per-char, world-frequency-per-char) = 0.901** (random
@@ -75,14 +75,14 @@ credit.
 ## Slice 2 — household board as a seed (VALIDATED)
 
 **Hypothesis.** household's kanban domain (capture/move/resolve over memory
-items, grouped into lanes) can run as a ks seed — three commands + a `board`
+items, grouped into lanes) can run as a self seed — three commands + a `board`
 projector — with zero kernel changes, driven by plain HTML forms AND by the
 brain calling the commands as tools.
 
 **Slice.** A seed declaring `capture`, `move`, `resolve` commands and a `board`
 projector (folds `memory.captured` / `item.stage_changed` / `item.resolved`
 into lanes inbox/this_week/waiting/done; each card carries a move `<select>` +
-resolve button as plain forms posting to `/invoke`).
+resolve button as plain forms posting to `/run`).
 
 **Evidence.**
 - CLI `capture` works; **form-driven move & resolve via Post/Redirect/Get**
@@ -90,41 +90,41 @@ resolve button as plain forms posting to `/invoke`).
 - **The brain drove the board in plain language**: "add a task to call the
   plumber" → the brain called the `capture` command tool → the item appeared in
   the inbox lane. (Commands-as-tools from the act-verb work.)
-- **Complexity (view layer, apples-to-apples)**: ks `board` projector = **46
-  LOC**; household's kanban projection = **279 LOC of Go**. The whole ks board
+- **Complexity (view layer, apples-to-apples)**: self `board` projector = **46
+  LOC**; household's kanban projection = **279 LOC of Go**. The whole self board
   capability is a **7-line declaration** → 62 LOC of compiled scripts. To change
-  a capability: household edits Go + rebuilds; ks edits a declaration, recompiled
+  a capability: household edits Go + rebuilds; self edits a declaration, recompiled
   live. (Honest: household's command/aggregate Go is shared across its whole
   domain — meals, recipes, sync — not just the board, so only the projection
   layer is a clean comparison.)
 - **Replay deterministic** ✓. **Kernel Go changed: 0** ✓.
 
-**Decision: keep.** The accessible-entry-point anchor and the household→ks port
+**Decision: keep.** The accessible-entry-point anchor and the household→self port
 both hold; an everyday surface runs as a seed, form-driven and brain-driven,
 with zero kernel change. Limit: board slice only (no meals/recipes/Planka/relay).
 
 **Next (slice 3 candidates).** Receiver-adaptation across nodes (plant the board
 seed into a foreign garden whose vocabulary differs); or port a second household
-surface (meals) to test breadth; or the deepen-emergence path (kept out of ks —
-emera stays a sovereign compute node that *emits events into* a ks commons).
+surface (meals) to test breadth; or the deepen-emergence path (kept out of self —
+emera stays a sovereign compute node that *emits events into* a self commons).
 
 ---
 
 ## Slice 3 — the seed format upgrades itself (VALIDATED)
 
 **Hypothesis.** Planting from a *holistic spec* needs zero kernel change. A
-planted `plant-spec` command logs the spec (`seed.spec`, provenance) and calls
+planted `grow-spec` command logs the spec (`seed.spec`, provenance) and calls
 the brain to derive the atomic `command.declared`/`projector.declared` events;
 the kernel's existing strange-loop hook compiles them. So the higher-level seed
 format is itself a seed.
 
 **Slice.** `board` re-expressed as one holistic markdown spec
-(`poc/plant-spec/board-spec.example.md`: Intent / Capabilities / Behavior /
-Examples / Content). A `plant-spec` command (planted normally). Then
-`ks invoke plant-spec board-spec.md`.
+(`poc/grow-spec/board-spec.example.md`: Intent / Capabilities / Behavior /
+Examples / Content). A `grow-spec` command (planted normally). Then
+`self run grow-spec board-spec.md`.
 
 **Evidence.**
-- `plant-spec` is a **planted command** — a seed, not kernel code.
+- `grow-spec` is a **planted command** — a seed, not kernel code.
 - One invocation derived **4 declarations** (capture/move/resolve/board) from
   the spec via the brain and the kernel compiled them — **0 hand-written
   declarations** (slice 2 used 7 hand-written declaration lines for the same
@@ -159,7 +159,7 @@ does. We probed this directly: with the stub compiler, a self-redeclaring
 behaviour was lost. Two surfaces (the README and the brain's own identity page,
 which promises the brain that *"a delete is reversible by a later restore"*)
 described an exact-code path — rollback / restore from the log — that **did not
-exist**: nothing ever read a `script.compiled` payload back into the registry.
+exist**: nothing ever read a `script.compiled` payload back into the capabilities.
 
 Predicted: the missing half is a single primitive — let the kernel **act on**
 `script.compiled` (install the bytes verbatim, no LLM), the same way it already
@@ -171,7 +171,7 @@ receives the whole event log on stdin, so it can find and re-emit any past
 
 **Slice.** The kernel's compile hook (`CompileDeclarations`, run at invoke; and
 the plant replay loop) now also honours `script.compiled`: it installs the
-script verbatim into the registry via one shared `InstallScript` helper. The
+script verbatim into the capabilities via one shared `InstallScript` helper. The
 event is already logged by the writer, so the install is **not** re-logged
 (no duplication). Plant additionally skips the LLM compile for any declared
 name the seed also ships as `script.compiled` — the declaration is the spec
@@ -188,9 +188,9 @@ binary. Three artifacts demonstrate the loop:
   capability back with zero kernel code for rollback itself.
 
 **Evidence.**
-- `poc/replicant` planted with **no LLM** (no `KS_LLM_*`, no stub): plant
+- `poc/replicant` planted with **no LLM** (no `SELF_LLM_*`, no stub): plant
   reported *"shipped verbatim — skipping compile"* and installed both the
-  command and its `lineage` projector. Invoked 4×: the registry script stayed
+  command and its `lineage` projector. Invoked 4×: the capabilities script stayed
   **byte-identical (sha256) across all 4 generations**, the generation counter
   advanced 1→4, and `lineage` auto-rendered all four — proving the declaration
   still wired the projector even though its binary was shipped.
@@ -206,10 +206,10 @@ binary. Three artifacts demonstrate the loop:
 unlike slices 1–3 which were zero-kernel. By the PoC rule ("re-growing the
 kernel is a failure"), that demands justification: the primitive is minimal and
 it *moves capability out of the kernel*. Rollback/restore would otherwise have
-been a kernel subcommand (read log → write registry, which only the kernel can
+been a kernel subcommand (read log → write capabilities, which only the kernel can
 do); honouring `script.compiled` makes restore, replication, and quines all
 **seeds** instead. The kernel's acted-on set grows from two events to three, but
-the alternative was a bespoke `ks restore` plus no replication story at all.
+the alternative was a bespoke `self restore` plus no replication story at all.
 Net: one small primitive, a large expansion of what the seed layer can express.
 
 **Honest gaps.** Installing arbitrary bytes verbatim is, in production, an
@@ -218,40 +218,40 @@ acceptable in PoC mode, but a real seed-trust / signing story is owed before
 this ships. The brain can't yet emit `script.compiled` directly (its `declare`
 tool is scoped to the two `*.declared` events), so brain-driven rollback isn't
 wired — only command/seed-driven. And replay-from-log still isn't a kernel
-operation: the registry is mutated in place, not rebuilt from the event stream.
+operation: the capabilities directory is mutated in place, not rebuilt from the event stream.
 
 **Next (slice 5 candidates).** Let the brain restore/replicate (widen `declare`
 to `script.compiled`, so "undo that" becomes brain-callable); a seed-signing /
-trust tier gating verbatim installs; or rebuild-registry-from-log so a fresh
-receiver reaches identical registry state by pure replay.
+trust tier gating verbatim installs; or rebuild-capabilities-from-log so a fresh
+receiver reaches identical capabilities state by pure replay.
 
 ---
 
 ## How to reproduce
 
 ```sh
-go build -o ks .
-export KS_HOME=$(mktemp -d) KS_LLM_*=...   # an LLM, or the Claude bridge, compiles the seeds
-ks init
-ks plant poc/buildlog        # buildlog projector + slice-1 hypothesis
-ks plant poc/emergence       # world + tick + population
-for i in $(seq 1 120); do ks invoke tick; done
-ks serve                     # browse /population and /buildlog
+go build -o self .
+export SELF_HOME=$(mktemp -d) SELF_LLM_*=...   # an LLM, or the Claude bridge, compiles the seeds
+self init
+self grow poc/buildlog        # buildlog projector + slice-1 hypothesis
+self grow poc/emergence       # world + tick + population
+for i in $(seq 1 120); do self run tick; done
+self live                     # browse /population and /buildlog
 ```
 
 The seeds are declarations; an LLM compiles them into the `tick`/`population`/
-`buildlog` scripts at plant time (garden-aware). Same seed, different receiver,
+`buildlog` scripts at grow time (garden-aware). Same seed, different receiver,
 different binary — but the same emergent behaviour.
 
 Slice 4's `poc/replicant` needs **no LLM** — it ships its code, so the loop is
 deterministic:
 
 ```sh
-go build -o ks .
-export KS_HOME=$(mktemp -d)        # no KS_LLM_*, no stub: nothing to compile
-ks init
-ks plant poc/replicant             # "shipped verbatim — skipping compile"
-ks invoke replicant                # generation 1; re-installs its own exact source
-ks invoke replicant                # generation 2; registry script byte-identical
-ks serve                           # browse /lineage to watch the generations
+go build -o self .
+export SELF_HOME=$(mktemp -d)        # no SELF_LLM_*, no stub: nothing to compile
+self init
+self grow poc/replicant             # "shipped verbatim — skipping compile"
+self run replicant                # generation 1; re-installs its own exact source
+self run replicant                # generation 2; installed script byte-identical
+self live                           # browse /lineage to watch the generations
 ```

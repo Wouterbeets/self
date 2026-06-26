@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ks/internal/event"
+	"self/internal/event"
 )
 
 type Manifest struct {

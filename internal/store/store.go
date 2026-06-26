@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"ks/internal/event"
+	"self/internal/event"
 )
 
 type Store struct {

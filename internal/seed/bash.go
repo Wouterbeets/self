@@ -160,7 +160,7 @@ func segmentHead(fields []string) (head string, args []string) {
 // are otherwise read-only. find's write actions are caught by findDangerousRe;
 // the remaining writers are sort (-o/--output) and uniq (a second file operand
 // is its OUTPUT). Without this, "look but not touch" leaks: sort -o FILE and
-// uniq IN OUT both overwrite an arbitrary path under KS_HOME.
+// uniq IN OUT both overwrite an arbitrary path under SELF_HOME.
 func checkWriteOperands(base string, args []string) error {
 	switch base {
 	case "sort":
@@ -200,7 +200,7 @@ var bashToolDef = map[string]any{
 	"type": "function",
 	"function": map[string]any{
 		"name":        "bash",
-		"description": "Run a read-only bash command to explore the ks garden. Working directory is KS_HOME. Allowed inspectors: ls, cat, head, tail, grep, rg, find, wc, jq, sort, uniq, cut, tr, strings, file, stat, diff (and similar read-only tools); pipelines of these are fine. Use them to inspect commands (registry/commands/), projectors (registry/projectors/), events (events.jsonl), and wiring (site/kernel.html). Anything not on the allowlist is blocked: interpreters (python, awk, sed, perl), writes, network, redirection, command substitution, and find -exec/-delete.",
+		"description": "Run a read-only bash command to explore your garden — the live state of self. Working directory is SELF_HOME. Allowed inspectors: ls, cat, head, tail, grep, rg, find, wc, jq, sort, uniq, cut, tr, strings, file, stat, diff (and similar read-only tools); pipelines of these are fine. Use them to inspect commands (capabilities/commands/), projectors (capabilities/projectors/), events (events.jsonl), and wiring (site/kernel.html). Anything not on the allowlist is blocked: interpreters (python, awk, sed, perl), writes, network, redirection, command substitution, and find -exec/-delete.",
 		"parameters": map[string]any{
 			"type": "object",
 			"properties": map[string]any{

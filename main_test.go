@@ -12,45 +12,45 @@ import (
 	"time"
 )
 
-func runKs(t *testing.T, home string, args ...string) string {
+func runSelf(t *testing.T, home string, args ...string) string {
 	t.Helper()
-	bin := os.Getenv("KS_TEST_BIN")
+	bin := os.Getenv("SELF_TEST_BIN")
 	if bin == "" {
-		t.Skip("set KS_TEST_BIN to the ks binary to run integration tests")
+		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
 	}
 	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), "KS_HOME="+home, "KS_LLM_STUB=1")
+	cmd.Env = append(os.Environ(), "SELF_HOME="+home, "SELF_LLM_STUB=1")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("ks %s: %v\n%s", strings.Join(args, " "), err, out.String())
+		t.Fatalf("self %s: %v\n%s", strings.Join(args, " "), err, out.String())
 	}
 	return out.String()
 }
 
 func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
-	bin := os.Getenv("KS_TEST_BIN")
+	bin := os.Getenv("SELF_TEST_BIN")
 	if bin == "" {
-		t.Skip("set KS_TEST_BIN to the ks binary to run integration tests")
+		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
 	}
 	home := t.TempDir()
 
-	runKs(t, home, "init")
+	runSelf(t, home, "init")
 	if _, err := os.Stat(filepath.Join(home, "site")); err != nil {
-		t.Fatal("ks init did not create site/")
+		t.Fatal("self init did not create site/")
 	}
 
-	runKs(t, home, "plant", "seeds/chat")
+	runSelf(t, home, "grow", "seeds/chat")
 
-	projPath := filepath.Join(home, "registry", "projectors", "chat")
+	projPath := filepath.Join(home, "capabilities", "projectors", "chat")
 	if _, err := os.Stat(projPath); err != nil {
 		t.Fatal("plant did not write projector script at projectors/chat")
 	}
 
-	runKs(t, home, "invoke", "chat", "from-test")
+	runSelf(t, home, "run", "chat", "from-test")
 
-	runKs(t, home, "project", "chat")
+	runSelf(t, home, "show", "chat")
 	sitePath := filepath.Join(home, "site", "chat.html")
 	data, err := os.ReadFile(sitePath)
 	if err != nil {
@@ -60,8 +60,8 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 		t.Errorf("site HTML missing invoked message:\n%s", string(data))
 	}
 
-	srv := exec.Command(bin, "serve", "18777")
-	srv.Env = append(os.Environ(), "KS_HOME="+home, "KS_LLM_STUB=1")
+	srv := exec.Command(bin, "live", "18777")
+	srv.Env = append(os.Environ(), "SELF_HOME="+home, "SELF_LLM_STUB=1")
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !ok {
-		t.Fatal("could not reach /events on ks serve")
+		t.Fatal("could not reach /events on self live")
 	}
 
 	resp, err := client.Get(base + "/live/chat")
@@ -103,14 +103,14 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 }
 
 func TestStrangeLoopCommandDeclaresNewCommand(t *testing.T) {
-	bin := os.Getenv("KS_TEST_BIN")
+	bin := os.Getenv("SELF_TEST_BIN")
 	if bin == "" {
-		t.Skip("set KS_TEST_BIN to the ks binary to run integration tests")
+		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
 	}
 	home := t.TempDir()
 
-	runKs(t, home, "init")
-	runKs(t, home, "plant", "seeds/chat")
+	runSelf(t, home, "init")
+	runSelf(t, home, "grow", "seeds/chat")
 
 	echoScript := `#!/usr/bin/env python3
 import sys, json
@@ -123,17 +123,17 @@ print(json.dumps({"name": "command.declared", "payload": {
     "event": {"name": "echo.said", "fields": {"text": "string"}}
 }}))
 `
-	chatPath := filepath.Join(home, "registry", "commands", "chat")
+	chatPath := filepath.Join(home, "capabilities", "commands", "chat")
 	if err := os.WriteFile(chatPath, []byte(echoScript), 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	runKs(t, home, "invoke", "chat", "trigger")
+	runSelf(t, home, "run", "chat", "trigger")
 
-	echoPath := filepath.Join(home, "registry", "commands", "echo")
+	echoPath := filepath.Join(home, "capabilities", "commands", "echo")
 	if _, err := os.Stat(echoPath); err != nil {
-		t.Fatalf("echo command not compiled to registry: %v", err)
+		t.Fatalf("echo command not compiled to capabilities: %v", err)
 	}
 
-	runKs(t, home, "invoke", "echo", "it-works")
+	runSelf(t, home, "run", "echo", "it-works")
 }

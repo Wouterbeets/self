@@ -9,14 +9,14 @@ import (
 	"regexp"
 	"strings"
 
-	"ks/internal/event"
-	"ks/internal/seed"
-	"ks/internal/store"
+	"self/internal/event"
+	"self/internal/seed"
+	"self/internal/store"
 )
 
 const PipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
-projector script: receives all events as JSONL on stdin, writes HTML on stdout. The kernel persists the output to KS_HOME/site/<projector_name>.html.
-The kernel sets the KS_HOME env var on every script.
+projector script: receives all events as JSONL on stdin, writes HTML on stdout. The kernel persists the output to SELF_HOME/site/<projector_name>.html.
+The kernel sets the SELF_HOME env var on every script.
 Scripts can be in any language os.Exec can run — Python, bash, node, anything with a shebang.`
 
 type CommandInfo struct {
@@ -47,7 +47,7 @@ type CompiledInfo struct {
 
 // RenderHTML reads the event log, extracts all command.declared,
 // projector.declared, and seed.planted events, and writes the kernel
-// wiring as HTML to KS_HOME/site/kernel.html. Called at init and plant.
+// wiring as HTML to SELF_HOME/site/kernel.html. Called at init and grow.
 func RenderHTML(home string) error {
 	st := openEventStore(home)
 	events, err := st.Read()
@@ -106,24 +106,28 @@ func RenderHTML(home string) error {
 		}
 	}
 
-	html := buildHTML(commands, projectors, seeds, compiled)
+	html := buildHTML(home, commands, projectors, seeds, compiled)
 
 	siteDir := filepath.Join(home, "site")
 	os.MkdirAll(siteDir, 0755)
 	return os.WriteFile(filepath.Join(siteDir, "kernel.html"), []byte(html), 0644)
 }
 
-func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedInfo, compiled []CompiledInfo) string {
+func buildHTML(home string, commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedInfo, compiled []CompiledInfo) string {
 	var b strings.Builder
+	esc := html.EscapeString
+	cmdPath := func(name string) string { return filepath.Join(home, "capabilities", "commands", name) }
+	projPath := func(name string) string { return filepath.Join(home, "capabilities", "projectors", name) }
 
 	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n")
 	b.WriteString("<meta charset=\"utf-8\">\n")
-	b.WriteString("<title>ks kernel</title>\n")
+	b.WriteString("<title>self</title>\n")
 	b.WriteString("<style>\n")
 	b.WriteString("body { font-family: -apple-system, sans-serif; margin: 20px; background: #fafafa; color: #222; }\n")
 	b.WriteString("h1 { margin-bottom: 4px; }\n")
 	b.WriteString("h2 { margin-top: 32px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }\n")
 	b.WriteString(".version { color: #888; margin-top: 0; }\n")
+	b.WriteString(".lede { font-size: 1.05rem; color: #444; max-width: 70ch; }\n")
 	b.WriteString("article { background: white; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px 16px; margin: 8px 0; }\n")
 	b.WriteString("article h3 { margin: 0 0 4px 0; font-family: monospace; }\n")
 	b.WriteString("article p { margin: 4px 0; color: #555; }\n")
@@ -133,110 +137,124 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 	b.WriteString("ul.consumes { list-style: none; padding: 0; }\n")
 	b.WriteString("ul.consumes li { font-family: monospace; font-size: 13px; padding: 2px 0; }\n")
 	b.WriteString(".tag { display: inline-block; background: #e8f0fe; border-radius: 3px; padding: 1px 6px; font-size: 12px; font-family: monospace; }\n")
+	b.WriteString(".path { font-family: monospace; font-size: 12px; color: #2563eb; }\n")
+	b.WriteString(".run { font-family: monospace; font-size: 12px; color: #6a737d; }\n")
 	b.WriteString("pre { background: #f4f4f4; border: 1px solid #e0e0e0; border-radius: 4px; padding: 12px; overflow-x: auto; font-size: 13px; }\n")
+	b.WriteString("code { font-family: monospace; background: #f0f0f0; border-radius: 3px; padding: 1px 4px; }\n")
 	b.WriteString("details { margin: 8px 0; }\n")
 	b.WriteString("summary { cursor: pointer; font-weight: bold; color: #555; }\n")
-	b.WriteString(".wiring-table { width: 100%; border-collapse: collapse; margin: 8px 0; }\n")
-	b.WriteString(".wiring-table th { background: #4a5568; color: white; padding: 6px 10px; text-align: left; }\n")
-	b.WriteString(".wiring-table td { border: 1px solid #ddd; padding: 6px 10px; font-family: monospace; font-size: 13px; }\n")
+	b.WriteString(".grid { width: 100%; border-collapse: collapse; margin: 8px 0; }\n")
+	b.WriteString(".grid th { background: #4a5568; color: white; padding: 6px 10px; text-align: left; }\n")
+	b.WriteString(".grid td { border: 1px solid #ddd; padding: 6px 10px; font-family: monospace; font-size: 13px; }\n")
 	b.WriteString("</style>\n")
 	b.WriteString("</head>\n<body>\n")
 
 	// Identity
-	b.WriteString("<h1>ks kernel</h1>\n")
-	b.WriteString("<p class=\"version\">ks/v0</p>\n")
+	b.WriteString("<h1>self</h1>\n")
+	b.WriteString("<p class=\"version\">self/v0 · a sovereign, self-improving capability system</p>\n")
+	b.WriteString("<p class=\"lede\">One append-only event log is my only truth. Everything you see here — my capabilities, my projections, this page — is a pure replay of that log, and you and my agent see exactly the same thing. A tiny kernel; everything else grows as <strong>seeds</strong> through the strange loop. Nothing is hidden: every path below is a plain file you can open.</p>\n")
 
 	// Brain identity — written for the LLM that reads this page as context.
 	b.WriteString("<section id=\"brain-identity\">\n")
-	b.WriteString("<h2>what you are</h2>\n")
-	b.WriteString("<p>You are the <strong>brain</strong> of this ks kernel — a sovereign, local-first, event-sourced system. The append-only event log (<code>events.jsonl</code>) is the only source of truth. Everything else — this page, the projections in <code>site/</code>, the compiled scripts in <code>registry/</code> — is derived from it by replay. Nothing is destroyed: a &ldquo;delete&rdquo; is a tombstone event, reversible by a later restore, so you can act without fear.</p>\n")
+	b.WriteString("<h2>you are my brain</h2>\n")
+	b.WriteString("<p>If you are the LLM reading this as context: you are the <strong>brain</strong> of self. The append-only event log (<code>events.jsonl</code>) is the only source of truth; this page, the projections in <code>site/</code>, and the compiled scripts in <code>capabilities/</code> are all derived from it by replay. Nothing is destroyed — a &ldquo;delete&rdquo; is a tombstone event, reversible by a later restore — so you can act without fear.</p>\n")
 	b.WriteString("<p>You have three powers:</p>\n")
 	b.WriteString("<dl>\n")
-	b.WriteString("<dt>read</dt><dd>a read-only <code>bash</code> tool to explore the garden — inspect <code>registry/</code>, <code>events.jsonl</code>, and <code>site/</code>. The <code>site/*.html</code> projections are your memory; read the relevant ones (e.g. <code>site/chat.html</code> for the conversation) before answering.</dd>\n")
-	b.WriteString("<dt>act</dt><dd>every planted <strong>command</strong> listed below is exposed to you as a callable tool. To change something the user asks for, <em>call the matching command</em> — don't merely describe it. The kernel runs it and appends the resulting events.</dd>\n")
-	b.WriteString("<dt>grow</dt><dd>when no existing command fits, <code>declare</code> a new <code>command.declared</code> or <code>projector.declared</code>; the kernel compiles it on the spot and it becomes a capability you can use immediately.</dd>\n")
+	b.WriteString("<dt>read</dt><dd>a read-only <code>bash</code> tool to explore the garden — inspect <code>capabilities/</code>, <code>events.jsonl</code>, and <code>site/</code>. The <code>site/*.html</code> projections are my memory; read the relevant ones (e.g. <code>site/chat.html</code> for the conversation) before answering.</dd>\n")
+	b.WriteString("<dt>act</dt><dd>every capability listed below is exposed to you as a callable tool. To change something the user asks for, <em>call the matching capability</em> — don't merely describe it. The kernel runs it and appends the resulting events.</dd>\n")
+	b.WriteString("<dt>grow</dt><dd>when no existing capability fits, <code>declare</code> a new <code>command.declared</code> or <code>projector.declared</code>; the kernel compiles it on the spot and it becomes a capability you can use immediately.</dd>\n")
 	b.WriteString("</dl>\n")
 	b.WriteString("</section>\n")
 
-	// Known events
-	b.WriteString("<section id=\"identity\">\n")
-	b.WriteString("<h2>kernel identity</h2>\n")
-	b.WriteString("<dl>\n")
-	b.WriteString("<dt>kernel.initialized</dt><dd>written by ks init</dd>\n")
-	b.WriteString("<dt>command.declared</dt><dd>read by ks plant/invoke to compile a command from its spec</dd>\n")
-	b.WriteString("<dt>projector.declared</dt><dd>read by ks plant/invoke to compile a projector from its spec</dd>\n")
-	b.WriteString("<dt>script.compiled</dt><dd>written by the kernel to log a compiled script; also <em>acted on</em> — a command may emit one to install an exact script verbatim (no LLM), so the loop can carry code, not just a spec. Re-emitting an older script.compiled from the log is rollback.</dd>\n")
-	b.WriteString("<dt>seed.planted</dt><dd>written by ks plant as a receipt</dd>\n")
-	b.WriteString("</dl>\n")
-
-	// Pipe contract
-	b.WriteString("<h3>pipe contract</h3>\n")
-	b.WriteString("<pre>")
-	b.WriteString(html.EscapeString(PipeContract))
-	b.WriteString("</pre>\n")
-
-	// System prompts
-	b.WriteString("<details class=\"system-prompt\" data-type=\"command\">\n")
-	b.WriteString("<summary>command system prompt (used at plant time)</summary>\n")
-	b.WriteString("<pre>")
-	b.WriteString(html.EscapeString(seed.CommandSystemPrompt))
-	b.WriteString("</pre>\n")
-	b.WriteString("</details>\n")
-	b.WriteString("<details class=\"system-prompt\" data-type=\"projector\">\n")
-	b.WriteString("<summary>projector system prompt (used at plant time)</summary>\n")
-	b.WriteString("<pre>")
-	b.WriteString(html.EscapeString(seed.ProjectorSystemPrompt))
-	b.WriteString("</pre>\n")
-	b.WriteString("</details>\n")
-	b.WriteString("</section>\n")
-
-	// Commands
+	// My capabilities — commands
 	b.WriteString("<section id=\"commands\">\n")
-	b.WriteString("<h2>commands</h2>\n")
+	b.WriteString("<h2>my capabilities — commands</h2>\n")
 	if len(commands) == 0 {
-		b.WriteString("<p>No commands planted yet.</p>\n")
+		b.WriteString("<p>None yet. Grow one: <code>self grow &lt;seed&gt;</code>.</p>\n")
 	}
 	for _, cmd := range commands {
 		b.WriteString(fmt.Sprintf("<article class=\"command\" data-name=%q data-event=%q>\n", cmd.Name, cmd.Event))
-		b.WriteString(fmt.Sprintf("<h3>%s</h3>\n", html.EscapeString(cmd.Name)))
-		b.WriteString(fmt.Sprintf("<p>%s</p>\n", html.EscapeString(cmd.Description)))
-		b.WriteString(fmt.Sprintf("<p>produces event: <span class=\"tag\">%s</span></p>\n", html.EscapeString(cmd.Event)))
+		b.WriteString(fmt.Sprintf("<h3>%s</h3>\n", esc(cmd.Name)))
+		b.WriteString(fmt.Sprintf("<p>%s</p>\n", esc(cmd.Description)))
+		b.WriteString(fmt.Sprintf("<p>produces event: <span class=\"tag\">%s</span></p>\n", esc(cmd.Event)))
 		if len(cmd.Params) > 0 {
 			b.WriteString("<dl class=\"params\">\n")
 			for k, v := range cmd.Params {
-				b.WriteString(fmt.Sprintf("<dt>%s</dt><dd>%s</dd>\n", html.EscapeString(k), html.EscapeString(v)))
+				b.WriteString(fmt.Sprintf("<dt>%s</dt><dd>%s</dd>\n", esc(k), esc(v)))
 			}
 			b.WriteString("</dl>\n")
 		}
+		b.WriteString(fmt.Sprintf("<p class=\"run\">run: self run %s …</p>\n", esc(cmd.Name)))
+		b.WriteString(fmt.Sprintf("<p class=\"path\">%s</p>\n", esc(cmdPath(cmd.Name))))
 		b.WriteString("</article>\n")
 	}
 	b.WriteString("</section>\n")
 
-	// Projectors
+	// My capabilities — projections
 	b.WriteString("<section id=\"projectors\">\n")
-	b.WriteString("<h2>projectors</h2>\n")
+	b.WriteString("<h2>my capabilities — projections</h2>\n")
 	if len(projectors) == 0 {
-		b.WriteString("<p>No projectors planted yet.</p>\n")
+		b.WriteString("<p>None yet. A projection is how events become a view.</p>\n")
 	}
 	for _, proj := range projectors {
 		b.WriteString(fmt.Sprintf("<article class=\"projector\" data-name=%q>\n", proj.Name))
-		b.WriteString(fmt.Sprintf("<h3>%s</h3>\n", html.EscapeString(proj.Name)))
-		b.WriteString(fmt.Sprintf("<p>%s</p>\n", html.EscapeString(proj.Description)))
+		b.WriteString(fmt.Sprintf("<h3>%s</h3>\n", esc(proj.Name)))
+		b.WriteString(fmt.Sprintf("<p>%s</p>\n", esc(proj.Description)))
 		b.WriteString("<ul class=\"consumes\">\n")
 		for _, c := range proj.Consumes {
-			b.WriteString(fmt.Sprintf("<li data-event=%q>%s</li>\n", c, html.EscapeString(c)))
+			b.WriteString(fmt.Sprintf("<li data-event=%q>%s</li>\n", c, esc(c)))
 		}
 		b.WriteString("</ul>\n")
+		b.WriteString(fmt.Sprintf("<p class=\"run\">view: <a href=\"/%s\">/%s</a> &nbsp;·&nbsp; self show %s</p>\n", esc(proj.Name), esc(proj.Name), esc(proj.Name)))
+		b.WriteString(fmt.Sprintf("<p class=\"path\">%s</p>\n", esc(projPath(proj.Name))))
 		b.WriteString("</article>\n")
 	}
 	b.WriteString("</section>\n")
 
+	// Where I live — discoverable paths
+	b.WriteString("<section id=\"where\">\n")
+	b.WriteString("<h2>where I live</h2>\n")
+	b.WriteString("<p>Everything is plain files. Open, grep, inspect freely — or run <code>self where</code>.</p>\n")
+	b.WriteString("<table class=\"grid\">\n<tr><th>what</th><th>path</th></tr>\n")
+	for _, row := range [][2]string{
+		{"home (SELF_HOME)", home},
+		{"event log (the truth)", filepath.Join(home, "events.jsonl")},
+		{"commands", filepath.Join(home, "capabilities", "commands")},
+		{"projections", filepath.Join(home, "capabilities", "projectors")},
+		{"materialized HTML", filepath.Join(home, "site")},
+	} {
+		b.WriteString(fmt.Sprintf("<tr><td>%s</td><td>%s</td></tr>\n", esc(row[0]), esc(row[1])))
+	}
+	b.WriteString("</table>\n</section>\n")
+
+	// How to explore — CLI cheat sheet
+	b.WriteString("<section id=\"explore\">\n")
+	b.WriteString("<h2>how to explore me</h2>\n")
+	b.WriteString("<table class=\"grid\">\n<tr><th>command</th><th>what it does</th></tr>\n")
+	for _, row := range [][2]string{
+		{"self", "start this live garden (the default)"},
+		{"self ls", "overview of capabilities"},
+		{"self ls commands", "commands with full file paths"},
+		{"self ls projectors", "projections with full file paths"},
+		{"self where", "SELF_HOME and every important path"},
+		{"self which <name>", "full path to a command or projection"},
+		{"self history", "recent events, human-readable"},
+		{"self run <command> …", "run a capability"},
+		{"self show <name>", "render a projection (browser, or stdout when piped)"},
+		{"self think \"…\"", "ask the brain"},
+		{"self heartbeat", "one self-improvement cycle"},
+		{"self grow <seed>", "grow a new capability from a seed"},
+	} {
+		b.WriteString(fmt.Sprintf("<tr><td>%s</td><td>%s</td></tr>\n", esc(row[0]), esc(row[1])))
+	}
+	b.WriteString("</table>\n</section>\n")
+
 	// Wiring table
 	b.WriteString("<section id=\"wiring\">\n")
-	b.WriteString("<h2>wiring</h2>\n")
+	b.WriteString("<h2>wiring — command → event → projection</h2>\n")
 	if len(commands) > 0 && len(projectors) > 0 {
-		b.WriteString("<table class=\"wiring-table\">\n")
-		b.WriteString("<tr><th>command</th><th>produces event</th><th>consumed by projectors</th></tr>\n")
+		b.WriteString("<table class=\"grid\">\n")
+		b.WriteString("<tr><th>command</th><th>produces event</th><th>seen by projections</th></tr>\n")
 		for _, cmd := range commands {
 			var consumedBy []string
 			for _, proj := range projectors {
@@ -252,48 +270,74 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 				consumedStr = strings.Join(consumedBy, ", ")
 			}
 			b.WriteString(fmt.Sprintf("<tr><td>%s</td><td>%s</td><td>%s</td></tr>\n",
-				html.EscapeString(cmd.Name),
-				html.EscapeString(cmd.Event),
-				html.EscapeString(consumedStr)))
+				esc(cmd.Name), esc(cmd.Event), esc(consumedStr)))
 		}
 		b.WriteString("</table>\n")
 	} else {
-		b.WriteString("<p>No wiring yet — plant commands and projectors.</p>\n")
+		b.WriteString("<p>No wiring yet — grow a seed with a command and a projection.</p>\n")
 	}
+	b.WriteString("</section>\n")
+
+	// Events I act on + the contract that powers it all
+	b.WriteString("<section id=\"identity\">\n")
+	b.WriteString("<h2>the events I act on</h2>\n")
+	b.WriteString("<dl>\n")
+	b.WriteString("<dt>kernel.initialized</dt><dd>written by <code>self init</code></dd>\n")
+	b.WriteString("<dt>command.declared</dt><dd>compiled into a command by <code>self grow</code> and <code>self run</code></dd>\n")
+	b.WriteString("<dt>projector.declared</dt><dd>compiled into a projection by <code>self grow</code> and <code>self run</code></dd>\n")
+	b.WriteString("<dt>script.compiled</dt><dd>logged for every compile; also <em>acted on</em> — a seed or command may emit one to install an exact script verbatim (no LLM), so the loop can carry code, not just a spec. Re-emitting an older one from the log is rollback.</dd>\n")
+	b.WriteString("<dt>seed.planted</dt><dd>written by <code>self grow</code> as a receipt</dd>\n")
+	b.WriteString("</dl>\n")
+
+	b.WriteString("<h3>pipe contract</h3>\n")
+	b.WriteString("<pre>")
+	b.WriteString(esc(PipeContract))
+	b.WriteString("</pre>\n")
+
+	b.WriteString("<details class=\"system-prompt\" data-type=\"command\">\n")
+	b.WriteString("<summary>command system prompt (used when compiling)</summary>\n")
+	b.WriteString("<pre>")
+	b.WriteString(esc(seed.CommandSystemPrompt))
+	b.WriteString("</pre>\n</details>\n")
+	b.WriteString("<details class=\"system-prompt\" data-type=\"projector\">\n")
+	b.WriteString("<summary>projection system prompt (used when compiling)</summary>\n")
+	b.WriteString("<pre>")
+	b.WriteString(esc(seed.ProjectorSystemPrompt))
+	b.WriteString("</pre>\n</details>\n")
 	b.WriteString("</section>\n")
 
 	// Compilation history
 	b.WriteString("<section id=\"compilations\">\n")
 	b.WriteString("<h2>compilation history</h2>\n")
 	if len(compiled) == 0 {
-		b.WriteString("<p>No scripts compiled yet.</p>\n")
+		b.WriteString("<p>Nothing compiled yet.</p>\n")
 	} else {
-		b.WriteString("<table class=\"wiring-table\">\n")
+		b.WriteString("<table class=\"grid\">\n")
 		b.WriteString("<tr><th>seq</th><th>type</th><th>name</th></tr>\n")
 		for _, c := range compiled {
 			b.WriteString(fmt.Sprintf("<tr><td>%d</td><td>%s</td><td>%s</td></tr>\n",
-				c.Seq, html.EscapeString(c.Type), html.EscapeString(c.Name)))
+				c.Seq, esc(c.Type), esc(c.Name)))
 		}
 		b.WriteString("</table>\n")
 	}
 	b.WriteString("</section>\n")
 
-	// Seeds
+	// Seeds grown
 	b.WriteString("<section id=\"seeds\">\n")
-	b.WriteString("<h2>seeds</h2>\n")
+	b.WriteString("<h2>seeds I've grown</h2>\n")
 	if len(seeds) == 0 {
-		b.WriteString("<p>No seeds planted yet.</p>\n")
+		b.WriteString("<p>None yet.</p>\n")
 	}
 	for _, s := range seeds {
 		b.WriteString(fmt.Sprintf("<article class=\"seed\" data-name=%q data-seq=%q>\n", s.Name, fmt.Sprintf("%d", s.Seq)))
-		b.WriteString(fmt.Sprintf("<h3>%s</h3>\n", html.EscapeString(s.Name)))
+		b.WriteString(fmt.Sprintf("<h3>%s</h3>\n", esc(s.Name)))
 		if len(s.Commands) > 0 {
-			b.WriteString(fmt.Sprintf("<p>commands: %s</p>\n", html.EscapeString(strings.Join(s.Commands, ", "))))
+			b.WriteString(fmt.Sprintf("<p>commands: %s</p>\n", esc(strings.Join(s.Commands, ", "))))
 		}
 		if len(s.Projectors) > 0 {
-			b.WriteString(fmt.Sprintf("<p>projectors: %s</p>\n", html.EscapeString(strings.Join(s.Projectors, ", "))))
+			b.WriteString(fmt.Sprintf("<p>projections: %s</p>\n", esc(strings.Join(s.Projectors, ", "))))
 		}
-		b.WriteString(fmt.Sprintf("<p>planted at seq %d</p>\n", s.Seq))
+		b.WriteString(fmt.Sprintf("<p>grown at seq %d</p>\n", s.Seq))
 		b.WriteString("</article>\n")
 	}
 	b.WriteString("</section>\n")
@@ -303,7 +347,7 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 }
 
 // CompileDeclarations scans events for command.declared, projector.declared,
-// and script.compiled, installs the resulting scripts into the registry, and
+// and script.compiled, installs the resulting scripts into capabilities/, and
 // re-renders kernel.html. Declarations are compiled via the LLM compiler (a
 // spec → a fresh binary); a script.compiled is installed verbatim (exact code,
 // no LLM round-trip). Latest wins — a re-declaration or re-install overwrites
@@ -316,11 +360,11 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 // or replay an older script.compiled from the log to roll a capability back, no
 // re-compilation, no drift. Rollback and replication thus need no kernel code;
 // they are seeds that read the log on stdin and re-emit the script they want.
-// The event log keeps every version for audit; the registry holds only the
+// The event log keeps every version for audit; capabilities/ holds only the
 // latest.
 func CompileDeclarations(home string, events []event.Event) (commands, projectors []string, err error) {
 	compiler := seed.NewCompiler(home)
-	registry := filepath.Join(home, "registry")
+	capDir := filepath.Join(home, "capabilities")
 
 	type compiled struct {
 		Type   string `json:"type"`
@@ -342,10 +386,10 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 				fmt.Printf(" failed\n")
 				return nil, nil, fmt.Errorf("command %q: %w", cmd.Name, cErr)
 			}
-			if wErr := seed.WriteCommandScript(registry, cmd.Name, script); wErr != nil {
+			if wErr := seed.WriteCommandScript(capDir, cmd.Name, script); wErr != nil {
 				return nil, nil, wErr
 			}
-			fmt.Printf(" planted\n")
+			fmt.Printf(" compiled\n")
 			commands = append(commands, cmd.Name)
 			compiledScripts = append(compiledScripts, compiled{"command", cmd.Name, script})
 
@@ -360,10 +404,10 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 				fmt.Printf(" failed\n")
 				return nil, nil, fmt.Errorf("projector %q: %w", proj.Name, cErr)
 			}
-			if wErr := seed.WriteProjectorScript(registry, proj.Name, script); wErr != nil {
+			if wErr := seed.WriteProjectorScript(capDir, proj.Name, script); wErr != nil {
 				return nil, nil, wErr
 			}
-			fmt.Printf(" planted\n")
+			fmt.Printf(" compiled\n")
 			projectors = append(projectors, proj.Name)
 			compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
 
@@ -371,8 +415,8 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 			// A command emitted an exact script to install — the strange loop
 			// carrying code, not a spec. invoke already appended this event to
 			// the log, so the provenance is recorded; we only install it to the
-			// registry and must NOT re-log it (that would duplicate the entry).
-			kind, name, iErr := InstallScript(registry, e.Payload)
+			// capabilities/ and must NOT re-log it (that would duplicate the entry).
+			kind, name, iErr := InstallScript(capDir, e.Payload)
 			if iErr != nil {
 				return nil, nil, iErr
 			}
@@ -407,15 +451,15 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 }
 
 // InstallScript installs an exact script from a script.compiled payload into
-// the registry, verbatim — no compilation. Returns the kind ("command" or
+// capabilities/, verbatim — no compilation. Returns the kind ("command" or
 // "projector") and name installed; an empty kind means there was nothing to
 // install (a provenance-only payload with no script, or no name). This is the
 // exact-code half of the strange loop: a command.declared/projector.declared is
 // a spec the LLM compiles into a fresh binary, while a script.compiled is code
-// installed as-is. So a seed can ship a binary (plant honors it) and a command
+// installed as-is. So a seed can ship a binary (grow honors it) and a command
 // can carry its own source forward — a quine, a deterministic replicator, or a
 // rollback that re-emits an older logged script (invoke honors it).
-func InstallScript(registry string, payload json.RawMessage) (kind, name string, err error) {
+func InstallScript(capDir string, payload json.RawMessage) (kind, name string, err error) {
 	var cs struct {
 		Type   string `json:"type"`
 		Name   string `json:"name"`
@@ -432,9 +476,9 @@ func InstallScript(registry string, payload json.RawMessage) (kind, name string,
 	}
 	switch cs.Type {
 	case "command":
-		return "command", cs.Name, seed.WriteCommandScript(registry, cs.Name, cs.Script)
+		return "command", cs.Name, seed.WriteCommandScript(capDir, cs.Name, cs.Script)
 	case "projector":
-		return "projector", cs.Name, seed.WriteProjectorScript(registry, cs.Name, cs.Script)
+		return "projector", cs.Name, seed.WriteProjectorScript(capDir, cs.Name, cs.Script)
 	default:
 		return "", "", fmt.Errorf("script.compiled: unknown type %q", cs.Type)
 	}

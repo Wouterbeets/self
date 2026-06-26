@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ks/internal/event"
+	"self/internal/event"
 )
 
 func TestRenderAndReadWiring(t *testing.T) {
@@ -15,7 +15,7 @@ func TestRenderAndReadWiring(t *testing.T) {
 
 	// Write a minimal events.jsonl with command.declared, projector.declared,
 	// and seed.planted events.
-	events := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"ks/v0"}}
+	events := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"self/v0"}}
 {"id":"b","seq":2,"name":"command.declared","occurred_at":"2026-01-01T00:00:00Z","payload":{"name":"cal-add","description":"Add event","params":{"date":"string"},"event":{"name":"calendar.event.added","fields":{"event_id":"string"}}}}
 {"id":"c","seq":3,"name":"command.declared","occurred_at":"2026-01-01T00:00:00Z","payload":{"name":"cal-del","description":"Delete event","params":{"event_id":"string"},"event":{"name":"calendar.event.deleted","fields":{"event_id":"string"}}}}
 {"id":"d","seq":4,"name":"projector.declared","occurred_at":"2026-01-01T00:00:00Z","payload":{"name":"calendar","description":"Month view","consumes":["calendar.event.added","calendar.event.edited","calendar.event.deleted"]}}
@@ -70,7 +70,7 @@ func TestReadWiringMissingFile(t *testing.T) {
 func TestRenderHTMLEmptyKernel(t *testing.T) {
 	home := t.TempDir()
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
-	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"ks/v0"}}
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"self/v0"}}
 `), 0644)
 
 	if err := RenderHTML(home); err != nil {
@@ -88,17 +88,17 @@ func TestRenderHTMLEmptyKernel(t *testing.T) {
 
 func TestCompileDeclarationsStub(t *testing.T) {
 	// Force stub mode so we don't need an LLM API key.
-	os.Setenv("KS_LLM_STUB", "1")
-	t.Cleanup(func() { os.Unsetenv("KS_LLM_STUB") })
+	os.Setenv("SELF_LLM_STUB", "1")
+	t.Cleanup(func() { os.Unsetenv("SELF_LLM_STUB") })
 
 	home := t.TempDir()
-	os.MkdirAll(filepath.Join(home, "registry", "commands"), 0755)
-	os.MkdirAll(filepath.Join(home, "registry", "projectors"), 0755)
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "capabilities", "projectors"), 0755)
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
 
 	// Minimal events.jsonl so RenderHTML has something to read.
 	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(
-		`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"ks/v0"}}
+		`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"self/v0"}}
 `), 0644)
 
 	// Simulate events a command might emit — including a declaration.
@@ -144,10 +144,10 @@ func TestCompileDeclarationsStub(t *testing.T) {
 	}
 
 	// Scripts should exist in the registry.
-	if _, err := os.Stat(filepath.Join(home, "registry", "commands", "summarize")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "summarize")); err != nil {
 		t.Error("summarize command script not written")
 	}
-	if _, err := os.Stat(filepath.Join(home, "registry", "projectors", "summaries")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "projectors", "summaries")); err != nil {
 		t.Error("summaries projector script not written")
 	}
 
@@ -162,15 +162,15 @@ func TestCompileDeclarationsStub(t *testing.T) {
 }
 
 func TestCompileDeclarationsInstallsScriptVerbatim(t *testing.T) {
-	os.Setenv("KS_LLM_STUB", "1")
-	t.Cleanup(func() { os.Unsetenv("KS_LLM_STUB") })
+	os.Setenv("SELF_LLM_STUB", "1")
+	t.Cleanup(func() { os.Unsetenv("SELF_LLM_STUB") })
 
 	home := t.TempDir()
-	os.MkdirAll(filepath.Join(home, "registry", "commands"), 0755)
-	os.MkdirAll(filepath.Join(home, "registry", "projectors"), 0755)
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "capabilities", "projectors"), 0755)
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
 	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(
-		`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"ks/v0"}}
+		`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"self/v0"}}
 `), 0644)
 
 	// A command emitted a script.compiled: the kernel must install the exact
@@ -186,7 +186,7 @@ func TestCompileDeclarationsInstallsScriptVerbatim(t *testing.T) {
 	if len(cmds) != 1 || cmds[0] != "ping" || len(projs) != 0 {
 		t.Fatalf("cmds=%v projs=%v, want [ping] []", cmds, projs)
 	}
-	got, err := os.ReadFile(filepath.Join(home, "registry", "commands", "ping"))
+	got, err := os.ReadFile(filepath.Join(home, "capabilities", "commands", "ping"))
 	if err != nil {
 		t.Fatalf("ping not installed: %v", err)
 	}
@@ -215,8 +215,8 @@ func TestInstallScriptRejectsUnsafeNameAndProvenanceOnly(t *testing.T) {
 }
 
 func TestCompileDeclarationsNoDeclarations(t *testing.T) {
-	os.Setenv("KS_LLM_STUB", "1")
-	t.Cleanup(func() { os.Unsetenv("KS_LLM_STUB") })
+	os.Setenv("SELF_LLM_STUB", "1")
+	t.Cleanup(func() { os.Unsetenv("SELF_LLM_STUB") })
 
 	home := t.TempDir()
 
