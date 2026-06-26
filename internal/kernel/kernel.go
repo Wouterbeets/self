@@ -163,9 +163,9 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 	b.WriteString("<h2>kernel identity</h2>\n")
 	b.WriteString("<dl>\n")
 	b.WriteString("<dt>kernel.initialized</dt><dd>written by ks init</dd>\n")
-	b.WriteString("<dt>command.declared</dt><dd>read by ks plant to compile commands</dd>\n")
-	b.WriteString("<dt>projector.declared</dt><dd>read by ks plant to compile projectors</dd>\n")
-	b.WriteString("<dt>script.compiled</dt><dd>written by ks plant/invoke — logs the compiled script for rollback</dd>\n")
+	b.WriteString("<dt>command.declared</dt><dd>read by ks plant/invoke to compile a command from its spec</dd>\n")
+	b.WriteString("<dt>projector.declared</dt><dd>read by ks plant/invoke to compile a projector from its spec</dd>\n")
+	b.WriteString("<dt>script.compiled</dt><dd>written by the kernel to log a compiled script; also <em>acted on</em> — a command may emit one to install an exact script verbatim (no LLM), so the loop can carry code, not just a spec. Re-emitting an older script.compiled from the log is rollback.</dd>\n")
 	b.WriteString("<dt>seed.planted</dt><dd>written by ks plant as a receipt</dd>\n")
 	b.WriteString("</dl>\n")
 
@@ -302,16 +302,22 @@ func buildHTML(commands []CommandInfo, projectors []ProjectorInfo, seeds []SeedI
 	return b.String()
 }
 
-// CompileDeclarations scans events for command.declared and
-// projector.declared, compiles any it finds via the LLM compiler,
-// writes the scripts to the registry, and re-renders kernel.html.
-// Latest declaration wins — a re-declaration overwrites the script.
-// Returns the names of commands and projectors compiled.
+// CompileDeclarations scans events for command.declared, projector.declared,
+// and script.compiled, installs the resulting scripts into the registry, and
+// re-renders kernel.html. Declarations are compiled via the LLM compiler (a
+// spec → a fresh binary); a script.compiled is installed verbatim (exact code,
+// no LLM round-trip). Latest wins — a re-declaration or re-install overwrites
+// the script. Returns the names of commands and projectors affected.
 //
-// This is the strange-loop hook: a command (e.g. chat) can emit
-// declarations for new commands/projectors, and the kernel compiles
-// them on the fly. The event log keeps every version for audit;
-// the registry holds only the latest.
+// This is the strange-loop hook: a command (e.g. chat) can emit declarations
+// for new capabilities and the kernel compiles them on the fly. By also
+// honoring script.compiled, a command can carry exact code — not just a spec —
+// forward: it can re-emit its own source (a quine / deterministic replicator)
+// or replay an older script.compiled from the log to roll a capability back, no
+// re-compilation, no drift. Rollback and replication thus need no kernel code;
+// they are seeds that read the log on stdin and re-emit the script they want.
+// The event log keeps every version for audit; the registry holds only the
+// latest.
 func CompileDeclarations(home string, events []event.Event) (commands, projectors []string, err error) {
 	compiler := seed.NewCompiler(home)
 	registry := filepath.Join(home, "registry")
@@ -360,6 +366,24 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 			fmt.Printf(" planted\n")
 			projectors = append(projectors, proj.Name)
 			compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
+
+		case event.ScriptCompiled:
+			// A command emitted an exact script to install — the strange loop
+			// carrying code, not a spec. invoke already appended this event to
+			// the log, so the provenance is recorded; we only install it to the
+			// registry and must NOT re-log it (that would duplicate the entry).
+			kind, name, iErr := InstallScript(registry, e.Payload)
+			if iErr != nil {
+				return nil, nil, iErr
+			}
+			switch kind {
+			case "command":
+				fmt.Printf("installing command %q verbatim... done\n", name)
+				commands = append(commands, name)
+			case "projector":
+				fmt.Printf("installing projector %q verbatim... done\n", name)
+				projectors = append(projectors, name)
+			}
 		}
 	}
 
@@ -380,6 +404,40 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 		}
 	}
 	return commands, projectors, nil
+}
+
+// InstallScript installs an exact script from a script.compiled payload into
+// the registry, verbatim — no compilation. Returns the kind ("command" or
+// "projector") and name installed; an empty kind means there was nothing to
+// install (a provenance-only payload with no script, or no name). This is the
+// exact-code half of the strange loop: a command.declared/projector.declared is
+// a spec the LLM compiles into a fresh binary, while a script.compiled is code
+// installed as-is. So a seed can ship a binary (plant honors it) and a command
+// can carry its own source forward — a quine, a deterministic replicator, or a
+// rollback that re-emits an older logged script (invoke honors it).
+func InstallScript(registry string, payload json.RawMessage) (kind, name string, err error) {
+	var cs struct {
+		Type   string `json:"type"`
+		Name   string `json:"name"`
+		Script string `json:"script"`
+	}
+	if uErr := json.Unmarshal(payload, &cs); uErr != nil {
+		return "", "", fmt.Errorf("parse script.compiled: %w", uErr)
+	}
+	if cs.Name == "" || cs.Script == "" {
+		return "", "", nil // provenance-only or malformed — nothing to install
+	}
+	if strings.ContainsAny(cs.Name, `/\`) || strings.Contains(cs.Name, "..") {
+		return "", "", fmt.Errorf("script.compiled: unsafe name %q", cs.Name)
+	}
+	switch cs.Type {
+	case "command":
+		return "command", cs.Name, seed.WriteCommandScript(registry, cs.Name, cs.Script)
+	case "projector":
+		return "projector", cs.Name, seed.WriteProjectorScript(registry, cs.Name, cs.Script)
+	default:
+		return "", "", fmt.Errorf("script.compiled: unknown type %q", cs.Type)
+	}
 }
 
 // Wiring is the parsed event→projector map extracted from kernel.html.

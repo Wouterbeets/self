@@ -55,10 +55,13 @@ One seed, infinite capabilities. That's the strange loop.
 
 ## self-improvement (the strange loop)
 
-`ks invoke` doesn't just append events — it scans them for `command.declared`
-and `projector.declared`. If a command emits either, the kernel compiles them
-on the spot and writes the scripts to the registry. This means a command can
-plant new capabilities, including re-declaring itself.
+`ks invoke` doesn't just append events — it scans them for `command.declared`,
+`projector.declared`, and `script.compiled`. If a command emits a declaration,
+the kernel compiles it on the spot; if it emits a `script.compiled`, the kernel
+installs that exact script verbatim (no LLM). Either way the scripts land in the
+registry, so a command can plant new capabilities — including re-declaring
+itself with a fresh spec, or re-emitting its own exact source to carry code
+forward unchanged.
 
 ```
 ks plant seeds/chat        # install the chat interface (command + projector)
@@ -70,10 +73,14 @@ ks invoke summarize "..."  # the new command works right away
 ```
 
 The event log keeps every declaration and every compiled script. The
-registry holds only the latest. Re-planting from the log is rollback:
-find the `script.compiled` event for the capability, restore that exact
-script to the registry — no re-compilation, no drift. The chat interface
-is the constitution, and it's editable from inside the chat.
+registry holds only the latest. The loop carries **specs** by default —
+a `*.declared` event is re-compiled into a fresh binary — but it can also
+carry **exact code**: the kernel acts on `script.compiled` too, installing
+the bytes verbatim (no LLM). So a command can re-emit its own source (a
+quine / deterministic replicator — see `poc/replicant`), and rollback is
+just a seed that finds an older `script.compiled` in the log and re-emits
+it — no re-compilation, no drift, **no kernel command for rollback**. The
+chat interface is the constitution, and it's editable from inside the chat.
 
 ## pipe contract
 
@@ -157,7 +164,9 @@ Five things, irreducible:
 2. **LLM compiler** — reads `command.declared` and `projector.declared` payloads,
    explores the garden via a read-only bash tool, writes scripts at plant time
    **and at invoke time** (if a command emits declarations). Logs every compiled
-   script as a `script.compiled` event for audit-faithful rollback.
+   script as a `script.compiled` event. It also **installs** a `script.compiled`
+   verbatim (no LLM) when a seed or command emits one — the exact-code path that
+   makes quines, replication, and rollback expressible (see `poc/replicant`).
 3. **LLM brain** (`ks think`) — the same LLM infrastructure as the compiler,
    exposed as a callable pipe. Commands call it for intelligence; it reads
    `site/*.html` for current state and produces valid declarations.
@@ -166,10 +175,11 @@ Five things, irreducible:
 5. **HTTP server** — `ks serve` exposes materialized site/ and re-runs
    projectors on demand at `/live/<name>`
 
-The kernel knows two events: `command.declared` and `projector.declared` (it
-compiles them). It writes three: `kernel.initialized`, `script.compiled`,
-and `seed.planted`. Everything else comes from seeds — or from commands
-that emit declarations at invoke time.
+The kernel acts on three events: `command.declared` and `projector.declared`
+(it compiles them into binaries) and `script.compiled` (it installs that binary
+verbatim — code, not a spec). It writes three: `kernel.initialized`,
+`script.compiled`, and `seed.planted`. Everything else comes from seeds — or
+from commands that emit declarations or shipped scripts at invoke time.
 
 ## seed format
 

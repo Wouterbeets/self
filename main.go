@@ -126,7 +126,10 @@ kernel-known events:
   kernel.initialized   written by ks init
   command.declared     compiled by ks plant AND ks invoke (self-improvement)
   projector.declared   compiled by ks plant AND ks invoke (self-improvement)
-  script.compiled      written by ks plant/invoke — logs compiled script for rollback
+  script.compiled      logged by the kernel for every compile; ALSO acted on —
+                       a seed or command may emit one to install an exact script
+                       verbatim (no LLM), so the loop carries code, not just a
+                       spec. Re-emitting an older one from the log is rollback.
   seed.planted         written by ks plant as a receipt
   everything else      comes from seeds or from commands that emit declarations
 
@@ -161,8 +164,6 @@ func cmdInit(home string) error {
 	return kernel.RenderHTML(home)
 }
 
-
-
 func cmdPlant(home string, seedDir string) error {
 	manifest, err := seed.Load(seedDir)
 	if err != nil {
@@ -179,7 +180,31 @@ func cmdPlant(home string, seedDir string) error {
 	}
 	var compiledScripts []compiled
 
+	// A seed may ship a capability as exact code (a script.compiled event)
+	// instead of, or alongside, its declaration. When it does, the declaration
+	// still serves as the spec — it puts the capability into kernel.html's
+	// wiring/identity — but there's no point asking the LLM to re-derive a
+	// binary the seed already carries. Pre-scan the shipped scripts so the
+	// compile loops below skip those names; the replay loop installs them.
+	shipped := map[string]bool{}
+	for _, e := range manifest.Events {
+		if e.Name != event.ScriptCompiled {
+			continue
+		}
+		var cs struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(e.Payload, &cs) == nil && cs.Name != "" {
+			shipped[cs.Type+"/"+cs.Name] = true
+		}
+	}
+
 	for _, cmd := range manifest.Commands {
+		if shipped["command/"+cmd.Name] {
+			fmt.Printf("command %q shipped verbatim — skipping compile\n", cmd.Name)
+			continue
+		}
 		fmt.Printf("compiling command %q...", cmd.Name)
 		script, err := compiler.CompileCommand(cmd)
 		if err != nil {
@@ -194,6 +219,10 @@ func cmdPlant(home string, seedDir string) error {
 	}
 
 	for _, proj := range manifest.Projectors {
+		if shipped["projector/"+proj.Name] {
+			fmt.Printf("projector %q shipped verbatim — skipping compile\n", proj.Name)
+			continue
+		}
 		fmt.Printf("compiling projector %q...", proj.Name)
 		script, err := compiler.CompileProjector(proj)
 		if err != nil {
@@ -215,6 +244,22 @@ func cmdPlant(home string, seedDir string) error {
 		fresh := event.New(e.Name, e.Payload)
 		if err := st.Append(&fresh); err != nil {
 			return err
+		}
+		// A seed can ship exact code: a script.compiled event is installed
+		// verbatim (no LLM), so a seed isn't limited to specs the compiler must
+		// re-derive — it can carry a known-good binary. If the seed also
+		// declared the same name above, this overwrites that fresh compile with
+		// the shipped script. It's already appended (provenance), so don't
+		// re-log it; it's an install, not replayed content.
+		if e.Name == event.ScriptCompiled {
+			kind, name, iErr := kernel.InstallScript(registry, e.Payload)
+			if iErr != nil {
+				return iErr
+			}
+			if kind != "" {
+				fmt.Printf("installing %s %q verbatim... done\n", kind, name)
+			}
+			continue
 		}
 		if !isDeclaration {
 			contentCount++

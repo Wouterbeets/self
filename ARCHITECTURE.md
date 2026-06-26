@@ -147,6 +147,86 @@ and verify conformance (usability + emergence + protocol all meeting).
 
 ---
 
+## Slice 4 — the strange loop carries code, not just a spec (VALIDATED)
+
+**Hypothesis.** Until now the strange loop was a *spec loop*: a command could
+emit `command.declared`/`projector.declared` and the kernel re-compiled a fresh
+binary via the LLM. That means behaviour is re-derived every generation — a
+command that re-declares itself doesn't carry its code forward, it carries a
+prompt, and the receiver's compiler decides what the next generation actually
+does. We probed this directly: with the stub compiler, a self-redeclaring
+`evolve` command collapsed to a generic stub on generation 2 — its real
+behaviour was lost. Two surfaces (the README and the brain's own identity page,
+which promises the brain that *"a delete is reversible by a later restore"*)
+described an exact-code path — rollback / restore from the log — that **did not
+exist**: nothing ever read a `script.compiled` payload back into the registry.
+
+Predicted: the missing half is a single primitive — let the kernel **act on**
+`script.compiled` (install the bytes verbatim, no LLM), the same way it already
+acts on the two `*.declared` events. With that one primitive, deterministic
+self-replication, generational evolution, and rollback all become expressible —
+and rollback/restore needs **no kernel command**, because a command already
+receives the whole event log on stdin, so it can find and re-emit any past
+`script.compiled` itself.
+
+**Slice.** The kernel's compile hook (`CompileDeclarations`, run at invoke; and
+the plant replay loop) now also honours `script.compiled`: it installs the
+script verbatim into the registry via one shared `InstallScript` helper. The
+event is already logged by the writer, so the install is **not** re-logged
+(no duplication). Plant additionally skips the LLM compile for any declared
+name the seed also ships as `script.compiled` — the declaration is the spec
+(it still populates kernel.html wiring/identity), the shipped script is the
+binary. Three artifacts demonstrate the loop:
+
+- **a quine** (`poc/replicant`): a command that re-emits its own exact source
+  each run. Shipped *as code* in the seed, so it plants and runs with **no LLM
+  at all**.
+- **deterministic generational evolution**: each run advances a generation
+  counter, and the source stays byte-identical across generations.
+- **rollback as a pure seed**: a `restore` command that reads the log on stdin
+  and re-emits the oldest logged `script.compiled` for a name — rolling a
+  capability back with zero kernel code for rollback itself.
+
+**Evidence.**
+- `poc/replicant` planted with **no LLM** (no `KS_LLM_*`, no stub): plant
+  reported *"shipped verbatim — skipping compile"* and installed both the
+  command and its `lineage` projector. Invoked 4×: the registry script stayed
+  **byte-identical (sha256) across all 4 generations**, the generation counter
+  advanced 1→4, and `lineage` auto-rendered all four — proving the declaration
+  still wired the projector even though its binary was shipped.
+- The self-install is logged **exactly once per invoke** (no double-logging).
+- A `restore <name>` seed re-emitted an older `greet` version and the kernel
+  installed it verbatim — `greet` v2 → v1 — with **no kernel code for rollback**.
+- The spec-loop boundary is now documented by its contrast: the same
+  self-redeclaration under the *spec* path drifts (stub → generic), under the
+  *code* path it does not.
+
+**Decision: keep — with an honest caveat.** This slice **did change the kernel**
+(~80 Go LOC: `InstallScript` + the hook case + plant's ship-aware skip),
+unlike slices 1–3 which were zero-kernel. By the PoC rule ("re-growing the
+kernel is a failure"), that demands justification: the primitive is minimal and
+it *moves capability out of the kernel*. Rollback/restore would otherwise have
+been a kernel subcommand (read log → write registry, which only the kernel can
+do); honouring `script.compiled` makes restore, replication, and quines all
+**seeds** instead. The kernel's acted-on set grows from two events to three, but
+the alternative was a bespoke `ks restore` plus no replication story at all.
+Net: one small primitive, a large expansion of what the seed layer can express.
+
+**Honest gaps.** Installing arbitrary bytes verbatim is, in production, an
+arbitrary-code-execution path (a malicious seed could ship a hostile script) —
+acceptable in PoC mode, but a real seed-trust / signing story is owed before
+this ships. The brain can't yet emit `script.compiled` directly (its `declare`
+tool is scoped to the two `*.declared` events), so brain-driven rollback isn't
+wired — only command/seed-driven. And replay-from-log still isn't a kernel
+operation: the registry is mutated in place, not rebuilt from the event stream.
+
+**Next (slice 5 candidates).** Let the brain restore/replicate (widen `declare`
+to `script.compiled`, so "undo that" becomes brain-callable); a seed-signing /
+trust tier gating verbatim installs; or rebuild-registry-from-log so a fresh
+receiver reaches identical registry state by pure replay.
+
+---
+
 ## How to reproduce
 
 ```sh
@@ -162,3 +242,16 @@ ks serve                     # browse /population and /buildlog
 The seeds are declarations; an LLM compiles them into the `tick`/`population`/
 `buildlog` scripts at plant time (garden-aware). Same seed, different receiver,
 different binary — but the same emergent behaviour.
+
+Slice 4's `poc/replicant` needs **no LLM** — it ships its code, so the loop is
+deterministic:
+
+```sh
+go build -o ks .
+export KS_HOME=$(mktemp -d)        # no KS_LLM_*, no stub: nothing to compile
+ks init
+ks plant poc/replicant             # "shipped verbatim — skipping compile"
+ks invoke replicant                # generation 1; re-installs its own exact source
+ks invoke replicant                # generation 2; registry script byte-identical
+ks serve                           # browse /lineage to watch the generations
+```

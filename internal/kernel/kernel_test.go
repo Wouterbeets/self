@@ -161,6 +161,59 @@ func TestCompileDeclarationsStub(t *testing.T) {
 	}
 }
 
+func TestCompileDeclarationsInstallsScriptVerbatim(t *testing.T) {
+	os.Setenv("KS_LLM_STUB", "1")
+	t.Cleanup(func() { os.Unsetenv("KS_LLM_STUB") })
+
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "registry", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "registry", "projectors"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(
+		`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"ks/v0"}}
+`), 0644)
+
+	// A command emitted a script.compiled: the kernel must install the exact
+	// bytes, no compilation, no stub. This is the loop carrying code, not a spec.
+	exact := "#!/usr/bin/env python3\nimport json\nprint(json.dumps({\"name\":\"pinged\",\"payload\":{\"n\":1}}))\n"
+	payload, _ := json.Marshal(map[string]any{"type": "command", "name": "ping", "script": exact})
+	events := []event.Event{event.New(event.ScriptCompiled, payload)}
+
+	cmds, projs, err := CompileDeclarations(home, events)
+	if err != nil {
+		t.Fatalf("CompileDeclarations: %v", err)
+	}
+	if len(cmds) != 1 || cmds[0] != "ping" || len(projs) != 0 {
+		t.Fatalf("cmds=%v projs=%v, want [ping] []", cmds, projs)
+	}
+	got, err := os.ReadFile(filepath.Join(home, "registry", "commands", "ping"))
+	if err != nil {
+		t.Fatalf("ping not installed: %v", err)
+	}
+	if string(got) != exact {
+		t.Errorf("installed script not byte-identical:\n got %q\nwant %q", got, exact)
+	}
+}
+
+func TestInstallScriptRejectsUnsafeNameAndProvenanceOnly(t *testing.T) {
+	registry := t.TempDir()
+
+	// Provenance-only payload (no script) is a no-op, not an error: the log
+	// records compiles as script.compiled with the script, but a re-emit could
+	// legitimately carry only metadata.
+	bare, _ := json.Marshal(map[string]any{"type": "command", "name": "x"})
+	if kind, _, err := InstallScript(registry, bare); err != nil || kind != "" {
+		t.Errorf("provenance-only: kind=%q err=%v, want \"\" nil", kind, err)
+	}
+
+	// Path traversal in the name must be rejected — installing writes to the
+	// registry by name, so a name with separators could escape it.
+	evil, _ := json.Marshal(map[string]any{"type": "command", "name": "../escape", "script": "x"})
+	if _, _, err := InstallScript(registry, evil); err == nil {
+		t.Error("unsafe name should be rejected")
+	}
+}
+
 func TestCompileDeclarationsNoDeclarations(t *testing.T) {
 	os.Setenv("KS_LLM_STUB", "1")
 	t.Cleanup(func() { os.Unsetenv("KS_LLM_STUB") })
