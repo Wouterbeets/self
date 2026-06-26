@@ -1,6 +1,10 @@
 package seed
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // Regression tests for the sandbox escapes found while probing the original
 // denylist. Each of these slipped through the denylist; the allowlist must
@@ -17,10 +21,40 @@ func TestBashBlocksKnownEscapes(t *testing.T) {
 		"editor shell-out":      `vim -h`,
 		"xargs arbitrary":       `echo id | xargs sh -c`,
 		"env var-run":           `env X=1 id`,
+		// File-write escapes through tools that are otherwise read-only: the
+		// allowlist's whole point is "look but not touch", so a write primitive
+		// in an allowlisted tool is as much an escape as a denied command.
+		"find -fprint0":  `find . -maxdepth 0 -fprint0 pwned`,
+		"sort -o":        `sort -o pwned /etc/hostname`,
+		"sort --output":  `sort --output=pwned /etc/hostname`,
+		"sort bundled o": `sort -uo pwned /etc/hostname`,
+		"uniq OUT":       `uniq /etc/hostname pwned`,
 	}
 	for name, cmd := range escapes {
 		if _, err := runBash(dir, cmd); err == nil {
 			t.Errorf("%s: %q should be blocked but was allowed", name, cmd)
+		}
+	}
+}
+
+// The write-escape fixes must not break the read-only forms of the same tools —
+// these stay allowed (output goes to stdout, no file operand).
+func TestBashAllowsReadOnlySortUniqFind(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "data.txt"), []byte("b\na\nb\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ok := []string{
+		"sort data.txt",
+		"sort -u data.txt",
+		"sort data.txt | uniq -c",
+		"uniq -c data.txt",
+		"uniq -f 1 data.txt",
+		"find . -maxdepth 1 -name '*.txt' -printf '%p\\n'",
+	}
+	for _, cmd := range ok {
+		if _, err := runBash(dir, cmd); err != nil {
+			t.Errorf("%q should be allowed: %v", cmd, err)
 		}
 	}
 }
