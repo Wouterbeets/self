@@ -62,6 +62,33 @@ method ran correctly on Harbor's data, though the two never shared a word.**
   12 → 14, reports 3 → 4. So Harbor could ingest North's *raw evidence*, not just
   its method — the receiver adapted by extending its filter, not replacing it.
 
+## verification: verify the result, don't trust the compiler
+
+The seed also ships **examples** — input → output-must-contain assertions written
+in North's vocabulary (`observation.logged`). They are a portable conformance
+contract: when *any* receiver recompiles the seed, the kernel runs the new binary
+against them **before it installs**, and a binary that fails them is rejected.
+A `script.verified` receipt records the outcome either way.
+
+Crucially, the examples are in the *author's* vocabulary, so they only pass on
+the receiver if its adaptation **extends** rather than **replaces** — i.e. it
+keeps consuming `observation.logged` while adding `report.filed`. That turns
+"good adaptation" from a judgment call into a checkable property. Demonstrated
+end-to-end in Harbor:
+
+```
+attempt 1 — adaptation consumes ONLY report.filed (drops North's dialect)
+            → script.verified passed=False 0/2  → REJECTED, not installed
+attempt 2 — adaptation consumes BOTH, maps fields
+            → script.verified passed=True  2/2  → installed
+```
+
+The rejection is in Harbor's own log as evidence (the failing receipt lists the
+missing strings). So a stranger node can recompile shared knowledge to its own
+vocabulary *and prove* the result still honors the original contract — without
+trusting the compiler that produced it. North, recompiling natively, passes the
+same examples 2/2.
+
 ## reproduce
 
 ```sh

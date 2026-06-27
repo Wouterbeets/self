@@ -29,6 +29,25 @@ type Command struct {
 	// seed can carry precise, complex code while the loop still produces a binary
 	// authored for this receiver (adaptation preserved, no foreign code run).
 	Implementation string `json:"implementation,omitempty"`
+	// Examples are receiver-checkable conformance tests: input → output-must-contain
+	// assertions that define what the capability MUST do, independent of how it is
+	// implemented. The kernel runs the freshly compiled binary against them before
+	// installing it. A seed's examples are a portable contract — a receiver that
+	// recompiles the seed to its own vocabulary must still satisfy them, which is
+	// what makes cross-node sharing "verify the result" rather than "trust the
+	// compiler."
+	Examples []Example `json:"examples,omitempty"`
+}
+
+// Example is one conformance test for a compiled script. The script is run with
+// Args as argv and Events (as JSONL) on stdin; its stdout must contain every
+// string in ExpectContains. Commands emit JSONL events on stdout and projectors
+// emit HTML, so the substring contract works uniformly for both.
+type Example struct {
+	Note           string            `json:"note,omitempty"`
+	Args           []string          `json:"args,omitempty"`
+	Events         []json.RawMessage `json:"events,omitempty"`
+	ExpectContains []string          `json:"expect_contains,omitempty"`
 }
 
 type EventDecl struct {
@@ -43,6 +62,9 @@ type ProjectorDecl struct {
 	// Implementation: same contract as Command.Implementation — a reference the
 	// compiler verifies and adapts, never installs verbatim.
 	Implementation string `json:"implementation,omitempty"`
+	// Examples: same contract as Command.Examples — input → output-must-contain
+	// conformance tests the compiled projector must pass before it installs.
+	Examples []Example `json:"examples,omitempty"`
 }
 
 func Load(dir string) (*Manifest, error) {

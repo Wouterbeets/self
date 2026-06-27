@@ -396,6 +396,13 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 				fmt.Printf(" failed\n")
 				return nil, nil, fmt.Errorf("command %q: %w", cmd.Name, cErr)
 			}
+			if ok, vErr := VerifyAndLog(home, "command", cmd.Name, script, cmd.Examples); vErr != nil {
+				fmt.Printf(" verify error\n")
+				return nil, nil, fmt.Errorf("verify command %q: %w", cmd.Name, vErr)
+			} else if !ok {
+				fmt.Printf(" failed verification\n")
+				return nil, nil, fmt.Errorf("command %q failed its examples — not installed", cmd.Name)
+			}
 			if wErr := seed.WriteCommandScript(capDir, cmd.Name, script); wErr != nil {
 				return nil, nil, wErr
 			}
@@ -413,6 +420,13 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 			if cErr != nil {
 				fmt.Printf(" failed\n")
 				return nil, nil, fmt.Errorf("projector %q: %w", proj.Name, cErr)
+			}
+			if ok, vErr := VerifyAndLog(home, "projector", proj.Name, script, proj.Examples); vErr != nil {
+				fmt.Printf(" verify error\n")
+				return nil, nil, fmt.Errorf("verify projector %q: %w", proj.Name, vErr)
+			} else if !ok {
+				fmt.Printf(" failed verification\n")
+				return nil, nil, fmt.Errorf("projector %q failed its examples — not installed", proj.Name)
 			}
 			if wErr := seed.WriteProjectorScript(capDir, proj.Name, script); wErr != nil {
 				return nil, nil, wErr
@@ -443,6 +457,38 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 		}
 	}
 	return commands, projectors, nil
+}
+
+// VerifyAndLog runs a freshly compiled script against its declaration's examples
+// and appends a script.verified receipt recording the outcome (pass or fail) for
+// audit. It returns whether the script passed. With no examples it passes
+// vacuously and logs nothing — verification is opt-in per declaration. Callers
+// MUST gate installation on the returned bool: a binary that fails the seed
+// author's examples must not install, however well-intentioned the compiler that
+// produced it. This is the receiver-checkable conformance gate — the difference
+// between "the compiler says it adapted the seed" and "the adaptation provably
+// satisfies the seed's contract."
+func VerifyAndLog(home, kind, name, script string, examples []seed.Example) (bool, error) {
+	if len(examples) == 0 {
+		return true, nil
+	}
+	res, err := seed.VerifyScript(script, kind, examples)
+	if err != nil {
+		return false, err
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"type":         kind,
+		"name":         name,
+		"passed":       res.OK(),
+		"ran":          res.Ran,
+		"passed_count": res.Passed,
+		"failures":     res.Failures,
+	})
+	e := event.New(event.ScriptVerified, payload)
+	if aErr := store.Open(home).Append(&e); aErr != nil {
+		return res.OK(), aErr
+	}
+	return res.OK(), nil
 }
 
 // installScript writes an exact script from a script.compiled payload into
