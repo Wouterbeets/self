@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"self/internal/event"
@@ -65,6 +66,8 @@ func main() {
 		err = cmdRehydrate(home)
 	case "selftest":
 		err = cmdSelfTest(home)
+	case "map":
+		err = cmdMap(home)
 	case "identity":
 		err = cmdIdentity(home)
 	case "verify-attestation":
@@ -132,6 +135,7 @@ usage: self [command] [args]
   self                    rehydrate the body from the log, then start the live garden (the default)
   self init               initialize the baby kernel
   self rehydrate          rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
+  self map                one-glance overview of the garden — commands, projections, recent activity
   self selftest           re-run every installed capability's examples against its binary (regression gate)
   self identity           print this home's public verification key (shareable)
   self verify-attestation check a script.verified attestation piped on stdin (no secret needed)
@@ -985,7 +989,7 @@ func eventHint(e event.Event) string {
 	if json.Unmarshal(e.Payload, &p) != nil {
 		return ""
 	}
-	for _, k := range []string{"title", "content", "text", "response", "message", "seed", "name", "stage"} {
+	for _, k := range []string{"title", "content", "text", "meal", "item", "issue", "what", "response", "message", "seed", "name", "stage"} {
 		if v, ok := p[k].(string); ok && v != "" {
 			return truncateLine(v, 64)
 		}
@@ -999,6 +1003,101 @@ func truncateLine(s string, n int) string {
 		return s[:n] + "…"
 	}
 	return s
+}
+
+// cmdMap prints a one-glance overview of the whole garden: ways to act
+// (commands), ways to see (projections + their live URLs), and recent activity.
+// As capabilities grow, this is the human's entry point — the navigable map the
+// scaling story needs — and it's a pure read of the log, no kernel, no brain.
+func cmdMap(home string) error {
+	events, err := store.Open(home).Read()
+	if err != nil {
+		return err
+	}
+	if len(events) == 0 {
+		fmt.Println("(empty garden — run 'self init')")
+		return nil
+	}
+
+	type decl struct {
+		desc  string
+		order int
+	}
+	cmds := map[string]decl{}
+	projs := map[string]decl{}
+	noise := map[string]bool{
+		event.ScriptCompiled: true, event.ScriptVerified: true,
+		event.CommandDeclared: true, event.ProjectorDeclared: true,
+		event.SeedPlanted: true, event.KernelInitialized: true,
+		event.RestoreRequested: true, "self.heartbeat": true,
+	}
+	var born string
+	var recent []event.Event
+	for i, e := range events {
+		switch e.Name {
+		case event.KernelInitialized:
+			if born == "" {
+				born = e.OccurredAt.Format("2006-01-02 15:04")
+			}
+		case event.CommandDeclared:
+			var c seed.Command
+			if json.Unmarshal(e.Payload, &c) == nil && c.Name != "" {
+				cmds[c.Name] = decl{firstSentence(c.Description), i}
+			}
+		case event.ProjectorDeclared:
+			var p seed.ProjectorDecl
+			if json.Unmarshal(e.Payload, &p) == nil && p.Name != "" {
+				projs[p.Name] = decl{firstSentence(p.Description), i}
+			}
+		}
+		if !noise[e.Name] {
+			recent = append(recent, e)
+		}
+	}
+
+	fmt.Printf("self — a garden born %s, %d events\n\n", born, len(events))
+
+	fmt.Printf("ways to act (%d commands):\n", len(cmds))
+	for _, name := range sortedByName(cmds) {
+		fmt.Printf("  self run %-10s %s\n", name, cmds[name].desc)
+	}
+	fmt.Printf("\nways to see (%d projections):\n", len(projs))
+	for _, name := range sortedByName(projs) {
+		fmt.Printf("  /%-12s %s\n", name, projs[name].desc)
+	}
+
+	if len(recent) > 0 {
+		fmt.Printf("\nlately:\n")
+		start := 0
+		if len(recent) > 6 {
+			start = len(recent) - 6
+		}
+		for _, e := range recent[start:] {
+			hint := eventHint(e)
+			fmt.Printf("  %s  %-16s %s\n", e.OccurredAt.Format("15:04"), e.Name, hint)
+		}
+	}
+	fmt.Printf("\nbrowse it live with 'self' (web), or 'self ls' / 'self where' for paths.\n")
+	return nil
+}
+
+// firstSentence trims a description to its first sentence (or 80 chars) for a
+// compact one-line map entry.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '.'); i > 0 && i < 90 {
+		return s[:i]
+	}
+	return truncateLine(s, 80)
+}
+
+func sortedByName[T any](m map[string]T) []string {
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // cmdLs lists what exists. With no argument it prints an overview; with
