@@ -1277,12 +1277,21 @@ func cmdHeartbeat(home string) error {
 		return fmt.Errorf("heartbeat needs the brain (an LLM) — set SELF_LLM_* or run a local llama-server")
 	}
 	st := store.Open(home)
+
+	// Read the log before this beat so we can hand the brain, by default, the
+	// events since its last heartbeat — its context for "what changed in the
+	// garden, and can I help?" — instead of making it explore from scratch. This
+	// is the first step toward a brain that reacts to activity: a heartbeat that
+	// already knows what happened since it last looked.
+	prior, _ := st.Read()
+
 	hb := event.New("self.heartbeat", json.RawMessage(`{}`))
 	if err := st.Append(&hb); err != nil {
 		return err
 	}
 
-	const prompt = `This is a self-improvement heartbeat. Explore your garden — your capabilities, recent events, and projections — and choose ONE small, high-value improvement: a missing capability, a projection that would make your shared state clearer, or a fix for something that has drifted. If it is warranted, declare it (command.declared / projector.declared) so it compiles into a real capability. Adapt to what already exists rather than duplicating it. If nothing is worth changing right now, say so plainly and declare nothing. Keep it minimal.`
+	const basePrompt = `This is a self-improvement heartbeat. Explore your garden — your capabilities, recent events, and projections — and choose ONE small, high-value improvement: a missing capability, a projection that would make your shared state clearer, or a fix for something that has drifted. If it is warranted, declare it (command.declared / projector.declared) so it compiles into a real capability. Adapt to what already exists rather than duplicating it. If nothing is worth changing right now, say so plainly and declare nothing. Keep it minimal.`
+	prompt := basePrompt + heartbeatContext(prior)
 
 	commands, invoke := brainTools(home)
 	result, err := compiler.CallBrain(prompt, commands, invoke)
@@ -1314,6 +1323,55 @@ func cmdHeartbeat(home string) error {
 	}
 	fmt.Println(result.Response)
 	return nil
+}
+
+// sinceLastHeartbeat returns the events strictly after the most recent
+// self.heartbeat. With no prior heartbeat (the first beat) it returns them all —
+// the whole garden is new — and heartbeatContext caps the volume.
+func sinceLastHeartbeat(events []event.Event) []event.Event {
+	last := -1
+	for i, e := range events {
+		if e.Name == "self.heartbeat" {
+			last = i
+		}
+	}
+	return events[last+1:]
+}
+
+// heartbeatContext formats the activity since the last heartbeat into a concise
+// block for the brain's prompt — name + a truncated payload per event, so the
+// brain sees what changed without re-exploring. Kernel bookkeeping receipts
+// (script.compiled / script.verified) are skipped: they are derived, not
+// "actions to respond to." Empty string when nothing of note happened (so a
+// quiet beat stays quiet). Capped so a busy stretch can't blow up the prompt.
+func heartbeatContext(events []event.Event) string {
+	var acts []event.Event
+	for _, e := range sinceLastHeartbeat(events) {
+		if e.Name == event.ScriptCompiled || e.Name == event.ScriptVerified {
+			continue
+		}
+		acts = append(acts, e)
+	}
+	if len(acts) == 0 {
+		return ""
+	}
+	const capN = 40
+	omitted := 0
+	if len(acts) > capN {
+		omitted = len(acts) - capN
+		acts = acts[len(acts)-capN:]
+	}
+	var b strings.Builder
+	b.WriteString("\n\nSince your last heartbeat, these things happened in the garden — your context for what changed and whether you can help:\n")
+	if omitted > 0 {
+		fmt.Fprintf(&b, "  (… %d earlier events omitted …)\n", omitted)
+	}
+	for _, e := range acts {
+		fmt.Fprintf(&b, "  seq %d  %s  %s\n", e.Seq, e.Name,
+			truncateLine(strings.TrimSpace(string(e.Payload)), 140))
+	}
+	b.WriteString("\nResponding to what changed is welcome, but optional — if nothing here warrants action, say so and declare nothing.")
+	return b.String()
 }
 
 func cmdThink(home string, prompt string) error {
