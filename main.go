@@ -12,7 +12,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"self/internal/event"
 	"self/internal/kernel"
@@ -62,6 +64,8 @@ func main() {
 		err = cmdThink(home, prompt)
 	case "heartbeat":
 		err = cmdHeartbeat(home)
+	case "watch":
+		err = cmdWatch(home, args)
 	case "rehydrate":
 		err = cmdRehydrate(home)
 	case "selftest":
@@ -143,6 +147,7 @@ usage: self [command] [args]
   self run <command> ...  run a capability — append events, refresh projections
   self think "..."        ask the brain (LLM + garden exploration)
   self heartbeat          run one self-improvement cycle (brain reflects & grows)
+  self watch [secs]       resident loop: react to new activity (or report it, no brain). Ctrl-C to stop
   self restore <name> [seq]   roll a capability back to an earlier compiled version
   self show <name>        render a projection (piped: HTML to stdout; else open in browser)
   self live [port]        start the live garden explicitly (default port 7777)
@@ -1399,27 +1404,7 @@ func cmdHeartbeat(home string) error {
 	}
 
 	// Apply any declarations the brain produced, through the strange loop.
-	var declEvents []event.Event
-	for _, d := range result.Declarations {
-		name, _ := d["name"].(string)
-		payload, _ := json.Marshal(d["payload"])
-		if name == "" || len(payload) == 0 || string(payload) == "null" {
-			continue
-		}
-		e := event.New(name, payload)
-		if err := st.Append(&e); err != nil {
-			return err
-		}
-		declEvents = append(declEvents, e)
-	}
-	if len(declEvents) > 0 {
-		cmds, projs, cErr := kernel.CompileDeclarations(home, declEvents)
-		if cErr != nil {
-			fmt.Fprintf(os.Stderr, "self: heartbeat compile failed: %s\n", cErr)
-		} else {
-			fmt.Fprintf(os.Stderr, "self: heartbeat grew %d command(s), %d projection(s)\n", len(cmds), len(projs))
-		}
-	}
+	applyDeclarations(home, result)
 	fmt.Println(result.Response)
 	return nil
 }
@@ -1443,14 +1428,24 @@ func sinceLastHeartbeat(events []event.Event) []event.Event {
 // (script.compiled / script.verified) are skipped: they are derived, not
 // "actions to respond to." Empty string when nothing of note happened (so a
 // quiet beat stays quiet). Capped so a busy stretch can't blow up the prompt.
-func heartbeatContext(events []event.Event) string {
+// meaningfulEvents drops kernel bookkeeping receipts (script.compiled /
+// script.verified) — derived events, not "actions to respond to."
+func meaningfulEvents(events []event.Event) []event.Event {
 	var acts []event.Event
-	for _, e := range sinceLastHeartbeat(events) {
+	for _, e := range events {
 		if e.Name == event.ScriptCompiled || e.Name == event.ScriptVerified {
 			continue
 		}
 		acts = append(acts, e)
 	}
+	return acts
+}
+
+// formatEventContext renders a capped, concise block of events for a brain
+// prompt (name + truncated payload per event). Returns "" when there's nothing.
+// Shared by the heartbeat (events since last beat) and the watcher (events since
+// last reaction).
+func formatEventContext(acts []event.Event, intro string) string {
 	if len(acts) == 0 {
 		return ""
 	}
@@ -1461,7 +1456,7 @@ func heartbeatContext(events []event.Event) string {
 		acts = acts[len(acts)-capN:]
 	}
 	var b strings.Builder
-	b.WriteString("\n\nSince your last heartbeat, these things happened in the garden — your context for what changed and whether you can help:\n")
+	b.WriteString(intro)
 	if omitted > 0 {
 		fmt.Fprintf(&b, "  (… %d earlier events omitted …)\n", omitted)
 	}
@@ -1469,8 +1464,133 @@ func heartbeatContext(events []event.Event) string {
 		fmt.Fprintf(&b, "  seq %d  %s  %s\n", e.Seq, e.Name,
 			truncateLine(strings.TrimSpace(string(e.Payload)), 140))
 	}
-	b.WriteString("\nResponding to what changed is welcome, but optional — if nothing here warrants action, say so and declare nothing.")
 	return b.String()
+}
+
+func heartbeatContext(events []event.Event) string {
+	acts := meaningfulEvents(sinceLastHeartbeat(events))
+	body := formatEventContext(acts,
+		"\n\nSince your last heartbeat, these things happened in the garden — your context for what changed and whether you can help:\n")
+	if body == "" {
+		return ""
+	}
+	return body + "\nResponding to what changed is welcome, but optional — if nothing here warrants action, say so and declare nothing."
+}
+
+// applyDeclarations appends any declarations the brain produced and runs them
+// through the strange loop (compile). Shared by heartbeat and watch.
+func applyDeclarations(home string, result *seed.BrainResult) {
+	st := store.Open(home)
+	var declEvents []event.Event
+	for _, d := range result.Declarations {
+		name, _ := d["name"].(string)
+		payload, _ := json.Marshal(d["payload"])
+		if name == "" || len(payload) == 0 || string(payload) == "null" {
+			continue
+		}
+		e := event.New(name, payload)
+		if err := st.Append(&e); err != nil {
+			fmt.Fprintf(os.Stderr, "self: append declaration: %s\n", err)
+			return
+		}
+		declEvents = append(declEvents, e)
+	}
+	if len(declEvents) > 0 {
+		cmds, projs, cErr := kernel.CompileDeclarations(home, declEvents)
+		if cErr != nil {
+			fmt.Fprintf(os.Stderr, "self: compile failed: %s\n", cErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "self: grew %d command(s), %d projection(s)\n", len(cmds), len(projs))
+		}
+	}
+}
+
+const watchPrompt = `You are watching the garden as a quiet resident. New activity has appeared since you last looked (below). Consider whether you can be genuinely helpful — grow a small capability, surface something, fix a drift. Most of the time the right move is to do nothing: only act if it clearly helps. If you act, keep it minimal; if not, say so briefly and declare nothing.`
+
+// cmdWatch is the resident loop: it tails the event log and, on new activity,
+// either REACTS (hands the new events to the brain to see if it can help — the
+// reactive brain) or, with no brain configured, simply REPORTS the activity (a
+// live monitor). This is the thing a timer/cron can't be: an actually-running
+// process. The loop only ticks while it's alive — which is exactly the point we
+// found the hard way, that autonomy needs a resident process, not a scheduler
+// that fires "when idle." It guards against reacting to its own output by
+// advancing its watermark past everything that exists after each reaction.
+func cmdWatch(home string, args []string) error {
+	interval := 5 * time.Second
+	if len(args) > 0 {
+		if n, err := strconv.Atoi(args[0]); err == nil && n > 0 {
+			interval = time.Duration(n) * time.Second
+		}
+	}
+	compiler := seed.NewCompiler(home)
+	brainOn := compiler.Available()
+	st := store.Open(home)
+
+	events, err := st.Read()
+	if err != nil {
+		return err
+	}
+	lastSeq := 0
+	if len(events) > 0 {
+		lastSeq = events[len(events)-1].Seq
+	}
+	mode := "observe-only (no brain configured — reporting activity)"
+	if brainOn {
+		mode = "reactive (brain on)"
+	}
+	fmt.Fprintf(os.Stderr, "self: watching %s every %s — %s. Ctrl-C to stop.\n", home, interval, mode)
+
+	for {
+		time.Sleep(interval)
+		events, err := st.Read()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "self: watch read error: %s\n", err)
+			continue
+		}
+		var fresh []event.Event
+		for _, e := range events {
+			if e.Seq > lastSeq && e.Name != "self.heartbeat" {
+				fresh = append(fresh, e)
+			}
+		}
+		acts := meaningfulEvents(fresh)
+		tail := func() {
+			if len(events) > 0 {
+				lastSeq = events[len(events)-1].Seq
+			}
+		}
+		if len(acts) == 0 {
+			tail() // advance over pure bookkeeping so we don't rescan it
+			continue
+		}
+		if !brainOn {
+			for _, e := range acts {
+				fmt.Printf("  %s  %-16s %s\n", e.OccurredAt.Format("15:04:05"), e.Name, eventHint(e))
+			}
+			tail()
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "self: reacting to %d new event(s)…\n", len(acts))
+		ctx := formatEventContext(acts,
+			"\n\nNew activity in the garden since you last looked — quietly consider whether you can help; staying silent is fine:\n")
+		commands, invoke := brainTools(home)
+		result, bErr := compiler.CallBrain(watchPrompt+ctx, commands, invoke)
+		if bErr != nil {
+			fmt.Fprintf(os.Stderr, "self: watch brain error: %s\n", bErr)
+		} else {
+			applyDeclarations(home, result)
+			if strings.TrimSpace(result.Response) != "" {
+				fmt.Println(result.Response)
+			}
+		}
+		// Feedback guard: skip everything that now exists — including the brain's
+		// own appends — so the watcher never reacts to its own output.
+		if after, rErr := st.Read(); rErr == nil && len(after) > 0 {
+			lastSeq = after[len(after)-1].Seq
+		} else {
+			tail()
+		}
+	}
 }
 
 func cmdThink(home string, prompt string) error {
