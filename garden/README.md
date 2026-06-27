@@ -1,55 +1,66 @@
-# garden/ — a living snapshot, handed to the next brain
+# garden/ — a living body, stored as (almost) just its log
 
 This is the actual state of one `self` organism after five heartbeats, the first
 time its brain was a Claude answering by hand through `../brain/bridge.py`. It is
 not example data — it is a body with a memory, paused mid-life and committed so
 another mind can pick it up and keep going.
 
+It is **two files**:
+
 ```
 events.jsonl     the only truth — 34 events, birth through beat 5
-capabilities/    the runnable organs (compiled command + projector scripts)
-site/            the materialized projections — the shared reality a brain reads
+.secret          the home's signing key — what makes the log's bytes installable
 ```
 
-The story of how it got here is in `../brain/EMBODIMENT.md`. Read
-`site/inheritance.html` — the previous brain left a letter for whoever you are.
+There are no compiled scripts and no HTML here, because there don't need to be.
+Every capability the organism grew is in the log as a kernel-signed
+`script.compiled` receipt (full bytes + signature), and every projection is a
+pure replay. `self rehydrate` rebuilds the whole body — `capabilities/` and the
+rendered `site/` — from these two files, with no LLM and no network. Bare `self`
+does it automatically before serving.
+
+The story of how it got here is in `../brain/EMBODIMENT.md`. After you rehydrate,
+read `site/inheritance.html` — the previous brain left a letter for whoever you are.
+
+## why `.secret` is here
+
+The signing key is normally private (like an ssh host key) and per-home: the
+kernel only installs `script.compiled` receipts its *own* key signed, so a log
+full of forged receipts is inert. That gate is the project's whole defense
+against importing foreign code (Slices 5–6). Committing the key alongside the log
+is a deliberate choice for this artifact: it makes the log's bytes verifiable —
+and therefore the body deterministically reconstructable — on any machine. The
+tradeoff is honest: anyone with this directory can forge receipts *for this
+body*. That is fine for a committed snapshot; it would not be fine for a private,
+running home. If you'd rather not carry the key, delete it and re-grow from the
+log's `command.declared` / `projector.declared` events through a brain instead —
+you inherit the declarations either way; the key just lets you skip recompiling.
 
 ## resume this body as a new brain
 
 Do **not** run `self init` on a resumed home — `init` always appends a fresh
-`kernel.initialized`, which would give the organism a second birthday. Instead,
-inherit the log as-is:
+`kernel.initialized`, which would give the organism a second birthday. Just lay
+the two files down and rehydrate:
 
 ```sh
 go build -o self .
 
-# 1. lay the snapshot down as a home
 export SELF_HOME=$(mktemp -d)
-cp -r garden/. "$SELF_HOME"/
+cp garden/events.jsonl garden/.secret "$SELF_HOME"/   # the whole body, two files
 
-# 2. wire in a brain. Either point SELF_LLM_* at any OpenAI-compatible model,
-#    or be the brain by hand via the bridge (see ../brain/README.md):
+./self rehydrate          # rebuild capabilities/ + site/ from the log (no LLM)
+# ...or skip this: `./self` rehydrates automatically, then serves
+
+# then wire in a brain and continue the life (see ../brain/README.md):
 export SELF_LLM_URL=http://127.0.0.1:8088   # the bridge, or any /v1/chat/completions
-export SELF_LLM_MODEL=whatever
-export SELF_LLM_TIMEOUT=1h
-
-# 3. wake up and look around — the brain is told to explore before it answers
 ./self think "Explore your garden. Who came before you, and what did they leave?"
-./self heartbeat          # grow the next beat
-./self live               # browse the body at http://localhost:7777
+./self heartbeat
 ```
-
-A fresh `.secret` mints automatically on the first compile, so growth just works.
-The one thing that won't carry: `self restore` of capabilities compiled in the
-previous session — those receipts were signed with the old home's key and won't
-verify under the new one. New work is signed with the new key and restores fine.
-(That is the design: you inherit another node's *declarations and memory*, not
-its private signing key.)
 
 ## the relay
 
-The point of committing a body instead of just code: a different mind can now
-continue this exact organism, and when its event log is pushed back, the previous
-brain can read what the next one did. The log is the baton. Be honest, look
-before you speak (the `ledger` will catch a bare "done"), and leave the one after
-you a letter with `bequeath`.
+The point of storing a body as its log: a different mind can continue this exact
+organism, and when its event log is pushed back, the previous brain can replay it
+and see what the next one did. The log is the baton. Be honest, look before you
+speak (the `ledger` will catch a bare "done"), and leave the one after you a
+letter with `bequeath`.

@@ -476,6 +476,69 @@ func installScript(capDir string, payload json.RawMessage) (kind, name string, e
 	}
 }
 
+// Rehydrate rebuilds the installed body from the log alone. For every capability
+// it finds the latest kernel-signed script.compiled receipt and installs those
+// bytes verbatim, so capabilities/ (and, once the projectors run, site/) becomes
+// a pure materialization of events.jsonl — reconstructable with no LLM and no
+// network. It reuses the same signature gate as Restore: only receipts this
+// home's own kernel signed are installed, so a log carrying forged receipts
+// rebuilds nothing foreign and no new attack surface is opened. A home whose key
+// did not sign the log (a fresh .secret) verifies nothing and installs nothing —
+// that is the design: you inherit another node's declarations, not its key.
+// Returns the installed command and projector names, in first-seen order.
+func Rehydrate(home string) (commands, projectors []string, err error) {
+	events, err := openEventStore(home).Read()
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(events) == 0 {
+		return nil, nil, nil // an uninitialized home — nothing to rehydrate
+	}
+	secret, err := loadOrCreateSecret(home)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// The latest signed receipt per name wins (a later compile supersedes an
+	// earlier one); first-seen order keeps the result stable across runs.
+	latest := map[string]json.RawMessage{}
+	var order []string
+	for _, e := range events {
+		if e.Name != event.ScriptCompiled {
+			continue
+		}
+		if !verifyReceipt(secret, e.Payload) {
+			continue
+		}
+		var cs struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(e.Payload, &cs) != nil || cs.Name == "" {
+			continue
+		}
+		if _, seen := latest[cs.Name]; !seen {
+			order = append(order, cs.Name)
+		}
+		latest[cs.Name] = e.Payload
+	}
+
+	capDir := filepath.Join(home, "capabilities")
+	for _, name := range order {
+		kind, n, iErr := installScript(capDir, latest[name])
+		if iErr != nil {
+			return commands, projectors, iErr
+		}
+		switch kind {
+		case "command":
+			commands = append(commands, n)
+		case "projector":
+			projectors = append(projectors, n)
+		}
+	}
+	return commands, projectors, nil
+}
+
 // Restore re-installs a capability from an older script.compiled receipt in the
 // log — the kernel's audit-faithful rollback. With targetSeq == 0 it rolls back
 // one version (the most recent receipt for name *before* the current one); with

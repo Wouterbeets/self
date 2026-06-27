@@ -273,6 +273,65 @@ func TestRestoreErrors(t *testing.T) {
 	}
 }
 
+func TestRehydrateRebuildsFromLog(t *testing.T) {
+	home := t.TempDir()
+	// Receipts only — no capabilities/ on disk, as in a home that is just the log.
+	greetV1 := "#!/bin/sh\necho v1\n"
+	greetV2 := "#!/bin/sh\necho v2\n"
+	board := "#!/bin/sh\necho board\n"
+	rg1 := mustReceipt(t, home, "command", "greet", greetV1)
+	rg2 := mustReceipt(t, home, "command", "greet", greetV2)
+	rb := mustReceipt(t, home, "projector", "board", board)
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + rg1 + `}
+{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + rb + `}
+{"id":"d","seq":4,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + rg2 + `}
+`
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
+
+	commands, projectors, err := Rehydrate(home)
+	if err != nil {
+		t.Fatalf("Rehydrate: %v", err)
+	}
+	if len(commands) != 1 || commands[0] != "greet" {
+		t.Errorf("commands = %v, want [greet]", commands)
+	}
+	if len(projectors) != 1 || projectors[0] != "board" {
+		t.Errorf("projectors = %v, want [board]", projectors)
+	}
+	// The latest receipt for a name wins (greet v2, not v1).
+	if b, _ := os.ReadFile(filepath.Join(home, "capabilities", "commands", "greet")); string(b) != greetV2 {
+		t.Errorf("greet = %q, want v2 (latest receipt)", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "capabilities", "projectors", "board")); string(b) != board {
+		t.Errorf("board = %q, want %q", b, board)
+	}
+}
+
+func TestRehydrateForeignKeyInstallsNothing(t *testing.T) {
+	// Receipts signed by one home must not install into another (a different
+	// .secret): you inherit a node's declarations, not its key. This is the same
+	// signature gate Restore uses, so Rehydrate opens no arbitrary-code path.
+	signer := t.TempDir()
+	r := mustReceipt(t, signer, "command", "greet", "#!/bin/sh\necho hi\n")
+	other := t.TempDir() // a fresh home → a fresh, non-matching key
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r + `}
+`
+	os.WriteFile(filepath.Join(other, "events.jsonl"), []byte(log), 0644)
+
+	commands, projectors, err := Rehydrate(other)
+	if err != nil {
+		t.Fatalf("Rehydrate: %v", err)
+	}
+	if len(commands) != 0 || len(projectors) != 0 {
+		t.Errorf("foreign-key rehydrate installed %v / %v, want nothing", commands, projectors)
+	}
+	if _, statErr := os.Stat(filepath.Join(other, "capabilities", "commands", "greet")); statErr == nil {
+		t.Error("greet was installed under a non-signing key — the signature gate failed")
+	}
+}
+
 // mustReceipt builds a kernel-signed script.compiled payload for home.
 func mustReceipt(t *testing.T, home, typ, name, script string) string {
 	t.Helper()
