@@ -63,6 +63,10 @@ func main() {
 		err = cmdHeartbeat(home)
 	case "rehydrate":
 		err = cmdRehydrate(home)
+	case "identity":
+		err = cmdIdentity(home)
+	case "verify-attestation":
+		err = cmdVerifyAttestation(home)
 	case "restore":
 		if len(args) < 1 {
 			err = fmt.Errorf("usage: self restore <name> [seq]")
@@ -126,6 +130,8 @@ usage: self [command] [args]
   self                    rehydrate the body from the log, then start the live garden (the default)
   self init               initialize the baby kernel
   self rehydrate          rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
+  self identity           print this home's public verification key (shareable)
+  self verify-attestation check a script.verified attestation piped on stdin (no secret needed)
   self grow <seed>        grow a new capability from a seed
   self run <command> ...  run a capability — append events, refresh projections
   self think "..."        ask the brain (LLM + garden exploration)
@@ -202,6 +208,9 @@ func cmdInit(home string) error {
 	}
 	if err := kernel.InitSecret(home); err != nil {
 		return fmt.Errorf("mint signing key: %w", err)
+	}
+	if err := kernel.InitIdentity(home); err != nil {
+		return fmt.Errorf("mint identity key: %w", err)
 	}
 	st := store.Open(home)
 	payload, _ := json.Marshal(map[string]string{
@@ -1161,6 +1170,59 @@ func cmdRehydrate(home string) error {
 		len(commands), len(projectors))
 	fmt.Printf("  commands:    %s\n", strings.Join(commands, ", "))
 	fmt.Printf("  projectors:  %s\n", strings.Join(projectors, ", "))
+	return nil
+}
+
+// cmdIdentity prints the home's public verification key — its shareable
+// identity. Other nodes use it to check this home's script.verified attestations
+// without re-running anything and without any shared secret.
+func cmdIdentity(home string) error {
+	pub, err := kernel.PublicIdentity(home)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("verification identity (ed25519 public key):\n%s\n", pub)
+	fmt.Printf("\nShare this so others can verify your script.verified attestations.\n")
+	fmt.Printf("Your private key stays in %s/.identity and never leaves.\n", home)
+	return nil
+}
+
+// cmdVerifyAttestation reads a script.verified event (or its bare payload) as
+// JSON on stdin and reports whether its ed25519 signature is valid — the
+// receiver-side check that turns a foreign node's verification claim from
+// "trust me" into "the math agrees." It needs no secret and no access to the
+// signer; trusting WHO the key belongs to is a separate, human decision.
+func cmdVerifyAttestation(home string) error {
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return err
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return fmt.Errorf("input is not JSON: %w", err)
+	}
+	payload := json.RawMessage(data)
+	if p, ok := probe["payload"]; ok {
+		payload = p // a full event was piped in; check its payload
+	}
+
+	att, ok, err := kernel.VerifyAttestation(payload)
+	if err != nil {
+		return fmt.Errorf("not a verifiable attestation: %w", err)
+	}
+	if !ok {
+		fmt.Println("✗ INVALID — signature does not match (tampered, or wrong key)")
+		return fmt.Errorf("attestation failed verification")
+	}
+	fmt.Printf("✓ VALID signature\n")
+	fmt.Printf("  signer pubkey:   %s\n", att.PubKey)
+	fmt.Printf("  attests:         %q (%s) passed=%v (%d/%d examples)\n",
+		att.Name, att.Type, att.Passed, att.PassedCount, att.Ran)
+	fmt.Printf("  of script sha256:   %s\n", att.ScriptSHA256)
+	fmt.Printf("  vs examples sha256: %s\n", att.ExamplesSHA256)
+	fmt.Printf("\nThe signature is sound. Whether to trust this signer is your call;\n")
+	fmt.Printf("recompute the script/examples hashes against the bytes you hold to\n")
+	fmt.Printf("confirm the claim is about the same capability.\n")
 	return nil
 }
 

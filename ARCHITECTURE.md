@@ -471,10 +471,61 @@ property the receiver can prove on its own log. Honest gaps: `expect_contains` i
 substring presence; `expect_order` (added in a follow-up beat) asserts a sequence
 so an example can prove a *ranking*, but full structural equality (JSON-subset for
 command events, DOM assertions for projectors) is still the next refinement; the
-`script.verified` receipt is unsigned, so it is audit, not yet a
-remotely-trustable attestation (signing it, like Slice 6 did for
-`script.compiled`, would let a *third* node trust a receiver's verified claim
-without re-running — the natural next step).
+`script.verified` receipt was unsigned (audit only) — **now signed with an
+asymmetric key (Slice 10)**, so a third node can trust a receiver's verified
+claim without re-running.
+
+---
+
+## Slice 10 — signed attestations: trust a stranger's verification without re-running (VALIDATED)
+
+**Hypothesis.** Slice 9 made verification local: a receiver can check that its own
+recompiled binary passes a seed's examples. But the protocol's end state is
+*sovereign nodes trusting each other's verified work without a central authority*.
+For that, a `script.verified` receipt must be a claim a **third** node can check —
+"node X verified that this binary passes these examples" — without X's secret and
+without re-running. HMAC (the `.secret` that signs `script.compiled`) can't do
+this: it is symmetric, verifiable only by the home that holds it. The claim under
+test: an asymmetric signature makes a verification attestation publicly checkable,
+and the two key types cleanly separate two trust needs.
+
+**Slice.** A home gains a second key — an **ed25519 identity** (`.identity`,
+minted at `self init`, private seed 0600), distinct from the HMAC `.secret`.
+`script.verified` payloads are now an `Attestation`: the result, the **sha256 of
+the exact script and examples** it concerns, the signer's **public key**, and an
+**ed25519 signature** over all of it. `kernel.VerifyAttestation` checks the
+signature from the payload alone. Two new built-ins: `self identity` (print the
+shareable public key) and `self verify-attestation` (check a piped attestation).
+`script.compiled` is deliberately left HMAC-signed — install-authority must stay
+symmetric and private (you can't install a stranger's bytes), whereas a
+verification claim is meant to be public. Install-authority private; verification
+claims public.
+
+**Evidence (e2e + unit).**
+- A signer home grew `hotspots` and emitted a signed `script.verified` (pubkey
+  `1fe6…`, `passed 2/2`, bound to the script + examples hashes).
+- A **separately-minted verifier home** (`c22f…`), with no access to the signer's
+  keys, ran `self verify-attestation` on it → **✓ VALID**, naming the signer and
+  the claim. A tampered copy (`passed` flipped) → **✗ INVALID**.
+- Unit tests: sign/verify round-trip, verification from the payload alone (no
+  secret), a flipped verdict and a swapped script-hash both invalidate the
+  signature, and one home's signature does not verify under another's public key.
+  Full suite green.
+
+**Decision: keep.** ~110 Go LOC (identity.go + the attestation build in
+VerifyAndLog + two thin CLIs), and it earns them: it completes the trust spine the
+whole lineage points at — knowledge shared as replayable evidence (Slice 8),
+re-derived under the receiver's own contract (Slice 9), and the receiver's verdict
+now **independently checkable by anyone** (Slice 10), with no platform in the
+middle. The split between a private install key and a public attestation key is
+the conceptual core: provenance of *what runs here* stays sovereign; provenance of
+*what I claim to have verified* becomes shareable. Honest gaps: a public key is
+just bytes — binding it to a real-world identity (web-of-trust, a key directory)
+is out of scope and a deliberate non-goal for a local-first PoC; trusting *who* a
+key is remains the reader's call (the tool says so). And the attestation binds
+script + examples by hash, so a verifier must hold those bytes to confirm the
+claim is about the capability they mean — which is exactly the auditable,
+no-blind-trust property the protocol wants.
 
 ---
 
