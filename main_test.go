@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"self/internal/event"
 )
 
 func runSelf(t *testing.T, home string, args ...string) string {
@@ -136,4 +138,40 @@ print(json.dumps({"name": "command.declared", "payload": {
 	}
 
 	runSelf(t, home, "run", "echo", "it-works")
+}
+
+func TestSinceLastHeartbeat(t *testing.T) {
+	ev := func(name string) event.Event { return event.Event{Name: name} }
+	log := []event.Event{ev("kernel.initialized"), ev("task.captured"), ev("self.heartbeat"), ev("meal.planned"), ev("shopping.added")}
+	since := sinceLastHeartbeat(log)
+	if len(since) != 2 || since[0].Name != "meal.planned" || since[1].Name != "shopping.added" {
+		t.Fatalf("since last heartbeat = %v, want [meal.planned shopping.added]", since)
+	}
+	// no prior heartbeat → everything is new
+	if got := sinceLastHeartbeat([]event.Event{ev("kernel.initialized"), ev("task.captured")}); len(got) != 2 {
+		t.Fatalf("no-heartbeat case = %d events, want 2", len(got))
+	}
+}
+
+func TestHeartbeatContext(t *testing.T) {
+	mk := func(seq int, name, payload string) event.Event {
+		return event.Event{Seq: seq, Name: name, Payload: []byte(payload)}
+	}
+	log := []event.Event{
+		mk(1, "self.heartbeat", "{}"),
+		mk(2, "task.captured", `{"text":"call plumber"}`),
+		mk(3, "script.compiled", `{"script":"... huge ..."}`), // bookkeeping, must be skipped
+		mk(4, "meal.planned", `{"day":"mon","meal":"tacos"}`),
+	}
+	ctx := heartbeatContext(log)
+	if !strings.Contains(ctx, "call plumber") || !strings.Contains(ctx, "tacos") {
+		t.Errorf("context should include the real actions, got:\n%s", ctx)
+	}
+	if strings.Contains(ctx, "script.compiled") {
+		t.Errorf("context should skip kernel bookkeeping, got:\n%s", ctx)
+	}
+	// a beat with no activity since the last one → empty (quiet stays quiet)
+	if heartbeatContext([]event.Event{mk(1, "self.heartbeat", "{}")}) != "" {
+		t.Error("no activity should yield empty context")
+	}
 }
