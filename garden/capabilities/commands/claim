@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+# claim — assert something is true or done. Joins argv into one statement and
+# emits a single claim.made event. The claim starts UNPROVEN; only a later
+# verify event referencing this claim's seq backs it. Pipe contract: args via
+# argv, log as JSONL on stdin (unused), new events as JSONL on stdout.
+import sys, json
+
+what = " ".join(sys.argv[1:]).strip()
+if not what:
+    what = "(an empty claim)"
+
+print(json.dumps({"name": "claim.made", "payload": {"what": what}}))

@@ -1,2 +1,5 @@
 # the compiled kernel — `go build -o self .` (see README quickstart)
 /self
+
+# the brain bridge's runtime queue — parked requests/answers, ledger, logs
+brain/queue/
