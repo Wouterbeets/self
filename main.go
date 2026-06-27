@@ -240,6 +240,13 @@ func cmdGrow(home string, seedDir string) error {
 			fmt.Printf(" failed\n")
 			return fmt.Errorf("command %q: %w", cmd.Name, err)
 		}
+		if ok, vErr := kernel.VerifyAndLog(home, "command", cmd.Name, script, cmd.Examples); vErr != nil {
+			fmt.Printf(" verify error\n")
+			return fmt.Errorf("verify command %q: %w", cmd.Name, vErr)
+		} else if !ok {
+			fmt.Printf(" failed verification\n")
+			return fmt.Errorf("command %q failed its examples — not installed", cmd.Name)
+		}
 		if err := seed.WriteCommandScript(capDir, cmd.Name, script); err != nil {
 			return err
 		}
@@ -253,6 +260,13 @@ func cmdGrow(home string, seedDir string) error {
 		if err != nil {
 			fmt.Printf(" failed\n")
 			return fmt.Errorf("projector %q: %w", proj.Name, err)
+		}
+		if ok, vErr := kernel.VerifyAndLog(home, "projector", proj.Name, script, proj.Examples); vErr != nil {
+			fmt.Printf(" verify error\n")
+			return fmt.Errorf("verify projector %q: %w", proj.Name, vErr)
+		} else if !ok {
+			fmt.Printf(" failed verification\n")
+			return fmt.Errorf("projector %q failed its examples — not installed", proj.Name)
 		}
 		if err := seed.WriteProjectorScript(capDir, proj.Name, script); err != nil {
 			return err

@@ -427,6 +427,56 @@ untrusted seed, a verification gate, larger vocab drift) is the next slice.
 
 ---
 
+## Slice 9 — the verification tier: verify the result, not the compiler (VALIDATED)
+
+**Hypothesis.** Slice 8 showed cross-node sharing works, but "it worked" was a
+human judgment — the gap the whole paradigm leans on is the compiler being
+trustworthy. The fix named since Slice 3 and never built: a seed ships
+**examples** (input → output assertions) that define what a capability must do
+independent of how it is implemented; the kernel runs the freshly compiled binary
+against them and refuses to install one that fails. Then a receiver recompiling a
+foreign seed to its own vocabulary is held to the *author's contract*, not the
+compiler's good intentions — "verify the result," not "trust the compiler."
+
+**Slice.** A declaration gains an optional `examples: [{note, args, events,
+expect_contains}]` field (`internal/seed`). `seed.VerifyScript` writes the
+compiled script to a temp file and runs each example through the real pipe
+contract (argv + JSONL stdin → stdout), asserting every `expect_contains`
+substring is present — uniform for commands (JSONL out) and projectors (HTML
+out). `kernel.VerifyAndLog` runs them, appends a `script.verified` receipt
+(pass/fail, for audit), and returns whether it passed; both compile sites
+(`cmdGrow` and the strange-loop `CompileDeclarations`) **gate installation** on
+it. Examples are opt-in: a declaration without them installs as before.
+
+**Evidence (e2e, on `poc/crossnode`).** The `hotspots` seed carries two examples
+in North's `observation.logged` vocabulary.
+- North compiles natively → `script.verified passed=True 2/2` → installs.
+- Harbor (vocabulary `report.filed`) was grown twice, by hand, through the
+  bridge. **Attempt 1**, a *lazy* adaptation consuming only `report.filed`,
+  failed the `observation.logged` examples (`passed=False 0/2`) and was
+  **rejected — not installed**; the failing receipt names the missing strings.
+  **Attempt 2**, consuming *both* dialects, passed `2/2` and installed, then
+  ranked Harbor's own data correctly (Pier 7 = 12, Boardwalk = 3). The audit
+  trail of the rejection-then-acceptance is in Harbor's log.
+- Unit tests: stdin/argv feeding, contains pass/fail, a broken script counted as
+  a failure, and the empty-examples no-op. Full suite green.
+
+**Decision: keep.** This changed the kernel (~40 Go LOC: `VerifyScript`,
+`VerifyAndLog`, the two gate checks, the `Example` type, the event constant),
+justified the same way as Slices 6–7: it adds no new trust surface and it
+*converts a judgment into a check*. The examples are vocabulary-bound to the
+author, which is the point — they only pass on a receiver whose adaptation
+**extends rather than replaces**, making "the method survived translation" a
+property the receiver can prove on its own log. Honest gaps: `expect_contains` is
+substring presence, not ordering or structural equality (a stronger matcher —
+JSON-subset for command events, DOM assertions for projectors — is the next
+refinement); the `script.verified` receipt is unsigned, so it is audit, not yet a
+remotely-trustable attestation (signing it, like Slice 6 did for
+`script.compiled`, would let a *third* node trust a receiver's verified claim
+without re-running — the natural next step).
+
+---
+
 ## How to reproduce
 
 ```sh

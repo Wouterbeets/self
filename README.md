@@ -242,7 +242,14 @@ declarations (`command.declared` / `projector.declared`); the rest are content
 the receiver replays on growing. A declaration may carry an **`implementation`**
 field — a reference implementation the compiler verifies against the pipe
 contract and adapts to the local garden (never installed as-is), so a seed can
-be precise without importing code (see `poc/wall`). A seed with only declarations
+be precise without importing code (see `poc/wall`). A declaration may also carry
+**`examples`** — input → output-must-contain conformance tests the kernel runs
+against the freshly compiled binary *before installing it*; a binary that fails
+them is rejected and a `script.verified` receipt records the outcome. Because the
+examples are written in the author's vocabulary, a receiver that recompiles the
+seed to a *different* vocabulary must still satisfy them, which turns "the
+compiler adapted it correctly" into a property the receiver can check (see
+`poc/crossnode`). A seed with only declarations
 is a pure capability seed; one with only content is a pure memory seed; a full
 seed has both. A seed *can* technically include a `script.compiled` event, but
 it's inert: it won't carry this home's signature, so it never installs. Code
