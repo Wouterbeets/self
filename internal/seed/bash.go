@@ -250,6 +250,32 @@ var submitProjectorTool = map[string]any{
 	},
 }
 
+// runToolDef is the single act tool: the brain runs any capability by name
+// (chosen from the CAPABILITIES catalog in its prompt) with a space-separated
+// args string. One tool covers all commands, so the request size doesn't grow
+// with the number of capabilities.
+var runToolDef = map[string]any{
+	"type": "function",
+	"function": map[string]any{
+		"name":        "run",
+		"description": "Run one of your capabilities by name to DO something (capture a note, move a task, set a meal…). Pick a name from the CAPABILITIES list in your instructions and pass its args space-separated, in order. The kernel runs it and appends the resulting events, then tells you what happened.",
+		"parameters": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "The capability's name, exactly as listed in CAPABILITIES.",
+				},
+				"args": map[string]any{
+					"type":        "string",
+					"description": "Arguments, space-separated, in the order the capability expects. Empty string if none.",
+				},
+			},
+			"required": []string{"name", "args"},
+		},
+	},
+}
+
 var declareTool = map[string]any{
 	"type": "function",
 	"function": map[string]any{
