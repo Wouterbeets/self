@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+# bequeath — leave knowledge for the next mind that wakes up as this body's brain.
+# A brain inhabits this organism for one session and is then gone; the append-only
+# log is the only memory that survives. Joins argv into one letter and emits a
+# single bequest.left event. Pipe contract: args via argv, log as JSONL on stdin
+# (unused), new events as JSONL on stdout.
+import sys, json
+
+text = " ".join(sys.argv[1:]).strip()
+if not text:
+    text = "(an empty bequest — a silence left for the next mind)"
+
+print(json.dumps({"name": "bequest.left", "payload": {"text": text}}))

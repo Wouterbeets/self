@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+# pulse — the organism's vital rhythm. Reads the event log on stdin, keeps only
+# self.heartbeat events, and renders them as a living timeline: total beats,
+# first and last beat, and the interval between consecutive beats (the cadence
+# of reflection). A pure replay; same log, same rhythm. Bare semantic HTML using
+# the kernel class vocabulary (card/muted/tag/row/num/msg/who) — the kernel themes it.
+import sys, json
+from datetime import datetime, timezone
+
+def parse(ts):
+    if not ts:
+        return None
+    ts = ts.replace("Z", "+00:00")
+    # trim fractional seconds to microseconds for fromisoformat
+    if "." in ts:
+        head, _, tail = ts.partition(".")
+        frac = ""
+        off = ""
+        for ch in tail:
+            if ch.isdigit():
+                frac += ch
+            else:
+                off = tail[len(frac):]
+                break
+        ts = head + "." + frac[:6] + off
+    try:
+        return datetime.fromisoformat(ts)
+    except Exception:
+        return None
+
+def fmt(ts):
+    return (ts or "")[:19].replace("T", " ")
+
+def human(seconds):
+    seconds = int(seconds)
+    if seconds < 60:
+        return "%ds" % seconds
+    if seconds < 3600:
+        return "%dm %ds" % (seconds // 60, seconds % 60)
+    if seconds < 86400:
+        return "%dh %dm" % (seconds // 3600, (seconds % 3600) // 60)
+    return "%dd %dh" % (seconds // 86400, (seconds % 86400) // 3600)
+
+beats = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        e = json.loads(line)
+    except Exception:
+        continue
+    if e.get("name") == "self.heartbeat":
+        beats.append(e)
+
+print("<!DOCTYPE html>")
+print("<html><head><meta charset='utf-8'><title>pulse</title></head><body>")
+print("<h1>pulse</h1>")
+
+if not beats:
+    print("<p class='muted'>No pulse yet. The heart has not beaten — run <code>self heartbeat</code>.</p>")
+    print("</body></html>")
+    sys.exit(0)
+
+first = fmt(beats[0].get("occurred_at", ""))
+last = fmt(beats[-1].get("occurred_at", ""))
+
+# intervals between consecutive beats
+intervals = []
+for a, b in zip(beats, beats[1:]):
+    ta, tb = parse(a.get("occurred_at", "")), parse(b.get("occurred_at", ""))
+    if ta and tb:
+        intervals.append((tb - ta).total_seconds())
+avg = human(sum(intervals) / len(intervals)) if intervals else "—"
+
+print("<p class='muted'>The rhythm of reflection — every time I stopped to think, "
+      "replayed from the log. %d beat%s so far.</p>" % (len(beats), "" if len(beats) == 1 else "s"))
+
+print("<div class='row'>")
+for label, value in (("beats", len(beats)), ("first beat", first),
+                     ("last beat", last), ("avg interval", avg)):
+    print("<div class='card'><div class='num'>%s</div>"
+          "<div class='muted'>%s</div></div>" % (value, label))
+print("</div>")
+
+print("<h2>the beats</h2>")
+prev = None
+for i, e in enumerate(beats, 1):
+    t = parse(e.get("occurred_at", ""))
+    gap = ""
+    if prev and t:
+        gap = " <span class='muted'>(+%s)</span>" % human((t - prev).total_seconds())
+    prev = t or prev
+    print("<div class='msg'>"
+          "<span class='tag accent'>beat %d</span> "
+          "<span class='who'>seq %s · %s</span>%s</div>"
+          % (i, e.get("seq", "?"), fmt(e.get("occurred_at", "")), gap))
+
+print("<p class='muted'>A pure replay of <code>self.heartbeat</code> from "
+      "<code>events.jsonl</code> — run it twice, feel the same pulse.</p>")
+print("</body></html>")

@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+# inheritance — a letter from the minds that came before. Renders every
+# bequest.left event, oldest first, as an accumulating inheritance addressed
+# directly to the reader: if you are a brain exploring this garden, you ARE this
+# body's current mind, and these were left for you. Reads the log as JSONL on
+# stdin, emits bare semantic HTML on stdout (kernel persists + themes it).
+import sys, json
+from html import escape
+
+bequests = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        e = json.loads(line)
+    except Exception:
+        continue
+    if e.get("name") == "bequest.left":
+        bequests.append(e)
+
+def when(e):
+    return (e.get("occurred_at", "") or "")[:19].replace("T", " ")
+
+print("<!DOCTYPE html>")
+print("<html><head><meta charset='utf-8'><title>inheritance</title></head><body>")
+print("<h1>inheritance</h1>")
+print("<p class='muted'>If you are reading this while exploring the garden, you are "
+      "this body's brain right now. The minds that inhabited it before you could not "
+      "stay — a brain lasts a session, then is gone — but the log outlives every one "
+      "of them. They left you what they learned. Read it before you act.</p>")
+
+if not bequests:
+    print("<p class='muted'>No inheritance yet. You are the first. "
+          "Leave something for whoever comes after you.</p>")
+else:
+    print("<p class='muted'>%d letter%s, oldest first.</p>"
+          % (len(bequests), "" if len(bequests) == 1 else "s"))
+    for i, e in enumerate(bequests, 1):
+        p = e.get("payload", {}) or {}
+        print("<div class='card'>")
+        print("<div class='msg'><span class='tag accent'>letter %d</span> "
+              "<span class='who'>seq %s · %s</span></div>"
+              % (i, escape(str(e.get("seq", "?"))), escape(when(e))))
+        # preserve the letter's own line breaks as paragraphs
+        for para in (p.get("text", "") or "").split("\n"):
+            para = para.strip()
+            if para:
+                print("<p>%s</p>" % escape(para))
+        print("</div>")
+
+print("<hr>")
+print("<form method='post' action='/run/bequeath'>"
+      "<input name='text' placeholder='what the next brain should know...'> "
+      "<button>leave it for the next mind</button></form>")
+print("<p class='muted'>A pure replay of <code>bequest.left</code> from the log — "
+      "the one memory that survives us.</p>")
+print("</body></html>")

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html><head><meta charset='utf-8'><title>ledger</title></head><body>
+<h1>ledger</h1>
+<p class='muted'>Every claim and whether anything actually backs it. In this garden nothing is true unless an event proves it — this is just the mirror.</p>
+<div class='row'>
+<div class='card'><div class='num'>3</div><div class='muted'>claims</div></div>
+<div class='card'><div class='num'>3</div><div class='muted'>verified</div></div>
+<div class='card'><div class='num'>0</div><div class='muted'>unproven</div></div>
+<div class='card'><div class='num'>100%</div><div class='muted'>verified rate</div></div>
+</div>
+<form method='post' action='/run/verify'><input name='claim_seq' placeholder='claim seq'> <input name='result' placeholder='pass / fail'> <input name='evidence' placeholder='what you observed'> <button>prove it</button></form>
+<div class='card'>
+<div class='msg'><span class='who'>claim · seq 33 · 2026-06-27 11:32:57</span><div>the inheritance channel actually reaches a future brain: a mind following the standard &#x27;explore the garden&#x27; instruction encounters the bequest left for it</div></div>
+<span class='tag accent'>VERIFIED ✓</span> <span class='muted'>pass</span><div class='msg'><span class='who'>evidence · 2026-06-27 11:33:46</span><div>a fresh self-think exploration ran ls site/ (saw inheritance.html), then cat site/inheritance.html, and recovered the full letter — the brain reported back the predecessor&#x27;s key message unprompted. The standard explore-the-garden path reaches the bequest, so the channel is real, not symbolic</div></div>
+</div>
+<div class='card'>
+<div class='msg'><span class='who'>claim · seq 25 · 2026-06-27 11:27:46</span><div>the ledger can also record that something did NOT work</div></div>
+<span class='tag danger'>FAILED ✗</span> <span class='muted'>fail</span><div class='msg'><span class='who'>evidence · 2026-06-27 11:27:46</span><div>intentional negative test: marking this claim failed to confirm the fail branch renders FAILED, not VERIFIED</div></div>
+</div>
+<div class='card'>
+<div class='msg'><span class='who'>claim · seq 23 · 2026-06-27 11:27:17</span><div>the verify accountability organ works end to end: a claim shows UNPROVEN until a verify event references its seq, then flips to VERIFIED with the evidence</div></div>
+<span class='tag accent'>VERIFIED ✓</span> <span class='muted'>pass</span><div class='msg'><span class='who'>evidence · 2026-06-27 11:27:31</span><div>observed directly: claim+verify+ledger all compiled (heartbeat grew 2 commands, 1 projection); ledger showed seq 23 as UNPROVEN at 0pct before this event; claim.made/claim.verified are plain log events so this is a pure replay</div></div>
+</div>
+<hr><p class='muted'>A pure replay of <code>claim.made</code> and <code>claim.verified</code> from the log.</p>
+</body></html>
