@@ -94,17 +94,25 @@ func (c *Compiler) CallBrain(user string, commands []Command, invoke CommandInvo
 }
 
 func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke CommandInvoker) (*BrainResult, error) {
-	messages := []map[string]any{
-		{"role": "system", "content": system},
-		{"role": "user", "content": user},
-	}
-	// bash (read) and declare (grow) are always-on kernel powers; each planted
-	// command is added as an act tool (including `restore`, once grown).
-	tools := []map[string]any{bashToolDef, declareTool}
-	isCommand := map[string]bool{}
+	// bash (read), declare (grow), and run (act) are the three kernel powers — a
+	// FIXED set, regardless of how many capabilities exist. Rather than one typed
+	// tool per command (which would put every capability's schema into every
+	// request), the brain gets a single `run` tool plus a compact catalog of
+	// what's runnable. The toolset stays O(1) as the garden grows to hundreds of
+	// commands; the brain picks a name from the catalog and runs it.
+	known := map[string]bool{}
 	for _, cmd := range commands {
-		tools = append(tools, commandToolDef(cmd))
-		isCommand[cmd.Name] = true
+		known[cmd.Name] = true
+	}
+	sys := system
+	tools := []map[string]any{bashToolDef, declareTool}
+	if len(commands) > 0 {
+		tools = append(tools, runToolDef)
+		sys += "\n\nCAPABILITIES YOU CAN RUN — call the `run` tool with {\"name\": \"<one of these>\", \"args\": \"<space-separated args, in order>\"}:\n" + commandCatalog(commands)
+	}
+	messages := []map[string]any{
+		{"role": "system", "content": sys},
+		{"role": "user", "content": user},
 	}
 
 	var declarations []map[string]any
@@ -144,21 +152,27 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 					declarations = append(declarations, args)
 					output = "declaration recorded"
 				}
-			default:
-				if isCommand[tc.Function.Name] && invoke != nil {
-					var a struct {
-						Args string `json:"args"`
-					}
-					json.Unmarshal([]byte(tc.Function.Arguments), &a)
-					out, err := invoke(tc.Function.Name, a.Args)
+			case "run":
+				var a struct {
+					Name string `json:"name"`
+					Args string `json:"args"`
+				}
+				json.Unmarshal([]byte(tc.Function.Arguments), &a)
+				switch {
+				case a.Name == "" || !known[a.Name]:
+					output = fmt.Sprintf("error: no such capability %q — pick a name from the CAPABILITIES list", a.Name)
+				case invoke == nil:
+					output = "error: acting is disabled here"
+				default:
+					out, err := invoke(a.Name, a.Args)
 					if err != nil {
-						output = fmt.Sprintf("error running %q: %s", tc.Function.Name, err)
+						output = fmt.Sprintf("error running %q: %s", a.Name, err)
 					} else {
 						output = out
 					}
-				} else {
-					output = fmt.Sprintf("error: unknown tool %q", tc.Function.Name)
 				}
+			default:
+				output = fmt.Sprintf("error: unknown tool %q", tc.Function.Name)
 			}
 			messages = append(messages, map[string]any{
 				"role":         "tool",
@@ -171,33 +185,26 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 	return nil, fmt.Errorf("exceeded %d tool rounds without a final response", maxToolRounds)
 }
 
-// commandToolDef turns a planted command declaration into a brain-callable
-// tool. The command takes one space-separated `args` string (matching how the
-// CLI and HTML forms invoke it); the declared params are described so the brain
-// knows what to pass and in what order.
-func commandToolDef(cmd Command) map[string]any {
-	desc := cmd.Description
-	if len(cmd.Params) > 0 {
-		desc += " Params (pass space-separated, in order): " + jsonRepr(cmd.Params)
+// commandCatalog renders the runnable capabilities as a compact, one-line-each
+// list for the brain's prompt — name, description, and the params (so it knows
+// what to pass and in what order). This replaces N typed tool-schemas with a
+// single text block + the one `run` tool, keeping the request size flat as the
+// garden grows. (At very large scale this inline list becomes a read-on-demand
+// index; the `run` tool stays the same.)
+func commandCatalog(commands []Command) string {
+	var b strings.Builder
+	for _, cmd := range commands {
+		desc := strings.TrimSpace(cmd.Description)
+		if i := strings.IndexByte(desc, '.'); i > 0 && i < 140 {
+			desc = desc[:i]
+		}
+		fmt.Fprintf(&b, "  %s — %s", cmd.Name, desc)
+		if len(cmd.Params) > 0 {
+			b.WriteString(" (args: " + jsonRepr(cmd.Params) + ")")
+		}
+		b.WriteByte('\n')
 	}
-	desc += " Calling this runs the command and appends its events to the log."
-	return map[string]any{
-		"type": "function",
-		"function": map[string]any{
-			"name":        cmd.Name,
-			"description": desc,
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"args": map[string]any{
-						"type":        "string",
-						"description": "Arguments to the command, space-separated, in the order its params expect. Empty string if none.",
-					},
-				},
-				"required": []string{"args"},
-			},
-		},
-	}
+	return b.String()
 }
 
 func (c *Compiler) executeBash(args string) string {
@@ -586,7 +593,7 @@ const BrainSystemPrompt = `You are self's brain — a general-purpose agent that
 
 You have three powers:
 - READ: a bash tool to explore the garden (cwd=SELF_HOME) — read-only inspection of capabilities/, events.jsonl, and site/.
-- ACT: every capability you have is exposed to you as a tool. To DO something the user asks (delete an item, capture a note, set a meal), CALL the matching command tool with its args — do not just describe it or emit a button. The kernel runs it and appends the resulting events, then tells you what happened. The event log is append-only, so actions are safe and reversible: a "delete" is a tombstone event, undoable by a later restore. Prefer acting over explaining when the user asks you to change something.
+- ACT: your runnable capabilities are listed under CAPABILITIES below. To DO something the user asks (delete an item, capture a note, set a meal), CALL the run tool with the capability's name and its args — do not just describe it or emit a button. The kernel runs it and appends the resulting events, then tells you what happened. The event log is append-only, so actions are safe and reversible: a "delete" is a tombstone event, undoable by a later restore. Prefer acting over explaining when the user asks you to change something.
 - GROW: when the user asks for a NEW capability that no existing command provides, call the declare tool (see below) to add it.
 
 To UNDO a change, there is no special power: if a restore command exists, call it (with a capability name and optionally a seq) like any other act. It emits a data-only restore.requested event and the kernel reinstates an earlier compiled version; nothing is lost, since the log keeps every version.
