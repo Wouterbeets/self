@@ -529,6 +529,46 @@ no-blind-trust property the protocol wants.
 
 ---
 
+## Slice 11 — selftest: the projection is the oracle, and the loop runs it (VALIDATED)
+
+**Hypothesis.** `self` is unusually testable by an agent: a command's whole effect
+is a projection — plain HTML/JSONL that can be read perfectly — and projections
+are deterministic, replayable, and free of hidden state. So "did this change
+break a capability?" can be answered mechanically: feed each capability its
+example inputs, read the output, assert. If that runs before every merge, an
+autonomous self-improvement loop becomes self-*checking*, not just self-modifying.
+
+**Slice.** `kernel.SelfTest(home)` re-runs every *installed* capability's declared
+examples against the binary on disk (reusing `seed.VerifyScript`), returning
+pass/fail/untested per capability. `self selftest` reports it and exits nonzero on
+any failure. Where the compile-time gate (Slice 9) checks a freshly compiled
+script, selftest checks what is actually installed *now* — catching drift from a
+hand-edit, a rehydrate, or any regression. `scripts/preflight.sh` is the gate the
+heartbeat loop runs before merging: build → `go test ./...` → rehydrate the
+shipped `home/` board body (no LLM) → `self selftest`.
+
+**Evidence.** Preflight green end-to-end: the board body rehydrates and all three
+capabilities (`capture`, `move`, `board`) pass their examples against the
+installed binaries (3/3). Unit tests: selftest passes a correct binary, reports an
+example-less capability as untested-but-OK, and **fails a deliberately drifted
+binary** (a `greet` that no longer echoes its argv). The methodology had already
+proven itself in practice one slice earlier — the board's `move` shipped with a
+multi-word-lane bug that the examples caught at compile time, and lane placement
+was confirmed by reading the rendered board back as the oracle.
+
+**Decision: keep.** Small (~70 Go LOC + a shell script), and it closes the loop the
+whole session was building toward: knowledge is shared as evidence (8), re-derived
+under contract (9), the verdict is independently signed (10), and now every change
+is **regression-checked against the projection before it's trusted** (11). The
+autonomous loop's per-beat procedure is to run `scripts/preflight.sh` and refuse
+to merge on red. Honest gap: selftest runs each capability's examples in isolation
+(unit level); a full end-to-end driver — run real `capture`/`move` commands into a
+temp home, then assert the live `board` projection — is the next fidelity step
+(the examples already exercise the projector with synthetic multi-event input, so
+the compositional path is covered, just not the literal command pipeline).
+
+---
+
 ## How to reproduce
 
 ```sh
