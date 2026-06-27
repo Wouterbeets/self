@@ -59,6 +59,29 @@ func TestVerifyScriptCountsBrokenScriptAsFailure(t *testing.T) {
 	}
 }
 
+func TestVerifyScriptChecksOrder(t *testing.T) {
+	// echoes its argv, so output order follows argv order
+	echo := "#!/bin/sh\nprintf '%s' \"$1\"\n"
+
+	// in order: passes
+	ok := []Example{{Args: []string{"first second third"}, ExpectOrder: []string{"first", "second", "third"}}}
+	if res, _ := VerifyScript(echo, "command", ok); !res.OK() {
+		t.Fatalf("in-order should pass, got %+v", res)
+	}
+
+	// out of order: fails (both present, wrong sequence)
+	bad := []Example{{Args: []string{"first second third"}, ExpectOrder: []string{"third", "first"}}}
+	if res, _ := VerifyScript(echo, "command", bad); res.OK() {
+		t.Fatalf("out-of-order should fail, got %+v", res)
+	}
+
+	// a repeated token must still be found in order, not rematched at the same spot
+	rep := []Example{{Args: []string{"a b a"}, ExpectOrder: []string{"a", "a"}}}
+	if res, _ := VerifyScript(echo, "command", rep); !res.OK() {
+		t.Fatalf("two 'a's in input should satisfy ordered [a,a], got %+v", res)
+	}
+}
+
 func TestVerifyScriptNoExamples(t *testing.T) {
 	res, err := VerifyScript("#!/bin/sh\n:\n", "command", nil)
 	if err != nil {

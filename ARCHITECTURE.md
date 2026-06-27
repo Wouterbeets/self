@@ -468,9 +468,10 @@ justified the same way as Slices 6–7: it adds no new trust surface and it
 author, which is the point — they only pass on a receiver whose adaptation
 **extends rather than replaces**, making "the method survived translation" a
 property the receiver can prove on its own log. Honest gaps: `expect_contains` is
-substring presence, not ordering or structural equality (a stronger matcher —
-JSON-subset for command events, DOM assertions for projectors — is the next
-refinement); the `script.verified` receipt is unsigned, so it is audit, not yet a
+substring presence; `expect_order` (added in a follow-up beat) asserts a sequence
+so an example can prove a *ranking*, but full structural equality (JSON-subset for
+command events, DOM assertions for projectors) is still the next refinement; the
+`script.verified` receipt is unsigned, so it is audit, not yet a
 remotely-trustable attestation (signing it, like Slice 6 did for
 `script.compiled`, would let a *third* node trust a receiver's verified claim
 without re-running — the natural next step).

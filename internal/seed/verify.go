@@ -75,6 +75,7 @@ func VerifyScript(script, kind string, examples []Example) (VerifyResult, error)
 			res.Failures = append(res.Failures, fmt.Sprintf("%s: script error: %v", label, runErr))
 			continue
 		}
+		var problems []string
 		var missing []string
 		for _, want := range ex.ExpectContains {
 			if !strings.Contains(out, want) {
@@ -82,8 +83,14 @@ func VerifyScript(script, kind string, examples []Example) (VerifyResult, error)
 			}
 		}
 		if len(missing) > 0 {
+			problems = append(problems, fmt.Sprintf("missing %v", missing))
+		}
+		if order := checkOrder(out, ex.ExpectOrder); order != "" {
+			problems = append(problems, order)
+		}
+		if len(problems) > 0 {
 			res.Failures = append(res.Failures,
-				fmt.Sprintf("%s: output missing %v", label, missing))
+				fmt.Sprintf("%s: %s", label, strings.Join(problems, "; ")))
 			continue
 		}
 		res.Passed++
@@ -126,6 +133,24 @@ func runExample(path string, ex Example) (string, error) {
 		return stdout.String(), err
 	}
 	return stdout.String(), nil
+}
+
+// checkOrder reports a problem string if the wanted substrings are not all
+// present in out in the given order (each at or after the previous one's
+// position), or "" if they are. Empty want is vacuously ordered.
+func checkOrder(out string, want []string) string {
+	last := 0
+	for _, w := range want {
+		idx := strings.Index(out[last:], w)
+		if idx < 0 {
+			if strings.Contains(out, w) {
+				return fmt.Sprintf("out of order: %q", w)
+			}
+			return fmt.Sprintf("missing (ordered) %q", w)
+		}
+		last += idx + len(w)
+	}
+	return ""
 }
 
 func firstLine(s string) string {
