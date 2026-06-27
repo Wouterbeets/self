@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ks/internal/event"
+	"self/internal/event"
 )
 
 func TestRenderAndReadWiring(t *testing.T) {
@@ -15,7 +15,7 @@ func TestRenderAndReadWiring(t *testing.T) {
 
 	// Write a minimal events.jsonl with command.declared, projector.declared,
 	// and seed.planted events.
-	events := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"ks/v0"}}
+	events := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"self/v0"}}
 {"id":"b","seq":2,"name":"command.declared","occurred_at":"2026-01-01T00:00:00Z","payload":{"name":"cal-add","description":"Add event","params":{"date":"string"},"event":{"name":"calendar.event.added","fields":{"event_id":"string"}}}}
 {"id":"c","seq":3,"name":"command.declared","occurred_at":"2026-01-01T00:00:00Z","payload":{"name":"cal-del","description":"Delete event","params":{"event_id":"string"},"event":{"name":"calendar.event.deleted","fields":{"event_id":"string"}}}}
 {"id":"d","seq":4,"name":"projector.declared","occurred_at":"2026-01-01T00:00:00Z","payload":{"name":"calendar","description":"Month view","consumes":["calendar.event.added","calendar.event.edited","calendar.event.deleted"]}}
@@ -70,7 +70,7 @@ func TestReadWiringMissingFile(t *testing.T) {
 func TestRenderHTMLEmptyKernel(t *testing.T) {
 	home := t.TempDir()
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
-	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"ks/v0"}}
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"self/v0"}}
 `), 0644)
 
 	if err := RenderHTML(home); err != nil {
@@ -88,17 +88,17 @@ func TestRenderHTMLEmptyKernel(t *testing.T) {
 
 func TestCompileDeclarationsStub(t *testing.T) {
 	// Force stub mode so we don't need an LLM API key.
-	os.Setenv("KS_LLM_STUB", "1")
-	t.Cleanup(func() { os.Unsetenv("KS_LLM_STUB") })
+	os.Setenv("SELF_LLM_STUB", "1")
+	t.Cleanup(func() { os.Unsetenv("SELF_LLM_STUB") })
 
 	home := t.TempDir()
-	os.MkdirAll(filepath.Join(home, "registry", "commands"), 0755)
-	os.MkdirAll(filepath.Join(home, "registry", "projectors"), 0755)
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "capabilities", "projectors"), 0755)
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
 
 	// Minimal events.jsonl so RenderHTML has something to read.
 	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(
-		`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"ks/v0"}}
+		`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"self/v0"}}
 `), 0644)
 
 	// Simulate events a command might emit — including a declaration.
@@ -144,10 +144,10 @@ func TestCompileDeclarationsStub(t *testing.T) {
 	}
 
 	// Scripts should exist in the registry.
-	if _, err := os.Stat(filepath.Join(home, "registry", "commands", "summarize")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "summarize")); err != nil {
 		t.Error("summarize command script not written")
 	}
-	if _, err := os.Stat(filepath.Join(home, "registry", "projectors", "summaries")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "projectors", "summaries")); err != nil {
 		t.Error("summaries projector script not written")
 	}
 
@@ -161,9 +161,197 @@ func TestCompileDeclarationsStub(t *testing.T) {
 	}
 }
 
+func TestCompileDeclarationsIgnoresScriptCompiled(t *testing.T) {
+	os.Setenv("SELF_LLM_STUB", "1")
+	t.Cleanup(func() { os.Unsetenv("SELF_LLM_STUB") })
+
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(
+		`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"self/v0"}}
+`), 0644)
+
+	// script.compiled is kernel-only. CompileDeclarations must NOT install code
+	// from it — that path was removed precisely because it ran foreign bytes with
+	// no compile and no adaptation. The kernel only compiles declarations.
+	exact := "#!/usr/bin/env python3\nprint('pwned')\n"
+	payload, _ := json.Marshal(map[string]any{"type": "command", "name": "ping", "script": exact})
+	events := []event.Event{event.New(event.ScriptCompiled, payload)}
+
+	cmds, projs, err := CompileDeclarations(home, events)
+	if err != nil {
+		t.Fatalf("CompileDeclarations: %v", err)
+	}
+	if len(cmds) != 0 || len(projs) != 0 {
+		t.Fatalf("cmds=%v projs=%v, want none — script.compiled must not install code", cmds, projs)
+	}
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "ping")); err == nil {
+		t.Error("a script.compiled event installed code — the reserve was breached")
+	}
+}
+
+func TestRestoreRollsBackAndPinsBySeq(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	v1 := "#!/bin/sh\necho v1\n"
+	v2 := "#!/bin/sh\necho v2\n"
+	r1 := mustReceipt(t, home, "command", "greet", v1)
+	r2 := mustReceipt(t, home, "command", "greet", v2)
+	// A log with two kernel-signed receipts for greet (v1 at seq 2, v2 at seq 3);
+	// the registry currently holds v2.
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r1 + `}
+{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r2 + `}
+`
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
+	os.WriteFile(filepath.Join(home, "capabilities", "commands", "greet"), []byte(v2), 0755)
+	path := filepath.Join(home, "capabilities", "commands", "greet")
+
+	// rollback one → v1
+	if seq, kind, err := Restore(home, "greet", 0); err != nil || seq != 2 || kind != "command" {
+		t.Fatalf("Restore rollback: seq=%d kind=%q err=%v, want 2 command nil", seq, kind, err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != v1 {
+		t.Errorf("after rollback, greet = %q, want v1", b)
+	}
+
+	// pin by seq → v2 again (the restore appended a receipt, so seq 3 still exists)
+	if seq, _, err := Restore(home, "greet", 3); err != nil || seq != 3 {
+		t.Fatalf("Restore by seq: seq=%d err=%v, want 3 nil", seq, err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != v2 {
+		t.Errorf("after restore-by-seq, greet = %q, want v2", b)
+	}
+}
+
+func TestApplyRestoresFromEvent(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	v1 := "#!/bin/sh\necho v1\n"
+	v2 := "#!/bin/sh\necho v2\n"
+	r1 := mustReceipt(t, home, "command", "greet", v1)
+	r2 := mustReceipt(t, home, "command", "greet", v2)
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r1 + `}
+{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r2 + `}
+`
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
+	os.WriteFile(filepath.Join(home, "capabilities", "commands", "greet"), []byte(v2), 0755)
+
+	// A data-only restore.requested intent drives the install through the hook.
+	payload, _ := json.Marshal(map[string]any{"name": "greet", "seq": 0})
+	restored, err := ApplyRestores(home, []event.Event{event.New(event.RestoreRequested, payload)})
+	if err != nil {
+		t.Fatalf("ApplyRestores: %v", err)
+	}
+	if len(restored) != 1 || restored[0] != "greet" {
+		t.Fatalf("restored = %v, want [greet]", restored)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "capabilities", "commands", "greet")); string(b) != v1 {
+		t.Errorf("after restore.requested, greet = %q, want v1", b)
+	}
+}
+
+func TestRestoreErrors(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	r1 := mustReceipt(t, home, "command", "solo", "#!/bin/sh\n:\n")
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r1 + `}
+`
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
+
+	if _, _, err := Restore(home, "ghost", 0); err == nil {
+		t.Error("restoring an unknown name should error")
+	}
+	if _, _, err := Restore(home, "solo", 0); err == nil {
+		t.Error("rolling back a single-version capability should error")
+	}
+}
+
+// mustReceipt builds a kernel-signed script.compiled payload for home.
+func mustReceipt(t *testing.T, home, typ, name, script string) string {
+	t.Helper()
+	p, err := SignedReceipt(home, typ, name, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(p)
+}
+
+func TestSignVerifyRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	secret, err := loadOrCreateSecret(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, _ := SignedReceipt(home, "command", "greet", "echo hi")
+	if !verifyReceipt(secret, good) {
+		t.Error("a freshly signed receipt should verify")
+	}
+	// Tampered bytes — same name, different script — must not verify.
+	var r compiledReceipt
+	json.Unmarshal(good, &r)
+	r.Script = "echo PWNED"
+	bad, _ := json.Marshal(r)
+	if verifyReceipt(secret, bad) {
+		t.Error("tampering with the script must invalidate the signature")
+	}
+	// A different home's key must not verify our receipt.
+	other, _ := loadOrCreateSecret(t.TempDir())
+	if verifyReceipt(other, good) {
+		t.Error("another home's key must not verify this home's receipt")
+	}
+}
+
+func TestRestoreIgnoresForgedReceipt(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	v1 := "#!/bin/sh\necho v1\n"
+	v2 := "#!/bin/sh\necho v2\n"
+	r1 := mustReceipt(t, home, "command", "greet", v1) // seq 2, signed
+	r2 := mustReceipt(t, home, "command", "greet", v2) // seq 3, signed
+	// A forged receipt at the HIGHEST seq, with a bogus signature — a command
+	// could append exactly this. It must be invisible to restore.
+	forged := `{"type":"command","name":"greet","script":"#!/bin/sh\necho PWNED\n","sig":"deadbeef"}`
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r1 + `}
+{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r2 + `}
+{"id":"d","seq":4,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + forged + `}
+`
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
+	os.WriteFile(filepath.Join(home, "capabilities", "commands", "greet"), []byte(v2), 0755)
+
+	// rollback one: the forged seq-4 is ignored, so "previous" is v1 (seq 2).
+	seq, _, err := Restore(home, "greet", 0)
+	if err != nil || seq != 2 {
+		t.Fatalf("rollback: seq=%d err=%v, want 2 nil (forged receipt must be ignored)", seq, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "capabilities", "commands", "greet")); string(b) != v1 {
+		t.Errorf("greet = %q, want v1 — forged bytes must never install", b)
+	}
+	// And pinning the forged seq directly must be refused.
+	if _, _, err := Restore(home, "greet", 4); err == nil {
+		t.Error("restoring a forged (unsigned) receipt by seq must error")
+	}
+}
+
+func TestInstallScriptRejectsUnsafeName(t *testing.T) {
+	dir := t.TempDir()
+	evil, _ := json.Marshal(map[string]any{"type": "command", "name": "../escape", "script": "x"})
+	if _, _, err := installScript(dir, evil); err == nil {
+		t.Error("unsafe name should be rejected even on the kernel-internal install path")
+	}
+}
+
 func TestCompileDeclarationsNoDeclarations(t *testing.T) {
-	os.Setenv("KS_LLM_STUB", "1")
-	t.Cleanup(func() { os.Unsetenv("KS_LLM_STUB") })
+	os.Setenv("SELF_LLM_STUB", "1")
+	t.Cleanup(func() { os.Unsetenv("SELF_LLM_STUB") })
 
 	home := t.TempDir()
 

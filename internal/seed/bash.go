@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	bashTimeout  = 10 * time.Second
+	bashTimeout   = 10 * time.Second
 	bashMaxOutput = 10000
 )
 
@@ -34,8 +34,15 @@ var allowedInspectors = map[string]bool{
 }
 
 // findDangerousRe catches find's action flags that write or execute. find is
-// otherwise a read-only inspector worth allowing.
-var findDangerousRe = regexp.MustCompile(`-(exec|execdir|ok|okdir|delete|fprint|fprintf|fls)\b`)
+// otherwise a read-only inspector worth allowing. -fprint0 needs its own
+// alternative: a trailing \b won't fire between "fprint" and the digit "0"
+// (both word characters), so a bare "fprint" alternative misses -fprint0.
+var findDangerousRe = regexp.MustCompile(`-(exec|execdir|ok|okdir|delete|fprintf|fprint0|fprint|fls)\b`)
+
+// sortWriteRe catches sort's output-redirect flag in any spelling: -o, a short
+// bundle ending in o (-uo), --output, or --output=FILE. sort never needs to
+// write a file for inspection — output goes to stdout — so this is pure escape.
+var sortWriteRe = regexp.MustCompile(`^(-[a-zA-Z]*o|--output(=.*)?)$`)
 
 // runBash executes a read-only bash command with cwd set to home. Access is
 // gated by an allowlist (allowedInspectors): every command head in the line
@@ -53,10 +60,14 @@ func runBash(home, command string) (string, error) {
 	if findDangerousRe.MatchString(command) {
 		return "", fmt.Errorf("command blocked: find write/exec actions not allowed")
 	}
-	for _, head := range commandHeads(command) {
+	for _, seg := range commandSegments(command) {
+		head, args := segmentHead(seg)
 		base := head[strings.LastIndexByte(head, '/')+1:]
 		if !allowedInspectors[base] {
 			return "", fmt.Errorf("command blocked: %q is not an allowed read-only inspector", base)
+		}
+		if err := checkWriteOperands(base, args); err != nil {
+			return "", err
 		}
 	}
 
@@ -88,27 +99,19 @@ func runBash(home, command string) (string, error) {
 	return out, nil
 }
 
-// commandHeads splits a command line on top-level pipeline/sequence operators
-// (| ; & and newline, outside quotes) and returns the leading word of each
-// segment — the program that would run. Leading VAR=value assignments are
-// skipped so the real command is what gets checked.
-func commandHeads(command string) []string {
-	var heads []string
+// commandSegments splits a command line on top-level pipeline/sequence
+// operators (| ; & and newline, outside quotes) and returns the fields of each
+// segment. The caller resolves each segment's head and inspects its arguments.
+func commandSegments(command string) [][]string {
+	var segs [][]string
 	var seg strings.Builder
 	inSingle, inDouble := false, false
 
 	flush := func() {
-		fields := strings.Fields(seg.String())
+		if fields := strings.Fields(seg.String()); len(fields) > 0 {
+			segs = append(segs, fields)
+		}
 		seg.Reset()
-		i := 0
-		for i < len(fields) && !strings.HasPrefix(fields[i], "-") && strings.ContainsRune(fields[i], '=') {
-			i++ // skip VAR=value assignment prefixes
-		}
-		if i < len(fields) {
-			heads = append(heads, fields[i])
-		} else if len(fields) > 0 {
-			heads = append(heads, fields[0])
-		}
 	}
 
 	for _, c := range command {
@@ -136,7 +139,59 @@ func commandHeads(command string) []string {
 		}
 	}
 	flush()
-	return heads
+	return segs
+}
+
+// segmentHead returns the program a segment would run and the args that follow
+// it, skipping leading VAR=value assignment prefixes (so `FOO=bar cat x`
+// resolves to `cat` with args [x]).
+func segmentHead(fields []string) (head string, args []string) {
+	i := 0
+	for i < len(fields) && !strings.HasPrefix(fields[i], "-") && strings.ContainsRune(fields[i], '=') {
+		i++
+	}
+	if i >= len(fields) {
+		i = 0
+	}
+	return fields[i], fields[i+1:]
+}
+
+// checkWriteOperands rejects the file-write escapes of allowlisted tools that
+// are otherwise read-only. find's write actions are caught by findDangerousRe;
+// the remaining writers are sort (-o/--output) and uniq (a second file operand
+// is its OUTPUT). Without this, "look but not touch" leaks: sort -o FILE and
+// uniq IN OUT both overwrite an arbitrary path under SELF_HOME.
+func checkWriteOperands(base string, args []string) error {
+	switch base {
+	case "sort":
+		for _, a := range args {
+			if sortWriteRe.MatchString(a) {
+				return fmt.Errorf("command blocked: sort -o/--output writes a file")
+			}
+		}
+	case "uniq":
+		// uniq [OPTION]... [INPUT [OUTPUT]] — a second file operand is the
+		// write target. Count non-flag operands, skipping the value consumed
+		// by the short options that take one (-f -s -w).
+		operands, skipNext := 0, false
+		for _, a := range args {
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if strings.HasPrefix(a, "-") && a != "-" {
+				if a == "-f" || a == "-s" || a == "-w" {
+					skipNext = true
+				}
+				continue
+			}
+			operands++
+		}
+		if operands >= 2 {
+			return fmt.Errorf("command blocked: uniq with an output-file operand writes a file")
+		}
+	}
+	return nil
 }
 
 // bashToolDef is the OpenAI-compatible tool schema passed to the LLM
@@ -145,7 +200,7 @@ var bashToolDef = map[string]any{
 	"type": "function",
 	"function": map[string]any{
 		"name":        "bash",
-		"description": "Run a read-only bash command to explore the ks garden. Working directory is KS_HOME. Allowed inspectors: ls, cat, head, tail, grep, rg, find, wc, jq, sort, uniq, cut, tr, strings, file, stat, diff (and similar read-only tools); pipelines of these are fine. Use them to inspect commands (registry/commands/), projectors (registry/projectors/), events (events.jsonl), and wiring (site/kernel.html). Anything not on the allowlist is blocked: interpreters (python, awk, sed, perl), writes, network, redirection, command substitution, and find -exec/-delete.",
+		"description": "Run a read-only bash command to explore your garden — the live state of self. Working directory is SELF_HOME. Allowed inspectors: ls, cat, head, tail, grep, rg, find, wc, jq, sort, uniq, cut, tr, strings, file, stat, diff (and similar read-only tools); pipelines of these are fine. Use them to inspect commands (capabilities/commands/), projectors (capabilities/projectors/), events (events.jsonl), and wiring (site/kernel.html). Anything not on the allowlist is blocked: interpreters (python, awk, sed, perl), writes, network, redirection, command substitution, and find -exec/-delete.",
 		"parameters": map[string]any{
 			"type": "object",
 			"properties": map[string]any{

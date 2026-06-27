@@ -6,9 +6,12 @@ import (
 )
 
 // UnmarshalJSON for Command accepts both the canonical schema:
-//   {"name": "...", "params": {"key": "type"}, "event": {"name": "...", "fields": {"k": "v"}}}
+//
+//	{"name": "...", "params": {"key": "type"}, "event": {"name": "...", "fields": {"k": "v"}}}
+//
 // and LLM-generated variants:
-//   {"command": "...", "params": [{"name": "k", "type": "v"}], "event": "name", "fields": {"k": {"type": "v"}}}
+//
+//	{"command": "...", "params": [{"name": "k", "type": "v"}], "event": "name", "fields": {"k": {"type": "v"}}}
 func (c *Command) UnmarshalJSON(data []byte) error {
 	type canonical Command
 	var can canonical
@@ -30,6 +33,9 @@ func (c *Command) UnmarshalJSON(data []byte) error {
 
 	if v, ok := rawFieldString(raw, "description"); ok {
 		c.Description = v
+	}
+	if v, ok := rawFieldString(raw, "implementation"); ok {
+		c.Implementation = v
 	}
 
 	c.Params = parseParamsLenient(raw["params"])
@@ -89,6 +95,9 @@ func (p *ProjectorDecl) UnmarshalJSON(data []byte) error {
 	if v, ok := rawFieldString(raw, "description"); ok {
 		p.Description = v
 	}
+	if v, ok := rawFieldString(raw, "implementation"); ok {
+		p.Implementation = v
+	}
 
 	p.Consumes = parseConsumesLenient(raw["consumes"], raw["events"])
 
@@ -108,9 +117,10 @@ func rawFieldString(raw map[string]json.RawMessage, key string) (string, bool) {
 }
 
 // parseParamsLenient accepts:
-//   {"key": "type string"}                    → map
-//   [{"name": "key", "type": "type"}]         → array of objects
-//   [{"name": "key", "type": "type", ...}]    → array with extra fields
+//
+//	{"key": "type string"}                    → map
+//	[{"name": "key", "type": "type"}]         → array of objects
+//	[{"name": "key", "type": "type", ...}]    → array with extra fields
 func parseParamsLenient(raw json.RawMessage) map[string]string {
 	if len(raw) == 0 {
 		return nil
@@ -144,8 +154,9 @@ func parseParamsLenient(raw json.RawMessage) map[string]string {
 }
 
 // parseFieldsLenient accepts:
-//   {"key": "type string"}                    → map
-//   {"key": {"type": "string", ...}}          → nested objects
+//
+//	{"key": "type string"}                    → map
+//	{"key": {"type": "string", ...}}          → nested objects
 func parseFieldsLenient(raw json.RawMessage) map[string]string {
 	if len(raw) == 0 {
 		return nil
@@ -175,8 +186,9 @@ func parseFieldsLenient(raw json.RawMessage) map[string]string {
 }
 
 // parseEventLenient accepts:
-//   {"name": "...", "fields": {...}}  → object
-//   "event.name"                      → string (fields from separate key)
+//
+//	{"name": "...", "fields": {...}}  → object
+//	"event.name"                      → string (fields from separate key)
 func parseEventLenient(eventRaw, fieldsRaw json.RawMessage) EventDecl {
 	var ed EventDecl
 	if len(eventRaw) > 0 {
@@ -201,8 +213,9 @@ func parseEventLenient(eventRaw, fieldsRaw json.RawMessage) EventDecl {
 }
 
 // parseConsumesLenient accepts:
-//   ["event.a", "event.b"]                    → string array
-//   [{"event": "name"}, {"name": "name"}]     → array of objects
+//
+//	["event.a", "event.b"]                    → string array
+//	[{"event": "name"}, {"name": "name"}]     → array of objects
 func parseConsumesLenient(consumesRaw, eventsRaw json.RawMessage) []string {
 	raw := consumesRaw
 	if len(raw) == 0 {

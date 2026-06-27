@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ks/internal/event"
+	"self/internal/event"
 )
 
 type Manifest struct {
@@ -23,6 +23,12 @@ type Command struct {
 	Description string            `json:"description"`
 	Params      map[string]string `json:"params"`
 	Event       EventDecl         `json:"event"`
+	// Implementation is an optional reference implementation. The compiler does
+	// NOT install it as-is — it hands it to the LLM as a strong starting point to
+	// verify against the pipe contract and adapt to the receiver's garden. So a
+	// seed can carry precise, complex code while the loop still produces a binary
+	// authored for this receiver (adaptation preserved, no foreign code run).
+	Implementation string `json:"implementation,omitempty"`
 }
 
 type EventDecl struct {
@@ -34,6 +40,9 @@ type ProjectorDecl struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Consumes    []string `json:"consumes"`
+	// Implementation: same contract as Command.Implementation — a reference the
+	// compiler verifies and adapts, never installs verbatim.
+	Implementation string `json:"implementation,omitempty"`
 }
 
 func Load(dir string) (*Manifest, error) {

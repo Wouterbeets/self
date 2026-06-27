@@ -1,11 +1,11 @@
-# Build prompt: extend ks toward the vision, iteratively and on evidence
+# Build prompt: extend self toward the vision, iteratively and on evidence
 
 ## Your job
-You are the **single driver** of an iterative build. You extend an EXISTING
-minimal kernel (ks) toward the vision below, in small testable slices. You may
+You are the **single driver** of an iterative build. You extend 
+minimal kernel (self, formerly ks) toward the vision below, in small testable slices. You may
 spawn parallel sub-agents ONLY for exploration or independent verification —
 never to run the build loop, which is sequential (each slice's evidence decides
-the next). No big-bang design. No new repo. You grow ks.
+the next). No big-bang design. No new repo. You grow self.
 
 ## The body of work is a time series, not a merge
 These repos are one idea annealing toward a minimal shape, in order:
@@ -16,10 +16,10 @@ These repos are one idea annealing toward a minimal shape, in order:
   knowledge sharing; receiver-controlled adaptation
 - household — a real event-sourced node + sharing/trust machinery, but every
   capability is hand-written Go (no self-modification; large)
-- ks — the current minimal synthesis: event log + LLM-compiled commands/
+- self (formerly ks) — the current minimal synthesis: event log + LLM-compiled commands/
   projectors + strange loop + bare-HTML projections + serve-time enrichment
 
-**ks is the base. You extend it.** Port household's infrastructure and emera's
+**self is the base. You extend it.** Port household's infrastructure and emera's
 dynamics IN as seeds/projectors/commands — never as compiled-in subsystems.
 Deduce intent; do not copy code literally.
 
@@ -39,7 +39,7 @@ emergence-driven specialization, receiver-controlled remapping across nodes,
 public/commons cooperation, local-first sovereignty, democracy-scaled. These
 guide choices; they are not acceptance criteria.
 
-## The living log IS a ks seed (non-optional)
+## The living log IS a self seed (non-optional)
 Record the build using the product. Append `build.hypothesis`,
 `build.evidence`, `build.decision` events to the log; write a `buildlog`
 projector that renders them. The PoC must be able to show its own construction
@@ -49,7 +49,7 @@ history as one of its projections. The process demonstrates the vision.
 You may ONLY claim a metric you actually produced. Show the raw command output,
 not a prose summary of it. The checkable invariants:
 - Determinism: replay the same log twice → byte-identical projection.
-- Portability/adaptation: plant a seed whose event vocabulary the garden lacks
+- Portability/adaptation: grow a seed whose event vocabulary the garden lacks
   → does the compiler remap it? Show the compiled script + rendered output.
 - Complexity delta: LOC and dependencies vs. the baseline repo (`git diff
   --stat`, `wc -l`).
@@ -65,10 +65,10 @@ refine/refute) with rationale; (6) update the spec. Keep what survives evidence;
 discard what doesn't. Commit each validated slice with rationale in the message.
 
 ## First slice (attack the hardest hypothesis first)
-Do NOT start with "event log + kanban + seed I/O" — ks already has those;
+Do NOT start with "event log + kanban + seed I/O" — self already has those;
 re-deriving the baseline proves nothing.
 
-Slice 1 hypothesis: **"emera's emergence can run as a ks seed."** Implement a
+Slice 1 hypothesis: **"emera's emergence can run as a self seed."** Implement a
 projector (or command) that applies an energy/selection heuristic over the event
 stream — e.g. scores events by a fitness rule and culls/ranks them — using ZERO
 bespoke engine code, only the seed mechanism. Evidence: does it run on a real
@@ -82,7 +82,7 @@ Stop after 3–5 validated slices. Then write the roadmap. Do not run forever.
 ## Outputs (iterative)
 - The living build-log seed (events + buildlog projector), in the repo.
 - An evolving `ARCHITECTURE.md`, updated after each validated slice.
-- Runnable code growing on ks, with build/run instructions and explicit
+- Runnable code growing on self, with build/run instructions and explicit
   comparison points to the baseline repos.
 - A closing summary: which anchors held (with evidence), which slices were
   refuted, remaining gaps, next-iteration roadmap, and follow-up prompts.

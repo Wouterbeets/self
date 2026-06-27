@@ -22,10 +22,10 @@ func TestBashReadOnlyCommand(t *testing.T) {
 
 func TestBashListCommands(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "registry", "commands"), 0755)
-	os.WriteFile(filepath.Join(dir, "registry", "commands", "note"), []byte("#!/usr/bin/env python3\n"), 0755)
+	os.MkdirAll(filepath.Join(dir, "capabilities", "commands"), 0755)
+	os.WriteFile(filepath.Join(dir, "capabilities", "commands", "note"), []byte("#!/usr/bin/env python3\n"), 0755)
 
-	out, err := runBash(dir, "ls registry/commands/")
+	out, err := runBash(dir, "ls capabilities/commands/")
 	if err != nil {
 		t.Fatalf("ls failed: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestBashAllowsInspectionPipelines(t *testing.T) {
 
 func TestBashOutputTruncation(t *testing.T) {
 	dir := t.TempDir()
-_big := strings.Repeat("x", bashMaxOutput+1000)
+	_big := strings.Repeat("x", bashMaxOutput+1000)
 	os.WriteFile(filepath.Join(dir, "big.txt"), []byte(_big), 0644)
 
 	out, err := runBash(dir, "cat big.txt")

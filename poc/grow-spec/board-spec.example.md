@@ -17,7 +17,7 @@ Lanes in order: inbox, this_week, waiting, done. `resolve` sends an item to done
 assigns a sequential id (item-N counting existing memory.captured). The board
 projector renders a capture form at the top, then each lane as a section of
 cards; each card carries a move <select> of the four lanes + a resolve button,
-all plain forms posting to /invoke. Bare semantic HTML.
+all plain forms posting to /run. Bare semantic HTML.
 
 ## Examples
 - capture "Book dentist"  =>  memory.captured {id: item-1, title: "Book dentist", stage: inbox}
