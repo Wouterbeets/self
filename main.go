@@ -63,6 +63,8 @@ func main() {
 		err = cmdHeartbeat(home)
 	case "rehydrate":
 		err = cmdRehydrate(home)
+	case "selftest":
+		err = cmdSelfTest(home)
 	case "identity":
 		err = cmdIdentity(home)
 	case "verify-attestation":
@@ -130,6 +132,7 @@ usage: self [command] [args]
   self                    rehydrate the body from the log, then start the live garden (the default)
   self init               initialize the baby kernel
   self rehydrate          rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
+  self selftest           re-run every installed capability's examples against its binary (regression gate)
   self identity           print this home's public verification key (shareable)
   self verify-attestation check a script.verified attestation piped on stdin (no secret needed)
   self grow <seed>        grow a new capability from a seed
@@ -1170,6 +1173,44 @@ func cmdRehydrate(home string) error {
 		len(commands), len(projectors))
 	fmt.Printf("  commands:    %s\n", strings.Join(commands, ", "))
 	fmt.Printf("  projectors:  %s\n", strings.Join(projectors, ", "))
+	return nil
+}
+
+// cmdSelfTest re-runs every installed capability's declared examples against the
+// binary on disk and reports pass/fail/untested per capability, exiting nonzero
+// if any fail. It is the standing regression gate — the projection/output is the
+// oracle — that lets the system (and the autonomous heartbeat loop) prove a
+// change didn't break a contract before trusting it.
+func cmdSelfTest(home string) error {
+	results, err := kernel.SelfTest(home)
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		fmt.Println("selftest: no installed capabilities to test")
+		return nil
+	}
+	passed, failed, untested := 0, 0, 0
+	for _, r := range results {
+		switch {
+		case !r.HasExamples:
+			untested++
+			fmt.Printf("  ?  %-14s (%s)  no examples — untested\n", r.Name, r.Kind)
+		case r.Result.OK():
+			passed++
+			fmt.Printf("  ✓  %-14s (%s)  %s\n", r.Name, r.Kind, r.Result.Summary())
+		default:
+			failed++
+			fmt.Printf("  ✗  %-14s (%s)  %s\n", r.Name, r.Kind, r.Result.Summary())
+			for _, f := range r.Result.Failures {
+				fmt.Printf("        %s\n", f)
+			}
+		}
+	}
+	fmt.Printf("selftest: %d passed, %d failed, %d untested\n", passed, failed, untested)
+	if failed > 0 {
+		return fmt.Errorf("%d capabilit(ies) failed selftest", failed)
+	}
 	return nil
 }
 

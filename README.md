@@ -51,6 +51,7 @@ capabilities. That's the strange loop.
 | `self` | Default: rehydrate the body from the log, then start the live garden (the most common action) |
 | `self init` | Initialize the baby kernel |
 | `self rehydrate` | Rebuild `capabilities/` + `site/` from the log's signed receipts — no LLM, no network |
+| `self selftest` | Re-run every installed capability's examples against its binary — a regression gate (the projection/output is the oracle) |
 | `self identity` | Print this home's public verification key (shareable) |
 | `self verify-attestation` | Check a `script.verified` attestation piped on stdin — no secret needed |
 | `self grow <seed>` | Grow a new capability from a seed |
