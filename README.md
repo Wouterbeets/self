@@ -120,7 +120,9 @@ Two consequences worth naming:
   `script.compiled` receipt. `self restore <name> [seq]` re-installs an earlier
   one — and because only the kernel writes and reads those receipts, a restore
   can only ever reinstate code this receiver's own compiler already authored. No
-  drift, no foreign bytes.
+  drift, no foreign bytes. The brain can call `restore` too (it's one of its
+  tools, alongside read/act/grow): the trigger carries only a name + seq — data,
+  not code — so "undo that" is brain-callable without widening the trust surface.
 
 ## self heartbeat
 

@@ -267,8 +267,17 @@ lost. The kernel acts on **two** events once more (`command.declared`,
 **Honest note.** `self restore` is genuine kernel code (not a seed) — but it
 *reads* the log and reinstates the kernel's own output, so it can't be a seed
 without re-opening the code-install hole. That's the right place to spend kernel
-LOC. The brain still can't trigger a restore (its `declare` tool is scoped to the
-two `*.declared` events); wiring "undo that" to the brain is the next candidate.
+LOC.
+
+**Follow-up (done).** Restore is now also a brain tool, alongside read/act/grow.
+The key insight: *who performs the install* (must be the kernel — it writes bytes
+to `capabilities/` only from its own receipts) is a separate axis from *who
+triggers it* (anyone — the trigger carries only a name+seq, never code). Gating
+the trigger to the CLI was an unjustified special case: restore is strictly
+weaker than `grow` (which the brain already has and which compiles brand-new
+code), and fully reversible. So `restore(name, seq)` joins the brain's tools; the
+kernel still does the install. No new attack surface — data crosses the boundary,
+never bytes.
 
 ---
 

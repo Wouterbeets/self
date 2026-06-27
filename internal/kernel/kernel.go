@@ -163,6 +163,7 @@ func buildHTML(home string, commands []CommandInfo, projectors []ProjectorInfo, 
 	b.WriteString("<dt>read</dt><dd>a read-only <code>bash</code> tool to explore the garden — inspect <code>capabilities/</code>, <code>events.jsonl</code>, and <code>site/</code>. The <code>site/*.html</code> projections are my memory; read the relevant ones (e.g. <code>site/chat.html</code> for the conversation) before answering.</dd>\n")
 	b.WriteString("<dt>act</dt><dd>every capability listed below is exposed to you as a callable tool. To change something the user asks for, <em>call the matching capability</em> — don't merely describe it. The kernel runs it and appends the resulting events.</dd>\n")
 	b.WriteString("<dt>grow</dt><dd>when no existing capability fits, <code>declare</code> a new <code>command.declared</code> or <code>projector.declared</code>; the kernel compiles it on the spot and it becomes a capability you can use immediately.</dd>\n")
+	b.WriteString("<dt>restore</dt><dd>to undo a change, call <code>restore</code> with a capability's name (and optionally a seq from history). It reinstates an earlier version the kernel already compiled — never new code — so rolling back is as safe and reversible as everything else.</dd>\n")
 	b.WriteString("</dl>\n")
 	b.WriteString("</section>\n")
 

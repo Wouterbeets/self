@@ -1108,7 +1108,7 @@ func cmdHeartbeat(home string) error {
 	const prompt = `This is a self-improvement heartbeat. Explore your garden — your capabilities, recent events, and projections — and choose ONE small, high-value improvement: a missing capability, a projection that would make your shared state clearer, or a fix for something that has drifted. If it is warranted, declare it (command.declared / projector.declared) so it compiles into a real capability. Adapt to what already exists rather than duplicating it. If nothing is worth changing right now, say so plainly and declare nothing. Keep it minimal.`
 
 	commands, invoke := brainTools(home)
-	result, err := compiler.CallBrain(prompt, commands, invoke)
+	result, err := compiler.CallBrain(prompt, commands, invoke, brainRestorer(home))
 	if err != nil {
 		return err
 	}
@@ -1154,7 +1154,7 @@ func cmdThink(home string, prompt string) error {
 	compiler := seed.NewCompiler(home)
 
 	commands, invoke := brainTools(home)
-	result, err := compiler.CallBrain(prompt, commands, invoke)
+	result, err := compiler.CallBrain(prompt, commands, invoke, brainRestorer(home))
 	if err != nil {
 		return err
 	}
@@ -1204,6 +1204,20 @@ func brainTools(home string) ([]seed.Command, seed.CommandInvoker) {
 		return fmt.Sprintf("ran %q — appended %d event(s): %s", name, len(evs), strings.Join(names, ", ")), nil
 	}
 	return commands, invoke
+}
+
+// brainRestorer gives the brain the restore power. It's not depth-gated: a
+// restore carries only a name and seq (data, not code), the kernel performs the
+// install from its own receipts, and it can't recurse into the brain — so it's
+// always safe to offer, like declare.
+func brainRestorer(home string) seed.Restorer {
+	return func(name string, seq int) (string, error) {
+		rseq, kind, err := kernel.Restore(home, name, seq)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("restored %s %q from seq %d", kind, name, rseq), nil
+	}
 }
 
 // plantedCommands reads the command declarations from the event log, latest

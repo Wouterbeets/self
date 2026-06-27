@@ -375,6 +375,51 @@ func TestCallLLMFallsBackOnQuotaError(t *testing.T) {
 	}
 }
 
+// TestCallBrainInvokesRestoreTool stands up a fake LLM that, on its first turn,
+// calls the restore tool with {name, seq}, then returns a final message. It
+// asserts the brain's restore callback fired with those exact args — i.e. the
+// brain can trigger a restore, carrying only data, never code.
+func TestCallBrainInvokesRestoreTool(t *testing.T) {
+	turn := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turn++
+		var resp map[string]any
+		if turn == 1 {
+			resp = map[string]any{"choices": []map[string]any{{"message": map[string]any{
+				"tool_calls": []map[string]any{{
+					"id": "call_1", "type": "function",
+					"function": map[string]any{"name": "restore", "arguments": `{"name":"wall","seq":5}`},
+				}},
+			}}}}
+		} else {
+			resp = map[string]any{"choices": []map[string]any{{"message": map[string]any{
+				"content": "rolled wall back",
+			}}}}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := &Compiler{URL: srv.URL, Model: "local", Home: t.TempDir()}
+	var gotName string
+	var gotSeq int
+	restore := func(name string, seq int) (string, error) {
+		gotName, gotSeq = name, seq
+		return "restored command \"wall\" from seq 5", nil
+	}
+	res, err := c.CallBrain("undo the wall change", nil, nil, restore)
+	if err != nil {
+		t.Fatalf("CallBrain: %v", err)
+	}
+	if gotName != "wall" || gotSeq != 5 {
+		t.Errorf("restore called with (%q, %d), want (wall, 5)", gotName, gotSeq)
+	}
+	if res.Response != "rolled wall back" {
+		t.Errorf("final response = %q, want %q", res.Response, "rolled wall back")
+	}
+}
+
 // TestCallLLMNoFallbackWhenPrimaryIsLocal verifies that a quota error from a
 // local-only compiler (no fallback configured) propagates instead of being
 // swallowed or retried.
