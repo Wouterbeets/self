@@ -164,6 +164,19 @@ garden), **act** (every capability is a callable tool), and **grow** (declare
 new capabilities). It reads `site/*.html` for current state — the projection
 output *is* the memory — so conversation and context persist across calls.
 
+Because the brain is just an OpenAI-compatible `POST /v1/chat/completions`, any
+agent can *be* the brain. `tools/brainbridge.py` is a localhost endpoint that
+parks each request as a file and waits for you to answer it:
+
+```sh
+BRIDGE_DIR=./bridge python3 tools/brainbridge.py 7800 &
+export SELF_LLM_URL=http://127.0.0.1:7800 SELF_LLM_TIMEOUT=1h
+self think "..."     # the request lands in bridge/inbox.json; write bridge/outbox.json to answer
+```
+
+`grow`, `heartbeat`, and `run chat` use the same endpoint, so a human — or
+Claude — can drive the whole strange loop by hand.
+
 ## garden-aware compilation
 
 When compiling (at grow time, and at run time via the strange loop), the LLM
