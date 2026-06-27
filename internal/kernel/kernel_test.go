@@ -161,21 +161,21 @@ func TestCompileDeclarationsStub(t *testing.T) {
 	}
 }
 
-func TestCompileDeclarationsInstallsScriptVerbatim(t *testing.T) {
+func TestCompileDeclarationsIgnoresScriptCompiled(t *testing.T) {
 	os.Setenv("SELF_LLM_STUB", "1")
 	t.Cleanup(func() { os.Unsetenv("SELF_LLM_STUB") })
 
 	home := t.TempDir()
 	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
-	os.MkdirAll(filepath.Join(home, "capabilities", "projectors"), 0755)
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
 	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(
 		`{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{"version":"self/v0"}}
 `), 0644)
 
-	// A command emitted a script.compiled: the kernel must install the exact
-	// bytes, no compilation, no stub. This is the loop carrying code, not a spec.
-	exact := "#!/usr/bin/env python3\nimport json\nprint(json.dumps({\"name\":\"pinged\",\"payload\":{\"n\":1}}))\n"
+	// script.compiled is kernel-only. CompileDeclarations must NOT install code
+	// from it — that path was removed precisely because it ran foreign bytes with
+	// no compile and no adaptation. The kernel only compiles declarations.
+	exact := "#!/usr/bin/env python3\nprint('pwned')\n"
 	payload, _ := json.Marshal(map[string]any{"type": "command", "name": "ping", "script": exact})
 	events := []event.Event{event.New(event.ScriptCompiled, payload)}
 
@@ -183,34 +183,72 @@ func TestCompileDeclarationsInstallsScriptVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileDeclarations: %v", err)
 	}
-	if len(cmds) != 1 || cmds[0] != "ping" || len(projs) != 0 {
-		t.Fatalf("cmds=%v projs=%v, want [ping] []", cmds, projs)
+	if len(cmds) != 0 || len(projs) != 0 {
+		t.Fatalf("cmds=%v projs=%v, want none — script.compiled must not install code", cmds, projs)
 	}
-	got, err := os.ReadFile(filepath.Join(home, "capabilities", "commands", "ping"))
-	if err != nil {
-		t.Fatalf("ping not installed: %v", err)
-	}
-	if string(got) != exact {
-		t.Errorf("installed script not byte-identical:\n got %q\nwant %q", got, exact)
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "ping")); err == nil {
+		t.Error("a script.compiled event installed code — the reserve was breached")
 	}
 }
 
-func TestInstallScriptRejectsUnsafeNameAndProvenanceOnly(t *testing.T) {
-	registry := t.TempDir()
+func TestRestoreRollsBackAndPinsBySeq(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	v1 := "#!/bin/sh\necho v1\n"
+	v2 := "#!/bin/sh\necho v2\n"
+	r1, _ := json.Marshal(map[string]any{"type": "command", "name": "greet", "script": v1})
+	r2, _ := json.Marshal(map[string]any{"type": "command", "name": "greet", "script": v2})
+	// A log with two kernel receipts for greet (v1 at seq 2, v2 at seq 3); the
+	// registry currently holds v2.
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r1) + `}
+{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r2) + `}
+`
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
+	os.WriteFile(filepath.Join(home, "capabilities", "commands", "greet"), []byte(v2), 0755)
+	path := filepath.Join(home, "capabilities", "commands", "greet")
 
-	// Provenance-only payload (no script) is a no-op, not an error: the log
-	// records compiles as script.compiled with the script, but a re-emit could
-	// legitimately carry only metadata.
-	bare, _ := json.Marshal(map[string]any{"type": "command", "name": "x"})
-	if kind, _, err := InstallScript(registry, bare); err != nil || kind != "" {
-		t.Errorf("provenance-only: kind=%q err=%v, want \"\" nil", kind, err)
+	// rollback one → v1
+	if seq, kind, err := Restore(home, "greet", 0); err != nil || seq != 2 || kind != "command" {
+		t.Fatalf("Restore rollback: seq=%d kind=%q err=%v, want 2 command nil", seq, kind, err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != v1 {
+		t.Errorf("after rollback, greet = %q, want v1", b)
 	}
 
-	// Path traversal in the name must be rejected — installing writes to the
-	// registry by name, so a name with separators could escape it.
+	// pin by seq → v2 again (the restore appended a receipt, so seq 3 still exists)
+	if seq, _, err := Restore(home, "greet", 3); err != nil || seq != 3 {
+		t.Fatalf("Restore by seq: seq=%d err=%v, want 3 nil", seq, err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != v2 {
+		t.Errorf("after restore-by-seq, greet = %q, want v2", b)
+	}
+}
+
+func TestRestoreErrors(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	r1, _ := json.Marshal(map[string]any{"type": "command", "name": "solo", "script": "#!/bin/sh\n:\n"})
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r1) + `}
+`
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
+
+	if _, _, err := Restore(home, "ghost", 0); err == nil {
+		t.Error("restoring an unknown name should error")
+	}
+	if _, _, err := Restore(home, "solo", 0); err == nil {
+		t.Error("rolling back a single-version capability should error")
+	}
+}
+
+func TestInstallScriptRejectsUnsafeName(t *testing.T) {
+	dir := t.TempDir()
 	evil, _ := json.Marshal(map[string]any{"type": "command", "name": "../escape", "script": "x"})
-	if _, _, err := InstallScript(registry, evil); err == nil {
-		t.Error("unsafe name should be rejected")
+	if _, _, err := installScript(dir, evil); err == nil {
+		t.Error("unsafe name should be rejected even on the kernel-internal install path")
 	}
 }
 

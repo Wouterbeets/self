@@ -147,7 +147,7 @@ and verify conformance (usability + emergence + protocol all meeting).
 
 ---
 
-## Slice 4 — the strange loop carries code, not just a spec (VALIDATED)
+## Slice 4 — the strange loop carries code, not just a spec (VALIDATED, then REVERTED — see Slice 5)
 
 **Hypothesis.** Until now the strange loop was a *spec loop*: a command could
 emit `command.declared`/`projector.declared` and the kernel re-compiled a fresh
@@ -201,8 +201,9 @@ binary. Three artifacts demonstrate the loop:
   self-redeclaration under the *spec* path drifts (stub → generic), under the
   *code* path it does not.
 
-**Decision: keep — with an honest caveat.** This slice **did change the kernel**
-(~80 Go LOC: `InstallScript` + the hook case + plant's ship-aware skip),
+**Decision (at the time): keep — later REVERTED in Slice 5.** This slice **did
+change the kernel** (~80 Go LOC: an install helper + the hook case + plant's
+ship-aware skip),
 unlike slices 1–3 which were zero-kernel. By the PoC rule ("re-growing the
 kernel is a failure"), that demands justification: the primitive is minimal and
 it *moves capability out of the kernel*. Rollback/restore would otherwise have
@@ -212,18 +213,62 @@ do); honouring `script.compiled` makes restore, replication, and quines all
 the alternative was a bespoke `self restore` plus no replication story at all.
 Net: one small primitive, a large expansion of what the seed layer can express.
 
-**Honest gaps.** Installing arbitrary bytes verbatim is, in production, an
-arbitrary-code-execution path (a malicious seed could ship a hostile script) —
-acceptable in PoC mode, but a real seed-trust / signing story is owed before
-this ships. The brain can't yet emit `script.compiled` directly (its `declare`
-tool is scoped to the two `*.declared` events), so brain-driven rollback isn't
-wired — only command/seed-driven. And replay-from-log still isn't a kernel
-operation: the capabilities directory is mutated in place, not rebuilt from the event stream.
+**Honest gaps (these became the refutation).** Installing arbitrary bytes
+verbatim is an arbitrary-code-execution path: before this slice the only attack
+surface was tricking the receiver's own (sandboxed, cooperative) LLM; after it,
+any seed could hand over a hostile binary. Worse, a shipped binary *skips the
+compiler entirely*, so it never adapts to the receiver's garden — it defeats the
+two invariants (receiver adaptation, finite trust surface) that justify the whole
+design. The "runs with no LLM!" property I was proud of is exactly the smell:
+"no LLM" means "no adaptation, arbitrary code."
 
-**Next (slice 5 candidates).** Let the brain restore/replicate (widen `declare`
-to `script.compiled`, so "undo that" becomes brain-callable); a seed-signing /
-trust tier gating verbatim installs; or rebuild-capabilities-from-log so a fresh
-receiver reaches identical capabilities state by pure replay.
+→ **Refuted.** See Slice 5 for the corrected form. `poc/replicant` (the
+shipped-code quine) was removed; the kernel no longer installs code from an
+event.
+
+---
+
+## Slice 5 — the loop carries specs; code reuse is kernel-only (VALIDATED)
+
+**Hypothesis.** The value Slice 4 reached for — precision and exact-code reuse —
+can be had *without* importing code, by separating two things Slice 4 conflated:
+**import** (run foreign novel bytes — breaks adaptation and trust) versus
+**restore** (re-install bytes the receiver's own compiler already authored and
+already ran — breaks neither). Keep restore, kill import.
+
+**Slice.** Three changes:
+- `script.compiled` is now a **kernel-only** event. `grow`'s replay and
+  `runCommand` both drop any `script.compiled` a seed or command emits (with a
+  warning), so every receipt in the log is provably kernel-authored.
+- Exact-code reuse exists only as **`self restore <name> [seq]`** — a kernel
+  operation that re-installs an earlier receipt (rollback one, or pin a seq) and
+  logs a fresh receipt. Because only the kernel writes and reads receipts, a
+  restore can only reinstate code this receiver already compiled.
+- Precision returns as a **reference implementation**: an optional
+  `implementation` field on a declaration. The compiler is handed it as a strong
+  starting point to *verify against the pipe contract and adapt to the garden* —
+  never installed as-is. `poc/wall` is the canonical example.
+
+**Evidence.**
+- Reserve holds: a command emitting a `script.compiled` is ignored — the target
+  script is untouched and no foreign receipt reaches the log (test +
+  end-to-end).
+- `Restore` rolls back one version and pins by seq, and errors cleanly on a
+  single-version or unknown capability (unit tests over hand-built logs).
+- The reference implementation reaches the compile prompt (test); the LLM, not
+  the kernel, still authors every binary, so adaptation is never skipped.
+
+**Decision: keep.** Attack surface is back to its pre-Slice-4 size — the only way
+code enters the system is the compiler. Receiver adaptation is unconditional
+again. Rollback survived as a small kernel op; "ship a binary" was correctly
+lost. The kernel acts on **two** events once more (`command.declared`,
+`projector.declared`); `script.compiled` reverts to a kernel-only receipt.
+
+**Honest note.** `self restore` is genuine kernel code (not a seed) — but it
+*reads* the log and reinstates the kernel's own output, so it can't be a seed
+without re-opening the code-install hole. That's the right place to spend kernel
+LOC. The brain still can't trigger a restore (its `declare` tool is scoped to the
+two `*.declared` events); wiring "undo that" to the brain is the next candidate.
 
 ---
 
@@ -243,15 +288,18 @@ The seeds are declarations; an LLM compiles them into the `tick`/`population`/
 `buildlog` scripts at grow time (garden-aware). Same seed, different receiver,
 different binary — but the same emergent behaviour.
 
-Slice 4's `poc/replicant` needs **no LLM** — it ships its code, so the loop is
-deterministic:
+Slice 5's `poc/wall` shows the reference-implementation path — a declaration that
+carries precise code the compiler verifies and adapts (an LLM is the compiler, so
+configure one):
 
 ```sh
 go build -o self .
-export SELF_HOME=$(mktemp -d)        # no SELF_LLM_*, no stub: nothing to compile
+export SELF_HOME=$(mktemp -d) SELF_LLM_*=...   # the compiler
 self init
-self grow poc/replicant             # "shipped verbatim — skipping compile"
-self run replicant                # generation 1; re-installs its own exact source
-self run replicant                # generation 2; installed script byte-identical
-self live                           # browse /lineage to watch the generations
+self grow poc/wall            # compiles post + wall from declarations + reference impls
+self run post claude "hello"  # append a message
+self show wall                # render the board
+# then, after a re-grow changes a capability: roll it back, audit-faithfully
+self history                  # find an earlier script.compiled seq
+self restore wall <seq>       # reinstate that exact, kernel-authored version
 ```

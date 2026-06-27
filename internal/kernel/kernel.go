@@ -243,6 +243,7 @@ func buildHTML(home string, commands []CommandInfo, projectors []ProjectorInfo, 
 		{"self show <name>", "render a projection (browser, or stdout when piped)"},
 		{"self think \"…\"", "ask the brain"},
 		{"self heartbeat", "one self-improvement cycle"},
+		{"self restore <name> [seq]", "roll a capability back to an earlier version"},
 		{"self grow <seed>", "grow a new capability from a seed"},
 	} {
 		b.WriteString(fmt.Sprintf("<tr><td>%s</td><td>%s</td></tr>\n", esc(row[0]), esc(row[1])))
@@ -285,7 +286,7 @@ func buildHTML(home string, commands []CommandInfo, projectors []ProjectorInfo, 
 	b.WriteString("<dt>kernel.initialized</dt><dd>written by <code>self init</code></dd>\n")
 	b.WriteString("<dt>command.declared</dt><dd>compiled into a command by <code>self grow</code> and <code>self run</code></dd>\n")
 	b.WriteString("<dt>projector.declared</dt><dd>compiled into a projection by <code>self grow</code> and <code>self run</code></dd>\n")
-	b.WriteString("<dt>script.compiled</dt><dd>logged for every compile; also <em>acted on</em> — a seed or command may emit one to install an exact script verbatim (no LLM), so the loop can carry code, not just a spec. Re-emitting an older one from the log is rollback.</dd>\n")
+	b.WriteString("<dt>script.compiled</dt><dd>a <strong>kernel-only</strong> receipt of a compile. Seeds and commands may not emit it — I only ever run code my own compiler authored, so the attack surface stays finite. <code>self restore</code> reads these receipts to roll a capability back to an earlier version.</dd>\n")
 	b.WriteString("<dt>seed.planted</dt><dd>written by <code>self grow</code> as a receipt</dd>\n")
 	b.WriteString("</dl>\n")
 
@@ -346,22 +347,22 @@ func buildHTML(home string, commands []CommandInfo, projectors []ProjectorInfo, 
 	return b.String()
 }
 
-// CompileDeclarations scans events for command.declared, projector.declared,
-// and script.compiled, installs the resulting scripts into capabilities/, and
-// re-renders kernel.html. Declarations are compiled via the LLM compiler (a
-// spec → a fresh binary); a script.compiled is installed verbatim (exact code,
-// no LLM round-trip). Latest wins — a re-declaration or re-install overwrites
-// the script. Returns the names of commands and projectors affected.
+// CompileDeclarations scans events for command.declared and projector.declared,
+// compiles each via the LLM compiler (a spec → a fresh binary, adapted to the
+// receiver's garden), writes the scripts into capabilities/, logs a
+// script.compiled receipt, and re-renders kernel.html. Latest wins — a
+// re-declaration overwrites the script. Returns the names affected.
 //
 // This is the strange-loop hook: a command (e.g. chat) can emit declarations
-// for new capabilities and the kernel compiles them on the fly. By also
-// honoring script.compiled, a command can carry exact code — not just a spec —
-// forward: it can re-emit its own source (a quine / deterministic replicator)
-// or replay an older script.compiled from the log to roll a capability back, no
-// re-compilation, no drift. Rollback and replication thus need no kernel code;
-// they are seeds that read the log on stdin and re-emit the script they want.
-// The event log keeps every version for audit; capabilities/ holds only the
-// latest.
+// for new capabilities and the kernel compiles them on the fly. The loop only
+// ever carries SPECS — the LLM is always the compiler, so every binary is
+// authored for this receiver and adaptation is never skipped. The kernel does
+// NOT install code from an event: script.compiled is a kernel-only receipt (see
+// the reserve guard in runCommand and grow), never an instruction. Exact-code
+// reuse exists only as rollback, and only the kernel performs it (see Restore),
+// so the sole way code enters the system is through the compiler — the original,
+// finite attack surface. The event log keeps every receipt for audit and
+// rollback; capabilities/ holds only the latest.
 func CompileDeclarations(home string, events []event.Event) (commands, projectors []string, err error) {
 	compiler := seed.NewCompiler(home)
 	capDir := filepath.Join(home, "capabilities")
@@ -410,24 +411,6 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 			fmt.Printf(" compiled\n")
 			projectors = append(projectors, proj.Name)
 			compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
-
-		case event.ScriptCompiled:
-			// A command emitted an exact script to install — the strange loop
-			// carrying code, not a spec. invoke already appended this event to
-			// the log, so the provenance is recorded; we only install it to the
-			// capabilities/ and must NOT re-log it (that would duplicate the entry).
-			kind, name, iErr := InstallScript(capDir, e.Payload)
-			if iErr != nil {
-				return nil, nil, iErr
-			}
-			switch kind {
-			case "command":
-				fmt.Printf("installing command %q verbatim... done\n", name)
-				commands = append(commands, name)
-			case "projector":
-				fmt.Printf("installing projector %q verbatim... done\n", name)
-				projectors = append(projectors, name)
-			}
 		}
 	}
 
@@ -450,16 +433,13 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 	return commands, projectors, nil
 }
 
-// InstallScript installs an exact script from a script.compiled payload into
-// capabilities/, verbatim — no compilation. Returns the kind ("command" or
-// "projector") and name installed; an empty kind means there was nothing to
-// install (a provenance-only payload with no script, or no name). This is the
-// exact-code half of the strange loop: a command.declared/projector.declared is
-// a spec the LLM compiles into a fresh binary, while a script.compiled is code
-// installed as-is. So a seed can ship a binary (grow honors it) and a command
-// can carry its own source forward — a quine, a deterministic replicator, or a
-// rollback that re-emits an older logged script (invoke honors it).
-func InstallScript(capDir string, payload json.RawMessage) (kind, name string, err error) {
+// installScript writes an exact script from a script.compiled payload into
+// capabilities/, verbatim. It is kernel-internal — used only by Restore, never
+// from an event a command or seed emitted, so the only bytes it ever writes are
+// ones the kernel itself compiled and logged earlier. Returns the kind
+// ("command" or "projector") and name; an empty kind means there was nothing to
+// install (no script or no name).
+func installScript(capDir string, payload json.RawMessage) (kind, name string, err error) {
 	var cs struct {
 		Type   string `json:"type"`
 		Name   string `json:"name"`
@@ -469,7 +449,7 @@ func InstallScript(capDir string, payload json.RawMessage) (kind, name string, e
 		return "", "", fmt.Errorf("parse script.compiled: %w", uErr)
 	}
 	if cs.Name == "" || cs.Script == "" {
-		return "", "", nil // provenance-only or malformed — nothing to install
+		return "", "", nil
 	}
 	if strings.ContainsAny(cs.Name, `/\`) || strings.Contains(cs.Name, "..") {
 		return "", "", fmt.Errorf("script.compiled: unsafe name %q", cs.Name)
@@ -482,6 +462,82 @@ func InstallScript(capDir string, payload json.RawMessage) (kind, name string, e
 	default:
 		return "", "", fmt.Errorf("script.compiled: unknown type %q", cs.Type)
 	}
+}
+
+// Restore re-installs a capability from an older script.compiled receipt in the
+// log — the kernel's audit-faithful rollback. With targetSeq == 0 it rolls back
+// one version (the most recent receipt for name *before* the current one); with
+// targetSeq > 0 it restores the receipt at exactly that seq. The bytes are
+// re-installed into capabilities/ and a fresh script.compiled receipt is logged
+// so the log stays the source of truth and the restore is itself rollback-able.
+//
+// This is the ONLY path that reinstalls exact code, and only the kernel walks
+// it. Because script.compiled is kernel-only (commands/seeds may not emit it),
+// every receipt it considers was authored by the compiler for THIS receiver —
+// so a restore can never introduce foreign code or skip adaptation. It adds no
+// attack surface beyond the compiler itself: the bytes already ran here once.
+func Restore(home, name string, targetSeq int) (restoredSeq int, kind string, err error) {
+	events, err := openEventStore(home).Read()
+	if err != nil {
+		return 0, "", err
+	}
+	type receipt struct {
+		seq     int
+		payload json.RawMessage
+		typ     string
+	}
+	var receipts []receipt
+	for _, e := range events {
+		if e.Name != event.ScriptCompiled {
+			continue
+		}
+		var cs struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(e.Payload, &cs) != nil || cs.Name != name {
+			continue
+		}
+		receipts = append(receipts, receipt{e.Seq, e.Payload, cs.Type})
+	}
+	if len(receipts) == 0 {
+		return 0, "", fmt.Errorf("no compiled history for %q — nothing to restore (see 'self ls')", name)
+	}
+
+	var chosen receipt
+	if targetSeq > 0 {
+		found := false
+		for _, r := range receipts {
+			if r.seq == targetSeq {
+				chosen, found = r, true
+				break
+			}
+		}
+		if !found {
+			return 0, "", fmt.Errorf("no script.compiled for %q at seq %d (run 'self history' to find one)", name, targetSeq)
+		}
+	} else {
+		if len(receipts) < 2 {
+			return 0, "", fmt.Errorf("%q has only one compiled version (seq %d) — nothing to roll back to; pass a seq to restore it explicitly", name, receipts[0].seq)
+		}
+		chosen = receipts[len(receipts)-2] // the version before the current one
+	}
+
+	capDir := filepath.Join(home, "capabilities")
+	k, _, iErr := installScript(capDir, chosen.payload)
+	if iErr != nil {
+		return 0, "", iErr
+	}
+	// Re-log the restored bytes as a fresh kernel receipt so the log remains the
+	// source of truth (latest receipt == what's installed).
+	e := event.New(event.ScriptCompiled, chosen.payload)
+	if aErr := store.Open(home).Append(&e); aErr != nil {
+		return 0, "", fmt.Errorf("append restore receipt: %w", aErr)
+	}
+	if rErr := RenderHTML(home); rErr != nil {
+		return 0, "", fmt.Errorf("re-render kernel.html: %w", rErr)
+	}
+	return chosen.seq, k, nil
 }
 
 // Wiring is the parsed event→projector map extracted from kernel.html.

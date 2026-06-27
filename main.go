@@ -55,6 +55,12 @@ func main() {
 		err = cmdThink(home, prompt)
 	case "heartbeat":
 		err = cmdHeartbeat(home)
+	case "restore":
+		if len(args) < 1 {
+			err = fmt.Errorf("usage: self restore <name> [seq]")
+		} else {
+			err = cmdRestore(home, args)
+		}
 	case "show":
 		if len(args) < 1 {
 			err = fmt.Errorf("usage: self show <projection>")
@@ -115,6 +121,7 @@ usage: self [command] [args]
   self run <command> ...  run a capability — append events, refresh projections
   self think "..."        ask the brain (LLM + garden exploration)
   self heartbeat          run one self-improvement cycle (brain reflects & grows)
+  self restore <name> [seq]   roll a capability back to an earlier compiled version
   self show <name>        render a projection (piped: HTML to stdout; else open in browser)
   self live [port]        start the live garden explicitly (default port 7777)
   self history [-n N] [--raw]   recent events, newest last
@@ -152,18 +159,20 @@ events the kernel acts on:
   kernel.initialized   written by 'self init'
   command.declared     compiled into a command by 'self grow' AND 'self run'
   projector.declared   compiled into a projection by 'self grow' AND 'self run'
-  script.compiled      logged for every compile; ALSO acted on — a seed or
-                       command may emit one to install an exact script verbatim
-                       (no LLM), so the loop carries code, not just a spec.
-                       Re-emitting an older one from the log is rollback.
+  script.compiled      KERNEL-ONLY receipt of a compile. Seeds and commands may
+                       NOT emit it — the kernel only ever runs code its own
+                       compiler authored, so the attack surface stays finite.
+                       'self restore' reads these receipts to roll back.
   seed.planted         written by 'self grow' as a receipt
   everything else      comes from seeds, or commands that emit declarations
 
-At compile time and via 'self think', the brain gets a read-only bash tool
-(cwd=SELF_HOME) to explore the garden — capabilities, events, wiring,
-projections — and adapt to my current state. Capabilities that need
-intelligence call 'self think'; the kernel is the sole steward of LLM
-credentials.
+The loop carries SPECS, not code: the LLM is always the compiler, so every
+binary is authored for this receiver and adaptation is never skipped. A seed may
+carry a reference implementation (an "implementation" field on a declaration) —
+the compiler verifies it against the pipe contract and adapts it; it is never
+installed as-is. At compile time and via 'self think', the brain gets a
+read-only bash tool (cwd=SELF_HOME) to explore the garden and adapt to my
+current state. The kernel is the sole steward of LLM credentials.
 `)
 }
 
@@ -207,31 +216,7 @@ func cmdGrow(home string, seedDir string) error {
 	}
 	var compiledScripts []compiled
 
-	// A seed may ship a capability as exact code (a script.compiled event)
-	// instead of, or alongside, its declaration. When it does, the declaration
-	// still serves as the spec — it puts the capability into kernel.html's
-	// wiring/identity — but there's no point asking the LLM to re-derive a
-	// binary the seed already carries. Pre-scan the shipped scripts so the
-	// compile loops below skip those names; the replay loop installs them.
-	shipped := map[string]bool{}
-	for _, e := range manifest.Events {
-		if e.Name != event.ScriptCompiled {
-			continue
-		}
-		var cs struct {
-			Type string `json:"type"`
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(e.Payload, &cs) == nil && cs.Name != "" {
-			shipped[cs.Type+"/"+cs.Name] = true
-		}
-	}
-
 	for _, cmd := range manifest.Commands {
-		if shipped["command/"+cmd.Name] {
-			fmt.Printf("command %q shipped verbatim — skipping compile\n", cmd.Name)
-			continue
-		}
 		fmt.Printf("compiling command %q...", cmd.Name)
 		script, err := compiler.CompileCommand(cmd)
 		if err != nil {
@@ -246,10 +231,6 @@ func cmdGrow(home string, seedDir string) error {
 	}
 
 	for _, proj := range manifest.Projectors {
-		if shipped["projector/"+proj.Name] {
-			fmt.Printf("projector %q shipped verbatim — skipping compile\n", proj.Name)
-			continue
-		}
 		fmt.Printf("compiling projector %q...", proj.Name)
 		script, err := compiler.CompileProjector(proj)
 		if err != nil {
@@ -267,26 +248,20 @@ func cmdGrow(home string, seedDir string) error {
 	contentCount := 0
 	for i := range manifest.Events {
 		e := manifest.Events[i]
+		// script.compiled is a kernel-only receipt: the kernel writes it when it
+		// compiles, and Restore reads it to roll back. A seed may not supply one
+		// — accepting it would mean installing code the receiver's compiler never
+		// authored (foreign bytes, no adaptation, an open attack surface). Drop
+		// it; a seed carries SPECS (declarations), optionally with a reference
+		// implementation the compiler verifies and adapts.
+		if e.Name == event.ScriptCompiled {
+			fmt.Fprintf(os.Stderr, "self: ignoring script.compiled in seed (kernel-only event; ship a declaration, not code)\n")
+			continue
+		}
 		isDeclaration := e.Name == event.CommandDeclared || e.Name == event.ProjectorDeclared
 		fresh := event.New(e.Name, e.Payload)
 		if err := st.Append(&fresh); err != nil {
 			return err
-		}
-		// A seed can ship exact code: a script.compiled event is installed
-		// verbatim (no LLM), so a seed isn't limited to specs the compiler must
-		// re-derive — it can carry a known-good binary. If the seed also
-		// declared the same name above, this overwrites that fresh compile with
-		// the shipped script. It's already appended (provenance), so don't
-		// re-log it; it's an install, not replayed content.
-		if e.Name == event.ScriptCompiled {
-			kind, name, iErr := kernel.InstallScript(capDir, e.Payload)
-			if iErr != nil {
-				return iErr
-			}
-			if kind != "" {
-				fmt.Printf("installing %s %q verbatim... done\n", kind, name)
-			}
-			continue
 		}
 		if !isDeclaration {
 			contentCount++
@@ -378,6 +353,23 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 		return nil, fmt.Errorf("command exited: %w", err)
 	}
 
+	// Reserve script.compiled as kernel-only. A capability emits SPECS
+	// (command.declared / projector.declared) the compiler turns into binaries;
+	// it may not emit a script.compiled, because honoring that would let a
+	// running capability install arbitrary code with no compile, no adaptation,
+	// and an unbounded attack surface. Drop any it emits before they touch the
+	// log, so every script.compiled in the log is provably kernel-authored —
+	// which is what makes Restore safe.
+	kept := newEvents[:0]
+	for _, e := range newEvents {
+		if e.Name == event.ScriptCompiled {
+			fmt.Fprintf(os.Stderr, "self: ignored a script.compiled emitted by %q (kernel-only event; emit a declaration to grow code)\n", command)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	newEvents = kept
+
 	for i := range newEvents {
 		if err := st.Append(&newEvents[i]); err != nil {
 			return nil, err
@@ -385,7 +377,7 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 	}
 
 	// Strange-loop hook: compile any command.declared / projector.declared the
-	// command emitted, so a command can plant new capabilities at invoke time.
+	// command emitted, so a command can grow new capabilities at run time.
 	compiledCmds, compiledProjs, cErr := kernel.CompileDeclarations(home, newEvents)
 	if cErr != nil {
 		fmt.Fprintf(os.Stderr, "self: warning: declaration compile failed: %s\n", cErr)
@@ -430,6 +422,26 @@ func cmdRun(home string, command string, args []string) error {
 	for _, e := range newEvents {
 		fmt.Printf("%s appended seq %d %s\n", e.ID, e.Seq, e.Name)
 	}
+	return nil
+}
+
+// cmdRestore rolls a capability back to an earlier compiled version. With no
+// seq it reverts one version; with a seq (from 'self history') it restores that
+// exact receipt. Only the kernel reinstalls code, and only its own prior
+// output — see kernel.Restore.
+func cmdRestore(home string, args []string) error {
+	name := args[0]
+	seq := 0
+	if len(args) >= 2 {
+		if _, e := fmt.Sscanf(args[1], "%d", &seq); e != nil || seq <= 0 {
+			return fmt.Errorf("seq must be a positive integer from 'self history', got %q", args[1])
+		}
+	}
+	restoredSeq, kind, err := kernel.Restore(home, name, seq)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("restored %s %q from seq %d (logged a fresh receipt; reversible again)\n", kind, name, restoredSeq)
 	return nil
 }
 

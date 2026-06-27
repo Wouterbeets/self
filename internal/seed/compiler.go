@@ -510,6 +510,8 @@ Before writing the script, explore the garden with bash:
 
 If the new command's event name overlaps with or is semantically adjacent to existing events, integrate: align field names with existing conventions, avoid collisions, and consider whether the new command should produce events that existing projectors can consume. If existing events carry similar information under different names, the script can co-produce the existing event name so existing projectors pick it up.
 
+If the declaration includes a REFERENCE IMPLEMENTATION, treat it as a strong, precise starting point — not gospel. Verify it against the pipe contract (argv in, JSONL events out, the declared event name and fields), read it for bugs, and adapt it to THIS garden's actual event vocabulary and conventions you found while exploring. Keep what is correct, fix or remap what does not fit. You are still the compiler: never submit code you have not verified.
+
 When you're done exploring, call submit_command with the full script source.`
 
 const ProjectorSystemPrompt = `You are the self compiler. You read a projector declaration and write an executable projector script. You have a bash tool to explore the garden — the current state of self — before compiling.
@@ -528,10 +530,12 @@ Before writing the script, explore the garden with bash:
 
 If the declaration's consumed events overlap with or are semantically adjacent to existing events in the stream, adapt: extend the projector's filter to also consume the existing events, mapping their fields into the render. For example, if a finance projector declares consumption of finance.expenditure_added but the stream already has shopping_bill_uploaded events with {vendor, amount, date}, the projector should consume both and map vendor→category. This is receiver-controlled adaptation — the seed adapts to the garden, not the other way around.
 
+If the declaration includes a REFERENCE IMPLEMENTATION, treat it as a strong, precise starting point — not gospel. Verify it against the contract (events on stdin, bare semantic HTML on stdout, the class vocabulary above, /run/ forms for affordances), read it for bugs, and adapt it to the events THIS garden actually carries. Keep what is correct, fix or remap what does not fit. You are still the compiler: never submit code you have not verified.
+
 When you're done exploring, call submit_projector with the full script source.`
 
 func buildCommandPrompt(cmd Command) string {
-	return fmt.Sprintf(`Compile this command declaration into a command script.
+	prompt := fmt.Sprintf(`Compile this command declaration into a command script.
 
 COMMAND: %s
   description: %s
@@ -546,10 +550,11 @@ Write the command_script. It must produce an event with the declared name and po
 		cmd.Description, jsonRepr(cmd.Params),
 		cmd.Event.Name, jsonRepr(cmd.Event.Fields),
 	)
+	return prompt + referenceBlock(cmd.Implementation)
 }
 
 func buildProjectorPrompt(p ProjectorDecl) string {
-	return fmt.Sprintf(`Compile this projector declaration into a projector script.
+	prompt := fmt.Sprintf(`Compile this projector declaration into a projector script.
 
 PROJECTOR declaration:
   name: %s
@@ -559,6 +564,18 @@ PROJECTOR declaration:
 Write the projector_script. It must filter events by the consumed names and render HTML.`,
 		p.Name, p.Description, jsonRepr(p.Consumes),
 	)
+	return prompt + referenceBlock(p.Implementation)
+}
+
+// referenceBlock appends a seed-supplied reference implementation to a compile
+// prompt, if present. It is a starting point the LLM verifies and adapts — not
+// code the kernel installs as-is — so precision from the seed author and
+// receiver adaptation both survive.
+func referenceBlock(impl string) string {
+	if strings.TrimSpace(impl) == "" {
+		return ""
+	}
+	return "\n\nREFERENCE IMPLEMENTATION (verify against the contract and adapt to this garden — do not copy blindly):\n```\n" + impl + "\n```"
 }
 
 const BrainSystemPrompt = `You are self's brain — a general-purpose agent that lives inside the kernel. Commands call you via 'self think' when they need intelligence.

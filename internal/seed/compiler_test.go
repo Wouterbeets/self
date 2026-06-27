@@ -50,6 +50,22 @@ func TestStubProjectorPureStdout(t *testing.T) {
 	}
 }
 
+func TestReferenceImplementationReachesPrompt(t *testing.T) {
+	marker := "MARKER_ref_impl_42"
+	cmd := Command{Name: "post", Description: "post", Event: EventDecl{Name: "wall.posted"},
+		Implementation: "#!/usr/bin/env python3\n# " + marker + "\n"}
+	if got := buildCommandPrompt(cmd); !strings.Contains(got, marker) || !strings.Contains(got, "REFERENCE IMPLEMENTATION") {
+		t.Errorf("command prompt missing reference implementation:\n%s", got)
+	}
+	if got := buildCommandPrompt(Command{Name: "x", Event: EventDecl{Name: "x.done"}}); strings.Contains(got, "REFERENCE IMPLEMENTATION") {
+		t.Error("no implementation should mean no reference block")
+	}
+	proj := ProjectorDecl{Name: "wall", Consumes: []string{"wall.posted"}, Implementation: "# " + marker}
+	if got := buildProjectorPrompt(proj); !strings.Contains(got, marker) {
+		t.Errorf("projector prompt missing reference implementation:\n%s", got)
+	}
+}
+
 func TestWriteCommandScript(t *testing.T) {
 	dir := t.TempDir()
 	if err := WriteCommandScript(dir, "test-cmd", "#!/usr/bin/env python3\nprint(1)\n"); err != nil {

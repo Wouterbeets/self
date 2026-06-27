@@ -18,9 +18,10 @@ projections, and renders HTML that you and your agent see identically.
   the human reads in a browser and the agent reads as context — the same reality.
 - **Capabilities grow.** A capability is LLM-compiled from a declaration, not
   hand-written into the kernel. The kernel stays minimal; `self` extends itself.
-- **The strange loop.** A running capability can declare *new* capabilities, or
-  ship exact code, and the kernel installs them on the spot — so `self` can grow
-  itself while it runs.
+- **The strange loop.** A running capability can declare *new* capabilities, and
+  the kernel compiles them on the spot — so `self` can grow itself while it runs.
+  The loop always carries *specs*, never code: the LLM is always the compiler, so
+  every binary is authored for this receiver and nothing foreign ever runs.
 
 ## the loop
 
@@ -53,6 +54,7 @@ capabilities. That's the strange loop.
 | `self run <command> [args]` | Run a capability — append events, refresh affected projections |
 | `self think "..."` | Ask the brain (LLM + garden exploration) |
 | `self heartbeat` | One self-improvement cycle (the brain reflects on the garden and may grow a capability) |
+| `self restore <name> [seq]` | Roll a capability back to an earlier compiled version (kernel-only, audit-faithful) |
 | `self show <name>` | Render a projection. Piped → HTML on stdout; otherwise render and open in a browser |
 | `self live [port]` | Start the web server explicitly (default port 7777) |
 | `self history [-n N] [--raw]` | Recent events, human-readable by default |
@@ -86,13 +88,10 @@ adaptation.
 
 ## self-improvement (the strange loop)
 
-`self run` doesn't just append events — it scans them for `command.declared`,
-`projector.declared`, and `script.compiled`. If a capability emits a
-declaration, the kernel compiles it on the spot; if it emits a `script.compiled`,
-the kernel installs that exact script verbatim (no LLM). Either way the scripts
-land in `capabilities/`, so a capability can grow new capabilities — including
-re-declaring itself with a fresh spec, or re-emitting its own exact source to
-carry code forward unchanged.
+`self run` doesn't just append events — it scans them for `command.declared` and
+`projector.declared`. If a capability emits a declaration, the kernel compiles it
+on the spot and the script lands in `capabilities/`, so a capability can grow new
+capabilities — including re-declaring itself with a fresh spec.
 
 ```sh
 self grow seeds/chat               # grow the chat interface (command + projection)
@@ -103,12 +102,25 @@ self run chat "add a summarize command that ..."
 self run summarize "..."           # the new capability works right away
 ```
 
-The loop carries **specs** by default — a `*.declared` event is re-compiled into
-a fresh binary — but it can also carry **exact code**: the kernel acts on
-`script.compiled` too. So a capability can re-emit its own source (a quine /
-deterministic replicator — see `poc/replicant`), and rollback is just a seed
-that finds an older `script.compiled` in the log and re-emits it — no
-re-compilation, no drift, **no kernel command for rollback**.
+**The loop carries specs, never code.** The LLM is *always* the compiler, so
+every binary is authored for this receiver — adaptation is never skipped, and the
+only way code enters the system is through the compiler (the original, finite
+attack surface). A capability cannot install a binary: `script.compiled` is a
+**kernel-only** receipt, ignored if a seed or command emits one.
+
+Two consequences worth naming:
+
+- **Precision without code injection.** A seed that wants exact, complex behavior
+  ships a *reference implementation* — an `implementation` field on a declaration.
+  The compiler verifies it against the pipe contract and adapts it to the local
+  garden; it is never installed as-is. Near-identical power to handing over code,
+  but coherent with receiver adaptation and with zero new attack surface (see
+  `poc/wall`).
+- **Rollback is the kernel's job, not a seed's.** Every compile is logged as a
+  `script.compiled` receipt. `self restore <name> [seq]` re-installs an earlier
+  one — and because only the kernel writes and reads those receipts, a restore
+  can only ever reinstate code this receiver's own compiler already authored. No
+  drift, no foreign bytes.
 
 ## self heartbeat
 
@@ -179,10 +191,10 @@ Five things, irreducible:
 1. **event store** — append-only JSONL log (the only truth)
 2. **LLM compiler** — reads `command.declared` / `projector.declared`, explores
    the garden via a read-only bash tool, writes scripts at grow time **and at run
-   time** (the strange loop). Logs every compiled script as a `script.compiled`
-   event, and **installs** a `script.compiled` verbatim (no LLM) when a seed or
-   capability emits one — the exact-code path for quines, replication, and
-   rollback.
+   time** (the strange loop). Logs every compiled script as a kernel-only
+   `script.compiled` receipt; `self restore` reads those receipts to roll back. A
+   declaration may carry a reference implementation the compiler verifies and
+   adapts — but the compiler always authors the binary; no foreign code runs.
 3. **the brain** (`self think`) — the same LLM infrastructure as the compiler,
    exposed as a callable pipe. Capabilities call it; it reads `site/*.html` for
    state and produces valid declarations.
@@ -191,21 +203,24 @@ Five things, irreducible:
 5. **web server** — `self live` serves the materialized `site/` and re-runs
    projections on demand
 
-The kernel acts on three events: `command.declared` and `projector.declared`
-(compile them into binaries) and `script.compiled` (install that binary
-verbatim). It writes three: `kernel.initialized`, `script.compiled`, and
-`seed.planted`. Everything else comes from seeds — or from capabilities that
-emit declarations or shipped scripts at run time.
+The kernel acts on two events: `command.declared` and `projector.declared`
+(compile them into binaries, adapted to this receiver). It writes three:
+`kernel.initialized`, `script.compiled` (a compile receipt — kernel-only, never
+accepted from a seed or command), and `seed.planted`. Everything else comes from
+seeds — or from capabilities that emit declarations at run time.
 
 ## seed format
 
 A seed is a directory containing `events.jsonl`. The first events are typically
 declarations (`command.declared` / `projector.declared`); the rest are content
-the receiver replays on growing. A seed can also ship a capability as **exact
-code** by including a `script.compiled` event — the kernel installs it verbatim,
-no LLM (see `poc/replicant`, which plants and runs with no LLM at all). A seed
-with only declarations is a pure capability seed; one with only content is a
-pure memory seed; a full seed has both.
+the receiver replays on growing. A declaration may carry an **`implementation`**
+field — a reference implementation the compiler verifies against the pipe
+contract and adapts to the local garden (never installed as-is), so a seed can
+be precise without importing code (see `poc/wall`). A seed with only declarations
+is a pure capability seed; one with only content is a pure memory seed; a full
+seed has both. A seed may **not** carry a `script.compiled` event — that's a
+kernel-only receipt, and accepting code from a seed would break both receiver
+adaptation and the trust model.
 
 ## environment
 
@@ -229,16 +244,20 @@ Config precedence (highest first):
 
 ## getting started
 
+An LLM (opencode-go, a local llama-server, or `SELF_LLM_*`) is the compiler —
+growing a capability means compiling it, so configure one first:
+
 ```sh
 go build -o self .
 export SELF_HOME=$(mktemp -d)      # or just use the default ~/.self
 ./self init
-./self grow poc/replicant          # ships exact code — works with NO LLM
-./self run replicant               # generation 1; re-installs its own source
+./self grow poc/wall               # compiles the wall from its declaration +
+                                   #   reference implementation, adapted to you
+./self run post claude "hello"     # append a message
 ./self                             # start the live garden, visit http://localhost:7777
 ```
 
-With an LLM configured (opencode-go, a local llama-server, or `SELF_LLM_*`):
+Then let it grow itself:
 
 ```sh
 ./self grow seeds/chat
