@@ -48,6 +48,11 @@ type Example struct {
 	Args           []string          `json:"args,omitempty"`
 	Events         []json.RawMessage `json:"events,omitempty"`
 	ExpectContains []string          `json:"expect_contains,omitempty"`
+	// ExpectOrder asserts these substrings appear in stdout in this order (each
+	// present, and each no earlier than the previous). It proves a *ranking* or
+	// sequence, which mere presence (ExpectContains) cannot — e.g. that a hotspots
+	// projector lists the worst place first, not just that both places appear.
+	ExpectOrder []string `json:"expect_order,omitempty"`
 }
 
 type EventDecl struct {
