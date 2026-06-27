@@ -22,8 +22,14 @@ import (
 func main() {
 	home := homeDir()
 
-	// Bare `self` is the most common action: start the live garden (web server).
+	// Bare `self` is the most common action: heal the body from the log, then
+	// start the live garden. Rehydrating first means the working tree always
+	// matches the one truth — clone a home that is just events.jsonl + .secret
+	// and `self` brings the whole body back before serving it.
 	if len(os.Args) < 2 {
+		if _, _, err := rehydrateFromLog(home); err != nil {
+			fmt.Fprintf(os.Stderr, "self: rehydrate: %s\n", err)
+		}
 		if err := cmdServe(home, ""); err != nil {
 			fmt.Fprintf(os.Stderr, "self: %s\n", err)
 			os.Exit(1)
@@ -55,6 +61,8 @@ func main() {
 		err = cmdThink(home, prompt)
 	case "heartbeat":
 		err = cmdHeartbeat(home)
+	case "rehydrate":
+		err = cmdRehydrate(home)
 	case "restore":
 		if len(args) < 1 {
 			err = fmt.Errorf("usage: self restore <name> [seq]")
@@ -115,8 +123,9 @@ strange loop.
 
 usage: self [command] [args]
 
-  self                    start the live garden (web server) — the default
+  self                    rehydrate the body from the log, then start the live garden (the default)
   self init               initialize the baby kernel
+  self rehydrate          rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
   self grow <seed>        grow a new capability from a seed
   self run <command> ...  run a capability — append events, refresh projections
   self think "..."        ask the brain (LLM + garden exploration)
@@ -1092,6 +1101,52 @@ func cmdWhich(home string, name string) error {
 	if !found {
 		return fmt.Errorf("%q is neither a command nor a projection — try 'self ls'", name)
 	}
+	return nil
+}
+
+// rehydrateFromLog rebuilds the on-disk body — capabilities/ and the rendered
+// site/ — from the event log's signed receipts, so the working tree is a pure
+// materialization of the one truth. No LLM, no network; safe to run repeatedly
+// (it reinstalls identical bytes). This is what makes events.jsonl (+ the home's
+// .secret, which verifies the receipts) a sufficient artifact: drop those two
+// files into a fresh home and the whole body comes back.
+func rehydrateFromLog(home string) (commands, projectors []string, err error) {
+	commands, projectors, err = kernel.Rehydrate(home)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(commands)+len(projectors) == 0 {
+		return commands, projectors, nil // uninitialized, or no signed receipts to install
+	}
+	if rErr := kernel.RenderHTML(home); rErr != nil {
+		return commands, projectors, rErr
+	}
+	for _, name := range projectors {
+		if rErr := runProjectorToSite(home, name); rErr != nil {
+			fmt.Fprintf(os.Stderr, "self: rehydrate render %q: %s\n", name, rErr)
+		}
+	}
+	return commands, projectors, nil
+}
+
+// cmdRehydrate explicitly rebuilds the body from the log and reports what it
+// reinstated. Bare `self` does this automatically before serving.
+func cmdRehydrate(home string) error {
+	commands, projectors, err := rehydrateFromLog(home)
+	if err != nil {
+		return err
+	}
+	if len(commands)+len(projectors) == 0 {
+		fmt.Println("rehydrate: nothing signed to reinstall.")
+		fmt.Println("  Either this home is uninitialized, or its .secret did not sign the log's")
+		fmt.Println("  receipts (a fresh key can't verify another home's bytes). Copy the home's")
+		fmt.Println("  .secret alongside events.jsonl, or re-grow from the log's declarations.")
+		return nil
+	}
+	fmt.Printf("rehydrated from the log: %d command(s), %d projection(s) reinstalled and rendered\n",
+		len(commands), len(projectors))
+	fmt.Printf("  commands:    %s\n", strings.Join(commands, ", "))
+	fmt.Printf("  projectors:  %s\n", strings.Join(projectors, ", "))
 	return nil
 }
 

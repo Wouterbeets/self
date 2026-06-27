@@ -48,8 +48,9 @@ capabilities. That's the strange loop.
 
 | command | behavior |
 | --- | --- |
-| `self` | Default: start the web server / live garden (the most common action) |
+| `self` | Default: rehydrate the body from the log, then start the live garden (the most common action) |
 | `self init` | Initialize the baby kernel |
+| `self rehydrate` | Rebuild `capabilities/` + `site/` from the log's signed receipts — no LLM, no network |
 | `self grow <seed>` | Grow a new capability from a seed |
 | `self run <command> [args]` | Run a capability — append events, refresh affected projections |
 | `self think "..."` | Ask the brain (LLM + garden exploration) |
@@ -193,6 +194,16 @@ Run `self where` to see all of this for your home, `self ls commands` /
 `self ls projectors` for the full file paths, and `self which <name>` for one.
 Agents (and you) read `site/` directly — plain files, no API. `self live`
 exposes them over HTTP with `/<name>` re-rendered live against current events.
+
+Only the first two files are irreducible. `capabilities/` and `site/` are a
+*materialization* of the log: every compiled script lives in the log as a signed
+`script.compiled` receipt, and every projection is a pure replay. `self
+rehydrate` (run automatically by bare `self` before serving) rebuilds the whole
+body from `events.jsonl` + `.secret`, with no LLM and no network — so a home can
+be stored, committed, and moved as just those two files. The `.secret` is what
+verifies the receipts; without the signing key a log's bytes are inert (you'd
+re-grow from its declarations through a brain instead). See `garden/` for a body
+stored exactly this way.
 
 ## what the kernel is
 

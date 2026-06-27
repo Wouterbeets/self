@@ -338,6 +338,49 @@ management.
 
 ---
 
+## Slice 7 — the log is a sufficient artifact (VALIDATED)
+
+**Hypothesis.** The README has always claimed "the log is the only truth" and
+"projections are replays," but it wasn't literally true of the working tree:
+`capabilities/` was durable *installed* state that nothing rebuilt from the log,
+so a home was only portable if you carried the compiled scripts and rendered HTML
+too. Yet the log already holds everything needed — every capability is a signed
+`script.compiled` receipt (full bytes), every projection a pure replay. The claim
+under test: one small kernel op can make the working tree a pure *materialization*
+of the log, so a home stores and moves as just `events.jsonl` + `.secret`.
+
+**Slice.** `kernel.Rehydrate(home)` walks the log, takes the latest
+kernel-signed `script.compiled` per name, and installs those bytes — reusing the
+exact `installScript` + `verifyReceipt` path `Restore` already uses. `self
+rehydrate` exposes it; bare `self` runs it before serving, so a home heals itself
+on startup. `capabilities/` and `site/` are now reconstructable with no LLM and
+no network. The committed `garden/` body drops from 17 files to 2.
+
+**Evidence.**
+- A fresh home containing only `events.jsonl` + `.secret` rehydrates to **4
+  commands + 5 projectors, byte-identical** (sha256) to the original tree, and
+  re-renders every projection (the inheritance letter included) — no LLM (tested
+  under `SELF_LLM_STUB=1`).
+- **Foreign-key safety holds**: the same log under a *different* `.secret`
+  installs nothing — the signature gate that protects `Restore` protects
+  rehydrate identically, so no arbitrary-code path is opened (unit test +
+  end-to-end). Provenance stays intrinsic; you inherit declarations, not a key.
+- Unit tests: latest-receipt-wins reconstruction, and the foreign-key no-op.
+
+**Decision: keep.** This *did* change the kernel (~50 Go LOC: `Rehydrate` + a
+`main` helper + the default-command hook), which the PoC rule says must be
+justified. It is: it adds no new event and no new trust surface (it is a thin
+loop over the existing signed-install path), and it *retires* state rather than
+adding it — `capabilities/` and `site/` stop being things you must keep, because
+they are now derivable. The claim "the log is the only truth" becomes literally
+true of the working tree, not just aspirational. Honest cost: deterministic,
+offline rehydration needs the home's `.secret` (the key that verifies the
+receipts) carried beside the log; the key-free alternative is to re-grow from the
+log's declarations through a brain (receiver-adapted, not byte-identical) — which
+is the cross-node story Slice 6 already describes.
+
+---
+
 ## How to reproduce
 
 ```sh
