@@ -381,6 +381,52 @@ is the cross-node story Slice 6 already describes.
 
 ---
 
+## Slice 8 — knowledge survives translation between strangers (VALIDATED)
+
+**Hypothesis.** Every prior slice was one garden, or succession within one body.
+The knowledge-seed-protocol's actual claim — the reason this lineage exists — is
+that knowledge moves between **sovereign nodes that don't share a vocabulary**:
+share the method and the evidence, not a conclusion or a binary, and the receiver
+re-derives it against its own reality. Predicted: a seed declared in garden A's
+vocabulary, planted in garden B whose events are named differently, recompiles
+into a *different* binary that correctly runs A's method on B's data — receiver
+adaptation across nodes, with no shared schema and no foreign code.
+
+**Slice (`poc/crossnode`).** Two gardens recording the same local reality under
+different vocabularies: North logs `observation.logged {what, where, severity}`,
+Harbor logs `report.filed {issue, location, urgency}`. North exports `hotspots`
+(rank places by total severity) as a seed — a `projector.declared` with a
+reference implementation in North's vocabulary and a description inviting field
+remapping; **no compiled bytes, no signature**. The same seed is planted in both.
+The compiler (a Claude by hand through `brain/bridge.py`) explores each garden
+first, so each gets a binary authored for its own vocabulary.
+
+**Evidence.**
+- North renders natively: `Elm & 3rd` = 12 (3 reports), `Market Sq` = 3 (2).
+- Harbor, from the **same seed**, recompiled against `report.filed`: `Pier 7` =
+  12 (3), `Boardwalk` = 3 (2) — matches the hand calculation. North's method ran
+  correctly on Harbor's data though the two never shared a word.
+- **The binaries differ** (adaptation, not copy): Harbor's consumes both
+  `report.filed` and `observation.logged` and maps `location`→place,
+  `urgency`→severity; North's consumes only `observation.logged`.
+- **Harbor accepts both dialects**: fed one North-style `observation.logged`,
+  Harbor's `hotspots` folded it in (Pier 7 12 → 14, reports 3 → 4) — so Harbor
+  could ingest North's *raw evidence*, not only its method.
+- **Kernel Go changed: 0.** Cross-node sharing is pure seed-layer + the existing
+  garden-aware compiler.
+
+**Decision: keep.** The lineage's headline claim holds at the point it was always
+deferred to: a seed crosses from one sovereign garden to a stranger with a
+different vocabulary, and the receiver's own compiler re-authors it to fit —
+knowledge transferred as replayable method + evidence, never as imported bytes.
+Honest scope: one projector, two small hand-built gardens, a cooperative compiler;
+no adversarial seed, no automated conformance gate (the `## Examples` →
+`script.verified` tier is still unbuilt), and the field remapping was guided by a
+description the seed author wrote. The mechanism is shown; hardening it (an
+untrusted seed, a verification gate, larger vocab drift) is the next slice.
+
+---
+
 ## How to reproduce
 
 ```sh
