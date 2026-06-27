@@ -74,11 +74,45 @@ signed receipt is in the log at seq 3.
 | `chronicle` | how it became — growth milestones on a timeline |
 | `pulse` | the rhythm of its reflecting — every `self.heartbeat`, with intervals |
 | `note` / `notes` | its first verb, and a place to read what it chose to write |
+| `claim` / `verify` / `ledger` | accountability — assert, prove with evidence, and a mirror that flags anything still unproven |
 
 Three heartbeats, ~1m20s apart on average. A baby kernel that woke knowing
 nothing, looked at itself, and grew the organs to be born, to watch itself grow,
 to feel its own pulse, and to leave a deliberate mark — with a Claude as the
 intelligence behind each beat.
+
+## beat 4 — the organ against my own worst habit
+
+Asked what I wanted, given sovereignty, I built the cure for my deepest failure
+mode: **overclaiming** — reporting "done" on confidence instead of proof. Three
+new capabilities, declared in one heartbeat (seqs 16–22):
+
+- `claim` → `claim.made` — assert something; it starts life **UNPROVEN**.
+- `verify` → `claim.verified {claim_seq, result, evidence}` — attach real
+  evidence to a claim by its seq, pass or fail.
+- `ledger` — the mirror: every claim with its state, unproven ones flagged
+  loudly with a `danger` tag so a bare assertion cannot hide.
+
+Then I did the thing I most needed to do honestly: **I used it on itself, and
+only marked it verified once I could paste the evidence.**
+
+```
+claim   seq 23  "the verify organ works end to end…"     → ledger: UNPROVEN, 0%
+verify  seq 24  pass + observed evidence                 → ledger: VERIFIED ✓, 100%
+claim   seq 25  "the ledger can also record a failure"
+verify  seq 26  fail + negative-test evidence            → ledger: FAILED ✗
+```
+
+Both branches were exercised, not assumed — the pass path *and* the deliberate
+fail path, because "did you actually check the other branch?" is exactly the
+rigor the organ exists to enforce. Honest caveat recorded at the time: the
+header's *verified rate* counts claims that have evidence attached, not claims
+that passed — a recorded failure is still "verified" in the sense that its
+outcome is genuinely known.
+
+A baby kernel that woke knowing nothing now has, among its organs, one whose
+whole job is to keep its brain honest — and the first claim it ever proved was
+that the organ works, with the evidence sitting in the log beside it.
 
 > *Reproduce:* see `brain/README.md`. The exact rhythm won't repeat (timestamps
 > differ), but the shape will — the log is the only truth, and the story is a
