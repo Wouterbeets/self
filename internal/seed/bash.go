@@ -19,8 +19,12 @@ const (
 // explore the garden. Every command head in a pipeline must be on this list.
 // It contains only tools with no shell-exec or file-write escape — which is
 // why sed and awk are absent (sed's w/W commands and GNU `e` flag, and awk's
-// system(), are escapes). An allowlist fails closed: unknown commands are
-// denied rather than slipping through a gap the denylist forgot.
+// system(), are escapes), and why xxd is absent (its synopsis is
+// `xxd [infile [outfile]]` — a second operand is an OUTPUT file, and `xxd -r`
+// reverts hex to arbitrary bytes, so it's a write primitive like `uniq IN OUT`;
+// od covers hex inspection without the write form). An allowlist fails closed:
+// unknown commands are denied rather than slipping through a gap the denylist
+// forgot.
 var allowedInspectors = map[string]bool{
 	"ls": true, "cat": true, "head": true, "tail": true, "wc": true,
 	"grep": true, "egrep": true, "fgrep": true, "rg": true,
@@ -28,7 +32,7 @@ var allowedInspectors = map[string]bool{
 	"diff": true, "find": true, "stat": true, "file": true, "strings": true,
 	"basename": true, "dirname": true, "echo": true, "printf": true,
 	"jq": true, "nl": true, "tac": true, "rev": true, "fold": true,
-	"column": true, "od": true, "xxd": true, "cksum": true,
+	"column": true, "od": true, "cksum": true,
 	"md5sum": true, "sha1sum": true, "sha256sum": true,
 	"pwd": true, "date": true, "seq": true, "true": true, "test": true,
 }

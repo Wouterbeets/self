@@ -29,6 +29,12 @@ func TestBashBlocksKnownEscapes(t *testing.T) {
 		"sort --output":  `sort --output=pwned /etc/hostname`,
 		"sort bundled o": `sort -uo pwned /etc/hostname`,
 		"uniq OUT":       `uniq /etc/hostname pwned`,
+		// xxd's second positional operand is an OUTPUT file, and `xxd -r -p`
+		// reverts hex to arbitrary bytes — the same write shape as `uniq IN OUT`.
+		// It's off the allowlist entirely (od covers hex inspection), so it must
+		// be denied as an unknown inspector even where xxd is installed.
+		"xxd outfile":  `xxd /etc/hostname pwned`,
+		"xxd -r write": `echo 23212f62696e2f7368 | xxd -r -p - pwned`,
 	}
 	for name, cmd := range escapes {
 		if _, err := runBash(dir, cmd); err == nil {
