@@ -1,0 +1,2 @@
+# the compiled kernel — `go build -o self .` (see README quickstart)
+/self
