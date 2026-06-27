@@ -476,14 +476,21 @@ func VerifyAndLog(home, kind, name, script string, examples []seed.Example) (boo
 	if err != nil {
 		return false, err
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"type":         kind,
-		"name":         name,
-		"passed":       res.OK(),
-		"ran":          res.Ran,
-		"passed_count": res.Passed,
-		"failures":     res.Failures,
-	})
+	examplesJSON, _ := json.Marshal(examples)
+	att := Attestation{
+		Type:           kind,
+		Name:           name,
+		Passed:         res.OK(),
+		Ran:            res.Ran,
+		PassedCount:    res.Passed,
+		Failures:       res.Failures,
+		ScriptSHA256:   SHA256Hex([]byte(script)),
+		ExamplesSHA256: SHA256Hex(examplesJSON),
+	}
+	payload, sErr := SignAttestation(home, att)
+	if sErr != nil {
+		return res.OK(), sErr
+	}
 	e := event.New(event.ScriptVerified, payload)
 	if aErr := store.Open(home).Append(&e); aErr != nil {
 		return res.OK(), aErr

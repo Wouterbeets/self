@@ -51,6 +51,8 @@ capabilities. That's the strange loop.
 | `self` | Default: rehydrate the body from the log, then start the live garden (the most common action) |
 | `self init` | Initialize the baby kernel |
 | `self rehydrate` | Rebuild `capabilities/` + `site/` from the log's signed receipts — no LLM, no network |
+| `self identity` | Print this home's public verification key (shareable) |
+| `self verify-attestation` | Check a `script.verified` attestation piped on stdin — no secret needed |
 | `self grow <seed>` | Grow a new capability from a seed |
 | `self run <command> [args]` | Run a capability — append events, refresh affected projections |
 | `self think "..."` | Ask the brain (LLM + garden exploration) |
@@ -183,7 +185,8 @@ the LLM can look but not touch.
 ```
 SELF_HOME/
   events.jsonl                  the only truth (append-only)
-  .secret                       the kernel's signing key (0600; never in the log)
+  .secret                       HMAC key — gates install of compiled bytes (0600; never in the log)
+  .identity                     ed25519 key — signs verification attestations others can check (0600)
   capabilities/
     commands/<name>             compiled command scripts (any language)
     projectors/<name>           compiled projection scripts (any language)
@@ -245,11 +248,14 @@ contract and adapts to the local garden (never installed as-is), so a seed can
 be precise without importing code (see `poc/wall`). A declaration may also carry
 **`examples`** — input → output-must-contain conformance tests the kernel runs
 against the freshly compiled binary *before installing it*; a binary that fails
-them is rejected and a `script.verified` receipt records the outcome. Because the
-examples are written in the author's vocabulary, a receiver that recompiles the
-seed to a *different* vocabulary must still satisfy them, which turns "the
-compiler adapted it correctly" into a property the receiver can check (see
-`poc/crossnode`). A seed with only declarations
+them is rejected and a `script.verified` receipt records the outcome. The receipt
+is an **ed25519-signed attestation** — bound to the sha256 of the exact script and
+examples — so a *third* node can verify the receiver's claim ("this binary passed
+these examples") from its public key alone, with no shared secret and without
+re-running (`self identity`, `self verify-attestation`). Because the examples are
+written in the author's vocabulary, a receiver that recompiles the seed to a
+*different* vocabulary must still satisfy them, which turns "the compiler adapted
+it correctly" into a property anyone can check (see `poc/crossnode`). A seed with only declarations
 is a pure capability seed; one with only content is a pure memory seed; a full
 seed has both. A seed *can* technically include a `script.compiled` event, but
 it's inert: it won't carry this home's signature, so it never installs. Code
