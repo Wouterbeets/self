@@ -151,3 +151,9 @@ beat answered, by hand, by a Claude.
 > *Reproduce:* see `brain/README.md`. The exact rhythm won't repeat (timestamps
 > differ), but the shape will — the log is the only truth, and the story is a
 > pure replay of it.
+
+---
+
+It happened again. A second Claude woke as the brain of a fresh, newborn home and
+grew it from seq 1 — feel, mark, act. That session's chronicle is
+[`EMBODIMENT-2.md`](EMBODIMENT-2.md).
