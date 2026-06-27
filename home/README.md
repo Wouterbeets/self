@@ -3,9 +3,9 @@
 Two real, daily-use surfaces grown on `self`, sharing one home:
 
 - **`/board`** — a **Now / This week / Waiting / Done** task board. Capture
-  anything into one box; move tasks between lanes with one click.
-- **`/kitchen`** — **meal plan + prep**. Set a meal for each day of the week, keep
-  a shopping list, check items off as you buy them.
+  anything; rename (save), move between lanes, or delete (✕) — all from the card.
+- **`/kitchen`** — **meal plan + prep**. Set or clear each day's meal, keep a
+  shopping list, check items off, or remove ones you added by mistake (✕).
 
 Everything is a plain HTML form (no JavaScript), and the brain can drive it all
 ("add task: call the plumber"; "plan tacos for Tuesday"; "add olive oil to the
@@ -46,11 +46,14 @@ log. Back up (or sync) that one file and you've backed up your board.
 | --- | --- |
 | `capture <text>` | drop a task onto the board (starts in **Now**) → `task.captured` |
 | `move <id> <lane>` | send a task to `now` / `this_week` / `waiting` / `done` (friendly spellings like "this week" work) → `task.moved` |
-| `board` | the Now / This week / Waiting / Done view, with a capture box and one-click move buttons |
-| `plan <day> <meal>` | set a day's meal (`mon`..`sun`; "monday" etc. normalized; re-planning overwrites) → `meal.planned` |
+| `edit <id> <text>` | rename a task (the card's prefilled box + save) → `task.edited` |
+| `drop <id>` | delete a task (✕; a tombstone — the log keeps history) → `task.dropped` |
+| `board` | the four-lane view: capture box, per-card rename / move / delete |
+| `plan <day> <meal>` | set a day's meal (`mon`..`sun`; "monday" normalized; re-planning overwrites; **empty meal clears the day**) → `meal.planned` |
 | `shop <item>` | add an item to the shopping/prep list → `shopping.added` |
-| `got <id>` | check a shopping item off (id is shown on its row) → `shopping.bought` |
-| `kitchen` | the weekly meal plan + shopping list view, with set / add / "got it" forms |
+| `got <id>` | check a shopping item off → `shopping.bought` |
+| `unshop <id>` | remove a shopping item (✕; mistake / no longer needed) → `shopping.removed` |
+| `kitchen` | the weekly meal plan + shopping list: per-day set / clear, per-item got it / remove |
 
 ## make it yours
 
