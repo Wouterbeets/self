@@ -93,11 +93,42 @@ func (c *Compiler) CallBrain(user string, commands []Command, invoke CommandInvo
 	return c.callBrainLLM(BrainSystemPrompt, user, commands, invoke)
 }
 
-func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke CommandInvoker) (*BrainResult, error) {
-	messages := []map[string]any{
-		{"role": "system", "content": system},
-		{"role": "user", "content": user},
+// conversationTurns turns the brain's input into message turns. If `user` is a
+// JSON array of {role, content} (every element having a role), those become the
+// turns — letting a caller supply full turn-based history and a leading system
+// turn. Otherwise it's a single user message, so `self think "..."` is unchanged.
+func conversationTurns(user string) []map[string]any {
+	s := strings.TrimSpace(user)
+	if strings.HasPrefix(s, "[") {
+		var raw []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal([]byte(s), &raw) == nil && len(raw) > 0 {
+			turns := make([]map[string]any, 0, len(raw))
+			ok := true
+			for _, m := range raw {
+				if m.Role == "" {
+					ok = false
+					break
+				}
+				turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
+			}
+			if ok {
+				return turns
+			}
+		}
 	}
+	return []map[string]any{{"role": "user", "content": user}}
+}
+
+func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke CommandInvoker) (*BrainResult, error) {
+	// The kernel always owns the operational system prompt + tools. The caller's
+	// input is normally a single user message, but may instead be a JSON array of
+	// {role, content} turns — so a chat capability can hand the brain real
+	// turn-based history (and its own identity as a leading system turn) without
+	// the kernel knowing anything about chat.
+	messages := append([]map[string]any{{"role": "system", "content": system}}, conversationTurns(user)...)
 	// bash (read) and declare (grow) are always-on kernel powers; each planted
 	// command is added as an act tool (including `restore`, once grown).
 	tools := []map[string]any{bashToolDef, declareTool}
