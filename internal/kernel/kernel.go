@@ -60,6 +60,10 @@ func RenderHTML(home string) error {
 	var seeds []SeedInfo
 	var compiled []CompiledInfo
 
+	// The compilation history shows only receipts the kernel actually signed, so
+	// a forged script.compiled in the log doesn't masquerade as a real compile.
+	secret, _ := loadOrCreateSecret(home)
+
 	for _, e := range events {
 		switch e.Name {
 		case event.CommandDeclared:
@@ -93,6 +97,9 @@ func RenderHTML(home string) error {
 				Seq:        e.Seq,
 			})
 		case event.ScriptCompiled:
+			if !verifyReceipt(secret, e.Payload) {
+				continue // unsigned / forged — not a real compile
+			}
 			var c struct {
 				Type string `json:"type"`
 				Name string `json:"name"`
@@ -288,7 +295,7 @@ func buildHTML(home string, commands []CommandInfo, projectors []ProjectorInfo, 
 	b.WriteString("<dt>command.declared</dt><dd>compiled into a command by <code>self grow</code> and <code>self run</code></dd>\n")
 	b.WriteString("<dt>projector.declared</dt><dd>compiled into a projection by <code>self grow</code> and <code>self run</code></dd>\n")
 	b.WriteString("<dt>restore.requested</dt><dd>a <strong>data-only</strong> rollback intent <code>{name, seq}</code> — any seed, command, or the CLI may emit it; I reinstate an earlier receipt. It carries no code, so it adds no attack surface. This is how the <code>restore</code> capability is just a normal seed.</dd>\n")
-	b.WriteString("<dt>script.compiled</dt><dd>a <strong>kernel-only</strong> receipt of a compile. Seeds and commands may not emit it — I only ever run code my own compiler authored, so the attack surface stays finite. A <code>restore.requested</code> reads these receipts to roll a capability back.</dd>\n")
+	b.WriteString("<dt>script.compiled</dt><dd>a compile receipt, <strong>signed</strong> with my per-home secret (<code>.secret</code>, never in the log). Anyone may append one, but only a receipt I signed ever installs — so I only ever run code my own compiler authored. A <code>restore.requested</code> reinstates one of these.</dd>\n")
 	b.WriteString("<dt>seed.planted</dt><dd>written by <code>self grow</code> as a receipt</dd>\n")
 	b.WriteString("</dl>\n")
 
@@ -359,12 +366,12 @@ func buildHTML(home string, commands []CommandInfo, projectors []ProjectorInfo, 
 // for new capabilities and the kernel compiles them on the fly. The loop only
 // ever carries SPECS — the LLM is always the compiler, so every binary is
 // authored for this receiver and adaptation is never skipped. The kernel does
-// NOT install code from an event: script.compiled is a kernel-only receipt (see
-// the reserve guard in runCommand and grow), never an instruction. Exact-code
-// reuse exists only as rollback, and only the kernel performs it (see Restore),
-// so the sole way code enters the system is through the compiler — the original,
-// finite attack surface. The event log keeps every receipt for audit and
-// rollback; capabilities/ holds only the latest.
+// NOT install code from an event: it signs each script.compiled receipt, and the
+// only install-from-log path (Restore) verifies that signature, so a forged
+// receipt is inert. Exact-code reuse exists only as rollback, performed by the
+// kernel — so the sole way code enters the system is through the compiler, the
+// original, finite attack surface. The event log keeps every receipt for audit
+// and rollback; capabilities/ holds only the latest.
 func CompileDeclarations(home string, events []event.Event) (commands, projectors []string, err error) {
 	compiler := seed.NewCompiler(home)
 	capDir := filepath.Join(home, "capabilities")
@@ -419,7 +426,10 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 	if len(compiledScripts) > 0 {
 		st := store.Open(home)
 		for _, cs := range compiledScripts {
-			payload, _ := json.Marshal(cs)
+			payload, sErr := SignedReceipt(home, cs.Type, cs.Name, cs.Script)
+			if sErr != nil {
+				return commands, projectors, fmt.Errorf("sign script.compiled: %w", sErr)
+			}
 			e := event.New(event.ScriptCompiled, payload)
 			if aErr := st.Append(&e); aErr != nil {
 				return commands, projectors, fmt.Errorf("append script.compiled: %w", aErr)
@@ -474,12 +484,17 @@ func installScript(capDir string, payload json.RawMessage) (kind, name string, e
 // so the log stays the source of truth and the restore is itself rollback-able.
 //
 // This is the ONLY path that reinstalls exact code, and only the kernel walks
-// it. Because script.compiled is kernel-only (commands/seeds may not emit it),
-// every receipt it considers was authored by the compiler for THIS receiver —
-// so a restore can never introduce foreign code or skip adaptation. It adds no
-// attack surface beyond the compiler itself: the bytes already ran here once.
+// it. It considers only receipts whose signature verifies against this home's
+// secret, so every candidate was authored by the compiler for THIS receiver — a
+// forged or foreign receipt is invisible. A restore can never introduce foreign
+// code or skip adaptation; it adds no attack surface beyond the compiler itself:
+// the bytes already ran here once.
 func Restore(home, name string, targetSeq int) (restoredSeq int, kind string, err error) {
 	events, err := openEventStore(home).Read()
+	if err != nil {
+		return 0, "", err
+	}
+	secret, err := loadOrCreateSecret(home)
 	if err != nil {
 		return 0, "", err
 	}
@@ -493,9 +508,15 @@ func Restore(home, name string, targetSeq int) (restoredSeq int, kind string, er
 		if e.Name != event.ScriptCompiled {
 			continue
 		}
+		// Only kernel-signed receipts count. A forged script.compiled (no/bad
+		// signature) is invisible here, so it can never be restored — this is the
+		// verify-on-install gate that replaces the ingress reserve.
+		if !verifyReceipt(secret, e.Payload) {
+			continue
+		}
 		var cs struct {
-			Type string `json:"type"`
 			Name string `json:"name"`
+			Type string `json:"type"`
 		}
 		if json.Unmarshal(e.Payload, &cs) != nil || cs.Name != name {
 			continue
@@ -503,7 +524,7 @@ func Restore(home, name string, targetSeq int) (restoredSeq int, kind string, er
 		receipts = append(receipts, receipt{e.Seq, e.Payload, cs.Type})
 	}
 	if len(receipts) == 0 {
-		return 0, "", fmt.Errorf("no compiled history for %q — nothing to restore (see 'self ls')", name)
+		return 0, "", fmt.Errorf("no signed compiled history for %q — nothing to restore (see 'self ls')", name)
 	}
 
 	var chosen receipt

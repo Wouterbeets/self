@@ -162,18 +162,20 @@ events the kernel acts on:
   restore.requested    DATA-ONLY rollback intent {name, seq} — any seed,
                        command, or the CLI may emit it; the kernel reinstalls an
                        earlier receipt. Carries no code, so it adds no surface.
-  script.compiled      KERNEL-ONLY receipt of a compile. Seeds and commands may
-                       NOT emit it — the kernel only ever runs code its own
-                       compiler authored, so the attack surface stays finite.
-                       restore.requested reads these receipts to roll back.
+  script.compiled      a compile receipt, SIGNED with the home's secret
+                       (SELF_HOME/.secret). Anyone may append one, but only a
+                       kernel-signed receipt ever installs — provenance is in the
+                       signature, not in who wrote it. restore reads these.
   seed.planted         written by 'self grow' as a receipt
   everything else      comes from seeds, or commands that emit declarations
 
 The loop carries SPECS, not code: the LLM is always the compiler, so every
-binary is authored for this receiver and adaptation is never skipped. A seed may
-carry a reference implementation (an "implementation" field on a declaration) —
-the compiler verifies it against the pipe contract and adapts it; it is never
-installed as-is. At compile time and via 'self think', the brain gets a
+binary is authored for this receiver and adaptation is never skipped. Each
+compile is logged as a script.compiled receipt signed with the home's secret;
+install verifies the signature, so only kernel-authored code reaches
+capabilities/. A seed may carry a reference implementation (an "implementation"
+field on a declaration) — the compiler verifies it against the pipe contract and
+adapts it; it is never installed as-is. At compile time and via 'self think', the brain gets a
 read-only bash tool (cwd=SELF_HOME) to explore the garden and adapt to my
 current state. The kernel is the sole steward of LLM credentials.
 `)
@@ -188,6 +190,9 @@ func cmdInit(home string) error {
 	}
 	if err := os.MkdirAll(filepath.Join(home, "site"), 0755); err != nil {
 		return err
+	}
+	if err := kernel.InitSecret(home); err != nil {
+		return fmt.Errorf("mint signing key: %w", err)
 	}
 	st := store.Open(home)
 	payload, _ := json.Marshal(map[string]string{
@@ -251,16 +256,9 @@ func cmdGrow(home string, seedDir string) error {
 	contentCount := 0
 	for i := range manifest.Events {
 		e := manifest.Events[i]
-		// script.compiled is a kernel-only receipt: the kernel writes it when it
-		// compiles, and Restore reads it to roll back. A seed may not supply one
-		// — accepting it would mean installing code the receiver's compiler never
-		// authored (foreign bytes, no adaptation, an open attack surface). Drop
-		// it; a seed carries SPECS (declarations), optionally with a reference
-		// implementation the compiler verifies and adapts.
-		if e.Name == event.ScriptCompiled {
-			fmt.Fprintf(os.Stderr, "self: ignoring script.compiled in seed (kernel-only event; ship a declaration, not code)\n")
-			continue
-		}
+		// No special-casing of script.compiled anymore: a seed can append one,
+		// but it carries no valid signature for this home, so it can never install
+		// (Restore verifies). It's inert data, like any other event.
 		isDeclaration := e.Name == event.CommandDeclared || e.Name == event.ProjectorDeclared
 		fresh := event.New(e.Name, e.Payload)
 		if err := st.Append(&fresh); err != nil {
@@ -271,8 +269,14 @@ func cmdGrow(home string, seedDir string) error {
 		}
 	}
 
+	// Log a signed receipt for each script we just compiled. The signature is
+	// what gives a script.compiled power — only the kernel can produce it — so
+	// these (and only these) are restorable later.
 	for _, cs := range compiledScripts {
-		payload, _ := json.Marshal(cs)
+		payload, sErr := kernel.SignedReceipt(home, cs.Type, cs.Name, cs.Script)
+		if sErr != nil {
+			return sErr
+		}
 		e := event.New(event.ScriptCompiled, payload)
 		if err := st.Append(&e); err != nil {
 			return err
@@ -356,23 +360,9 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 		return nil, fmt.Errorf("command exited: %w", err)
 	}
 
-	// Reserve script.compiled as kernel-only. A capability emits SPECS
-	// (command.declared / projector.declared) the compiler turns into binaries;
-	// it may not emit a script.compiled, because honoring that would let a
-	// running capability install arbitrary code with no compile, no adaptation,
-	// and an unbounded attack surface. Drop any it emits before they touch the
-	// log, so every script.compiled in the log is provably kernel-authored —
-	// which is what makes Restore safe.
-	kept := newEvents[:0]
-	for _, e := range newEvents {
-		if e.Name == event.ScriptCompiled {
-			fmt.Fprintf(os.Stderr, "self: ignored a script.compiled emitted by %q (kernel-only event; emit a declaration to grow code)\n", command)
-			continue
-		}
-		kept = append(kept, e)
-	}
-	newEvents = kept
-
+	// No reserve filter: a command may emit a script.compiled, but it can't sign
+	// it for this home, so it's inert — Restore verifies before installing. Code
+	// reaches capabilities/ only through the kernel's own signed receipts.
 	for i := range newEvents {
 		if err := st.Append(&newEvents[i]); err != nil {
 			return nil, err
@@ -1070,6 +1060,7 @@ func cmdWhere(home string) error {
 	fmt.Printf("SELF_HOME=%s\n\n", home)
 	for _, p := range []struct{ label, path string }{
 		{"event log", filepath.Join(home, "events.jsonl")},
+		{"signing key", filepath.Join(home, ".secret")},
 		{"commands", filepath.Join(home, "capabilities", "commands")},
 		{"projections", filepath.Join(home, "capabilities", "projectors")},
 		{"site (HTML)", filepath.Join(home, "site")},

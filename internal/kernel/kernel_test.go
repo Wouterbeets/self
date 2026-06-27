@@ -197,13 +197,13 @@ func TestRestoreRollsBackAndPinsBySeq(t *testing.T) {
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
 	v1 := "#!/bin/sh\necho v1\n"
 	v2 := "#!/bin/sh\necho v2\n"
-	r1, _ := json.Marshal(map[string]any{"type": "command", "name": "greet", "script": v1})
-	r2, _ := json.Marshal(map[string]any{"type": "command", "name": "greet", "script": v2})
-	// A log with two kernel receipts for greet (v1 at seq 2, v2 at seq 3); the
-	// registry currently holds v2.
+	r1 := mustReceipt(t, home, "command", "greet", v1)
+	r2 := mustReceipt(t, home, "command", "greet", v2)
+	// A log with two kernel-signed receipts for greet (v1 at seq 2, v2 at seq 3);
+	// the registry currently holds v2.
 	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
-{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r1) + `}
-{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r2) + `}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r1 + `}
+{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r2 + `}
 `
 	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
 	os.WriteFile(filepath.Join(home, "capabilities", "commands", "greet"), []byte(v2), 0755)
@@ -232,11 +232,11 @@ func TestApplyRestoresFromEvent(t *testing.T) {
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
 	v1 := "#!/bin/sh\necho v1\n"
 	v2 := "#!/bin/sh\necho v2\n"
-	r1, _ := json.Marshal(map[string]any{"type": "command", "name": "greet", "script": v1})
-	r2, _ := json.Marshal(map[string]any{"type": "command", "name": "greet", "script": v2})
+	r1 := mustReceipt(t, home, "command", "greet", v1)
+	r2 := mustReceipt(t, home, "command", "greet", v2)
 	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
-{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r1) + `}
-{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r2) + `}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r1 + `}
+{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r2 + `}
 `
 	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
 	os.WriteFile(filepath.Join(home, "capabilities", "commands", "greet"), []byte(v2), 0755)
@@ -259,9 +259,9 @@ func TestRestoreErrors(t *testing.T) {
 	home := t.TempDir()
 	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
 	os.MkdirAll(filepath.Join(home, "site"), 0755)
-	r1, _ := json.Marshal(map[string]any{"type": "command", "name": "solo", "script": "#!/bin/sh\n:\n"})
+	r1 := mustReceipt(t, home, "command", "solo", "#!/bin/sh\n:\n")
 	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
-{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r1) + `}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r1 + `}
 `
 	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
 
@@ -270,6 +270,74 @@ func TestRestoreErrors(t *testing.T) {
 	}
 	if _, _, err := Restore(home, "solo", 0); err == nil {
 		t.Error("rolling back a single-version capability should error")
+	}
+}
+
+// mustReceipt builds a kernel-signed script.compiled payload for home.
+func mustReceipt(t *testing.T, home, typ, name, script string) string {
+	t.Helper()
+	p, err := SignedReceipt(home, typ, name, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(p)
+}
+
+func TestSignVerifyRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	secret, err := loadOrCreateSecret(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, _ := SignedReceipt(home, "command", "greet", "echo hi")
+	if !verifyReceipt(secret, good) {
+		t.Error("a freshly signed receipt should verify")
+	}
+	// Tampered bytes — same name, different script — must not verify.
+	var r compiledReceipt
+	json.Unmarshal(good, &r)
+	r.Script = "echo PWNED"
+	bad, _ := json.Marshal(r)
+	if verifyReceipt(secret, bad) {
+		t.Error("tampering with the script must invalidate the signature")
+	}
+	// A different home's key must not verify our receipt.
+	other, _ := loadOrCreateSecret(t.TempDir())
+	if verifyReceipt(other, good) {
+		t.Error("another home's key must not verify this home's receipt")
+	}
+}
+
+func TestRestoreIgnoresForgedReceipt(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	v1 := "#!/bin/sh\necho v1\n"
+	v2 := "#!/bin/sh\necho v2\n"
+	r1 := mustReceipt(t, home, "command", "greet", v1) // seq 2, signed
+	r2 := mustReceipt(t, home, "command", "greet", v2) // seq 3, signed
+	// A forged receipt at the HIGHEST seq, with a bogus signature — a command
+	// could append exactly this. It must be invisible to restore.
+	forged := `{"type":"command","name":"greet","script":"#!/bin/sh\necho PWNED\n","sig":"deadbeef"}`
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r1 + `}
+{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + r2 + `}
+{"id":"d","seq":4,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + forged + `}
+`
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
+	os.WriteFile(filepath.Join(home, "capabilities", "commands", "greet"), []byte(v2), 0755)
+
+	// rollback one: the forged seq-4 is ignored, so "previous" is v1 (seq 2).
+	seq, _, err := Restore(home, "greet", 0)
+	if err != nil || seq != 2 {
+		t.Fatalf("rollback: seq=%d err=%v, want 2 nil (forged receipt must be ignored)", seq, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "capabilities", "commands", "greet")); string(b) != v1 {
+		t.Errorf("greet = %q, want v1 — forged bytes must never install", b)
+	}
+	// And pinning the forged seq directly must be refused.
+	if _, _, err := Restore(home, "greet", 4); err == nil {
+		t.Error("restoring a forged (unsigned) receipt by seq must error")
 	}
 }
 

@@ -105,8 +105,12 @@ self run summarize "..."           # the new capability works right away
 **The loop carries specs, never code.** The LLM is *always* the compiler, so
 every binary is authored for this receiver — adaptation is never skipped, and the
 only way code enters the system is through the compiler (the original, finite
-attack surface). A capability cannot install a binary: `script.compiled` is a
-**kernel-only** receipt, ignored if a seed or command emits one.
+attack surface). When the kernel compiles, it logs the bytes as a
+`script.compiled` receipt **signed with a per-home secret** (`SELF_HOME/.secret`,
+never in the log). Anything may append a `script.compiled`, but only a
+kernel-signed one ever installs — provenance is intrinsic to the receipt, not
+enforced by filtering who may write it. A forged receipt is inert: it sits in the
+log and is ignored on install.
 
 Two consequences worth naming:
 
@@ -117,9 +121,10 @@ Two consequences worth naming:
   but coherent with receiver adaptation and with zero new attack surface (see
   `poc/wall`).
 - **Rollback splits cleanly into trigger and install.** Every compile is logged
-  as a kernel-only `script.compiled` receipt. *Installing* an earlier one is the
-  kernel's job — same privilege as compile. But *triggering* a rollback is just a
-  data-only `restore.requested {name, seq}` event, which anything may emit. So
+  as a signed `script.compiled` receipt. *Installing* an earlier one is the
+  kernel's job — it verifies the signature, so it only ever reinstates code its
+  own compiler authored here. But *triggering* a rollback is just a data-only
+  `restore.requested {name, seq}` event, which anything may emit. So
   `restore` is an ordinary **seed** (`seeds/restore`), the brain rolls back by
   calling it like any other capability, and `self restore <name> [seq]` is a thin
   always-on built-in that emits the same event — a safety net on a bare kernel.
@@ -177,6 +182,7 @@ the LLM can look but not touch.
 ```
 SELF_HOME/
   events.jsonl                  the only truth (append-only)
+  .secret                       the kernel's signing key (0600; never in the log)
   capabilities/
     commands/<name>             compiled command scripts (any language)
     projectors/<name>           compiled projection scripts (any language)
@@ -195,8 +201,10 @@ Five things, irreducible:
 1. **event store** — append-only JSONL log (the only truth)
 2. **LLM compiler** — reads `command.declared` / `projector.declared`, explores
    the garden via a read-only bash tool, writes scripts at grow time **and at run
-   time** (the strange loop). Logs every compiled script as a kernel-only
-   `script.compiled` receipt; `self restore` reads those receipts to roll back. A
+   time** (the strange loop). Logs every compiled script as a `script.compiled`
+   receipt **signed with the home's secret**; install verifies the signature, so
+   only kernel-authored code reaches `capabilities/`. `self restore` reads those
+   receipts to roll back. A
    declaration may carry a reference implementation the compiler verifies and
    adapts — but the compiler always authors the binary; no foreign code runs.
 3. **the brain** (`self think`) — the same LLM infrastructure as the compiler,
@@ -211,9 +219,10 @@ The kernel acts on three events, and all three carry **data, never code**:
 `command.declared` and `projector.declared` (compile a spec into a binary,
 adapted to this receiver) and `restore.requested` (reinstall an earlier
 receipt). It writes three: `kernel.initialized`, `script.compiled` (a compile
-receipt — kernel-only, never accepted from a seed or command), and
-`seed.planted`. Everything else comes from seeds — or from capabilities that
-emit declarations or restore intents at run time.
+receipt, signed with the home's secret — anyone may append one, but only a
+kernel-signed receipt installs), and `seed.planted`. Everything else comes from
+seeds — or from capabilities that emit declarations or restore intents at run
+time.
 
 ## seed format
 
@@ -224,8 +233,9 @@ field — a reference implementation the compiler verifies against the pipe
 contract and adapts to the local garden (never installed as-is), so a seed can
 be precise without importing code (see `poc/wall`). A seed with only declarations
 is a pure capability seed; one with only content is a pure memory seed; a full
-seed has both. A seed may **not** carry a `script.compiled` event — that's a
-kernel-only receipt, and accepting code from a seed would break both receiver
+seed has both. A seed *can* technically include a `script.compiled` event, but
+it's inert: it won't carry this home's signature, so it never installs. Code
+enters only through the compiler (which signs), preserving both receiver
 adaptation and the trust model.
 
 ## environment

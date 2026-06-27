@@ -293,6 +293,51 @@ That's the minimal-kernel thesis holding even for rollback.
 
 ---
 
+## Slice 6 — signed receipts kill the last special case (VALIDATED)
+
+**Hypothesis.** `script.compiled` was still a wart: its meaning depended on *who
+wrote it* (authoritative from the kernel, ignored from a seed/command), and that
+was enforced by dropping it at every ingress — provenance by vigilance, two drop
+sites that must stay in sync, and a silent break the day a new ingress forgets.
+A per-home secret can make provenance *intrinsic*: sign each compile receipt;
+verify on install. Then `script.compiled` is an ordinary logged event whose only
+power comes from a signature only the kernel can produce — no ingress filtering,
+nothing special about who may write it.
+
+**Slice.**
+- `self init` mints `SELF_HOME/.secret` (32 random bytes, 0600, never in the
+  log — like an ssh host key).
+- The compiler signs each receipt: `sig = HMAC(secret, type ∥ name ∥ script)`
+  (all three bound, so a receipt can't be relabeled onto another capability).
+- The one install-from-log path (`Restore`) verifies the signature and ignores
+  anything unsigned; the kernel.html history shows only signed receipts.
+- The ingress "reserve" drops in `run` and `grow` are **deleted**. A forged
+  `script.compiled` now flows into the log freely — and is inert.
+
+**Evidence (e2e).** Receipts carry a `sig`; a command that appends a forged
+`script.compiled` for `capture` lands in the log but the `capture` binary is
+untouched, `restore` refuses it (only the one signed version counts), and it's
+absent from the compilation history. Unit tests: sign/verify round-trip + tamper
++ wrong-home-key rejection; restore ignores a forged receipt even at the highest
+seq and refuses to pin it.
+
+**Decision: keep.** `script.compiled` is no longer special at write time — only
+at *install* time, where a signature check is the honest gate. The per-home key
+also does real conceptual work: signatures are meaningful only on the receiver
+that produced them, so you still can't import another node's binaries — only its
+declarations, which your kernel recompiles and re-signs. The "two kinds of
+state" question dissolves: it all stays in one event log; the compiled bytes are
+just signed.
+
+**Honest note.** This adds one piece of non-log state — the secret — which is a
+real (small) dent in "the log is the only truth." It's a *key*, not domain data
+(LLM credentials already live outside the log), and losing it only costs the
+ability to verify old receipts (the working tree on disk is unaffected). For a
+PoC the HMAC is plenty; a multi-user or shared-home setting would want real key
+management.
+
+---
+
 ## How to reproduce
 
 ```sh
