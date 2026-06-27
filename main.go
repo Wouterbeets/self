@@ -159,10 +159,13 @@ events the kernel acts on:
   kernel.initialized   written by 'self init'
   command.declared     compiled into a command by 'self grow' AND 'self run'
   projector.declared   compiled into a projection by 'self grow' AND 'self run'
+  restore.requested    DATA-ONLY rollback intent {name, seq} — any seed,
+                       command, or the CLI may emit it; the kernel reinstalls an
+                       earlier receipt. Carries no code, so it adds no surface.
   script.compiled      KERNEL-ONLY receipt of a compile. Seeds and commands may
                        NOT emit it — the kernel only ever runs code its own
                        compiler authored, so the attack surface stays finite.
-                       'self restore' reads these receipts to roll back.
+                       restore.requested reads these receipts to roll back.
   seed.planted         written by 'self grow' as a receipt
   everything else      comes from seeds, or commands that emit declarations
 
@@ -387,6 +390,15 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 			len(compiledCmds), len(compiledProjs))
 	}
 
+	// Restore hook: a command may emit a data-only restore.requested {name, seq};
+	// the kernel acts on it by reinstalling its own earlier receipt. This is how
+	// the `restore` capability works — an ordinary command, no special kernel verb.
+	if restored, rErr := kernel.ApplyRestores(home, newEvents); rErr != nil {
+		fmt.Fprintf(os.Stderr, "self: warning: restore failed: %s\n", rErr)
+	} else if len(restored) > 0 {
+		fmt.Fprintf(os.Stderr, "self: restored %s\n", strings.Join(restored, ", "))
+	}
+
 	// Auto-run projectors that consume the new events. The kernel reads its own
 	// projection (site/kernel.html) to know which projectors care about which
 	// events — burn kernel.html, replay events, it comes back.
@@ -425,10 +437,11 @@ func cmdRun(home string, command string, args []string) error {
 	return nil
 }
 
-// cmdRestore rolls a capability back to an earlier compiled version. With no
-// seq it reverts one version; with a seq (from 'self history') it restores that
-// exact receipt. Only the kernel reinstalls code, and only its own prior
-// output — see kernel.Restore.
+// cmdRestore is the always-on, built-in trigger for a rollback — a thin
+// convenience so the safety net exists even on a bare kernel with no `restore`
+// seed grown. It does the same thing the `restore` capability does: log a
+// data-only restore.requested intent, then let the kernel act on it. (The
+// install itself is the kernel's; the CLI only supplies a name and seq.)
 func cmdRestore(home string, args []string) error {
 	name := args[0]
 	seq := 0
@@ -437,12 +450,13 @@ func cmdRestore(home string, args []string) error {
 			return fmt.Errorf("seq must be a positive integer from 'self history', got %q", args[1])
 		}
 	}
-	restoredSeq, kind, err := kernel.Restore(home, name, seq)
-	if err != nil {
+	payload, _ := json.Marshal(map[string]any{"name": name, "seq": seq})
+	intent := event.New(event.RestoreRequested, payload)
+	if err := store.Open(home).Append(&intent); err != nil {
 		return err
 	}
-	fmt.Printf("restored %s %q from seq %d (logged a fresh receipt; reversible again)\n", kind, name, restoredSeq)
-	return nil
+	_, err := kernel.ApplyRestores(home, []event.Event{intent})
+	return err
 }
 
 // cmdShow renders a projection. Unix-native: when stdout is piped it writes the
@@ -1108,7 +1122,7 @@ func cmdHeartbeat(home string) error {
 	const prompt = `This is a self-improvement heartbeat. Explore your garden — your capabilities, recent events, and projections — and choose ONE small, high-value improvement: a missing capability, a projection that would make your shared state clearer, or a fix for something that has drifted. If it is warranted, declare it (command.declared / projector.declared) so it compiles into a real capability. Adapt to what already exists rather than duplicating it. If nothing is worth changing right now, say so plainly and declare nothing. Keep it minimal.`
 
 	commands, invoke := brainTools(home)
-	result, err := compiler.CallBrain(prompt, commands, invoke, brainRestorer(home))
+	result, err := compiler.CallBrain(prompt, commands, invoke)
 	if err != nil {
 		return err
 	}
@@ -1154,7 +1168,7 @@ func cmdThink(home string, prompt string) error {
 	compiler := seed.NewCompiler(home)
 
 	commands, invoke := brainTools(home)
-	result, err := compiler.CallBrain(prompt, commands, invoke, brainRestorer(home))
+	result, err := compiler.CallBrain(prompt, commands, invoke)
 	if err != nil {
 		return err
 	}
@@ -1204,20 +1218,6 @@ func brainTools(home string) ([]seed.Command, seed.CommandInvoker) {
 		return fmt.Sprintf("ran %q — appended %d event(s): %s", name, len(evs), strings.Join(names, ", ")), nil
 	}
 	return commands, invoke
-}
-
-// brainRestorer gives the brain the restore power. It's not depth-gated: a
-// restore carries only a name and seq (data, not code), the kernel performs the
-// install from its own receipts, and it can't recurse into the brain — so it's
-// always safe to offer, like declare.
-func brainRestorer(home string) seed.Restorer {
-	return func(name string, seq int) (string, error) {
-		rseq, kind, err := kernel.Restore(home, name, seq)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("restored %s %q from seq %d", kind, name, rseq), nil
-	}
 }
 
 // plantedCommands reads the command declarations from the event log, latest

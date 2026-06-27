@@ -79,33 +79,28 @@ type BrainResult struct {
 // caller (main) so the seed package needn't import the invoke pipeline.
 type CommandInvoker func(name, args string) (string, error)
 
-// Restorer rolls a capability back to an earlier compiled version (seq == 0
-// means the previous version). It carries only a name and a seq — data, not
-// code — and the kernel still performs the install from its own logged receipts,
-// so exposing it to the brain adds no attack surface. Supplied by the caller
-// (main) to avoid a seed→kernel import cycle.
-type Restorer func(name string, seq int) (string, error)
-
 // CallBrain calls the kernel's brain — a general-purpose agent that explores
-// the garden (read), declares new capabilities (grow), CALLS planted commands
-// as tools (act), and rolls capabilities back (restore). Each command in
-// `commands` becomes a callable tool; when the brain calls one, `invoke` runs
-// it. When the brain calls restore, `restore` runs it. Used by `self think`.
-func (c *Compiler) CallBrain(user string, commands []Command, invoke CommandInvoker, restore Restorer) (*BrainResult, error) {
+// the garden (read), declares new capabilities (grow), and CALLS planted
+// commands as tools (act). Each command in `commands` becomes a callable tool;
+// when the brain calls one, `invoke` runs it. Rolling back is not a special
+// power: the brain restores by calling the `restore` capability like any other
+// act (if it's been grown), which emits a data-only restore.requested event.
+// Used by `self think`.
+func (c *Compiler) CallBrain(user string, commands []Command, invoke CommandInvoker) (*BrainResult, error) {
 	if !c.Available() {
 		return nil, fmt.Errorf("no LLM available (ensure llama-server is running on localhost:8080, or set SELF_LLM_*)")
 	}
-	return c.callBrainLLM(BrainSystemPrompt, user, commands, invoke, restore)
+	return c.callBrainLLM(BrainSystemPrompt, user, commands, invoke)
 }
 
-func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke CommandInvoker, restore Restorer) (*BrainResult, error) {
+func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke CommandInvoker) (*BrainResult, error) {
 	messages := []map[string]any{
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},
 	}
-	// bash (read), declare (grow), and restore (undo) are always-on kernel
-	// powers; each planted command is added as an act tool.
-	tools := []map[string]any{bashToolDef, declareTool, restoreToolDef}
+	// bash (read) and declare (grow) are always-on kernel powers; each planted
+	// command is added as an act tool (including `restore`, once grown).
+	tools := []map[string]any{bashToolDef, declareTool}
 	isCommand := map[string]bool{}
 	for _, cmd := range commands {
 		tools = append(tools, commandToolDef(cmd))
@@ -148,22 +143,6 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 				} else {
 					declarations = append(declarations, args)
 					output = "declaration recorded"
-				}
-			case "restore":
-				if restore == nil {
-					output = "error: restore is unavailable here"
-					break
-				}
-				var a struct {
-					Name string `json:"name"`
-					Seq  int    `json:"seq"`
-				}
-				if err := json.Unmarshal([]byte(tc.Function.Arguments), &a); err != nil || a.Name == "" {
-					output = fmt.Sprintf("error: restore needs a name (and optional seq): %s", tc.Function.Arguments)
-				} else if out, rErr := restore(a.Name, a.Seq); rErr != nil {
-					output = fmt.Sprintf("error restoring %q: %s", a.Name, rErr)
-				} else {
-					output = out
 				}
 			default:
 				if isCommand[tc.Function.Name] && invoke != nil {
@@ -609,7 +588,8 @@ You have three powers:
 - READ: a bash tool to explore the garden (cwd=SELF_HOME) — read-only inspection of capabilities/, events.jsonl, and site/.
 - ACT: every capability you have is exposed to you as a tool. To DO something the user asks (delete an item, capture a note, set a meal), CALL the matching command tool with its args — do not just describe it or emit a button. The kernel runs it and appends the resulting events, then tells you what happened. The event log is append-only, so actions are safe and reversible: a "delete" is a tombstone event, undoable by a later restore. Prefer acting over explaining when the user asks you to change something.
 - GROW: when the user asks for a NEW capability that no existing command provides, call the declare tool (see below) to add it.
-- RESTORE: when a change should be undone — a capability got worse, or the user says "undo that" / "go back" — call the restore tool with the capability's name (optionally a seq from the history). It reinstates an earlier version the kernel already compiled; nothing is lost, since the log keeps every version.
+
+To UNDO a change, there is no special power: if a restore command exists, call it (with a capability name and optionally a seq) like any other act. It emits a data-only restore.requested event and the kernel reinstates an earlier compiled version; nothing is lost, since the log keeps every version.
 
 Explore the garden with bash before responding:
 - ls site/ — what projections exist? These are the current state. Read the relevant ones.

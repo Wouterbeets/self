@@ -31,9 +31,15 @@ func NewID() string {
 }
 
 const (
-	KernelInitialized  = "kernel.initialized"
-	CommandDeclared    = "command.declared"
-	ProjectorDeclared  = "projector.declared"
-	ScriptCompiled     = "script.compiled"
-	SeedPlanted        = "seed.planted"
+	KernelInitialized = "kernel.initialized"
+	CommandDeclared   = "command.declared"
+	ProjectorDeclared = "projector.declared"
+	ScriptCompiled    = "script.compiled"
+	SeedPlanted       = "seed.planted"
+	// RestoreRequested is a data-only intent ({name, seq}) that the kernel acts
+	// on by reinstalling an earlier compiled receipt. It carries no code, so any
+	// seed, command, or the CLI may emit it — but the install itself stays the
+	// kernel's, reading only its own logged receipts. This is what lets `restore`
+	// be an ordinary capability while the privileged install remains kernel-only.
+	RestoreRequested = "restore.requested"
 )

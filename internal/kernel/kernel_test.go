@@ -226,6 +226,35 @@ func TestRestoreRollsBackAndPinsBySeq(t *testing.T) {
 	}
 }
 
+func TestApplyRestoresFromEvent(t *testing.T) {
+	home := t.TempDir()
+	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)
+	os.MkdirAll(filepath.Join(home, "site"), 0755)
+	v1 := "#!/bin/sh\necho v1\n"
+	v2 := "#!/bin/sh\necho v2\n"
+	r1, _ := json.Marshal(map[string]any{"type": "command", "name": "greet", "script": v1})
+	r2, _ := json.Marshal(map[string]any{"type": "command", "name": "greet", "script": v2})
+	log := `{"id":"a","seq":1,"name":"kernel.initialized","occurred_at":"2026-01-01T00:00:00Z","payload":{}}
+{"id":"b","seq":2,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r1) + `}
+{"id":"c","seq":3,"name":"script.compiled","occurred_at":"2026-01-01T00:00:00Z","payload":` + string(r2) + `}
+`
+	os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(log), 0644)
+	os.WriteFile(filepath.Join(home, "capabilities", "commands", "greet"), []byte(v2), 0755)
+
+	// A data-only restore.requested intent drives the install through the hook.
+	payload, _ := json.Marshal(map[string]any{"name": "greet", "seq": 0})
+	restored, err := ApplyRestores(home, []event.Event{event.New(event.RestoreRequested, payload)})
+	if err != nil {
+		t.Fatalf("ApplyRestores: %v", err)
+	}
+	if len(restored) != 1 || restored[0] != "greet" {
+		t.Fatalf("restored = %v, want [greet]", restored)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "capabilities", "commands", "greet")); string(b) != v1 {
+		t.Errorf("after restore.requested, greet = %q, want v1", b)
+	}
+}
+
 func TestRestoreErrors(t *testing.T) {
 	home := t.TempDir()
 	os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755)

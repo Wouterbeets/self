@@ -163,7 +163,7 @@ func buildHTML(home string, commands []CommandInfo, projectors []ProjectorInfo, 
 	b.WriteString("<dt>read</dt><dd>a read-only <code>bash</code> tool to explore the garden — inspect <code>capabilities/</code>, <code>events.jsonl</code>, and <code>site/</code>. The <code>site/*.html</code> projections are my memory; read the relevant ones (e.g. <code>site/chat.html</code> for the conversation) before answering.</dd>\n")
 	b.WriteString("<dt>act</dt><dd>every capability listed below is exposed to you as a callable tool. To change something the user asks for, <em>call the matching capability</em> — don't merely describe it. The kernel runs it and appends the resulting events.</dd>\n")
 	b.WriteString("<dt>grow</dt><dd>when no existing capability fits, <code>declare</code> a new <code>command.declared</code> or <code>projector.declared</code>; the kernel compiles it on the spot and it becomes a capability you can use immediately.</dd>\n")
-	b.WriteString("<dt>restore</dt><dd>to undo a change, call <code>restore</code> with a capability's name (and optionally a seq from history). It reinstates an earlier version the kernel already compiled — never new code — so rolling back is as safe and reversible as everything else.</dd>\n")
+	b.WriteString("<dd class=\"muted\">To undo a change there's no special power: run the <code>restore</code> capability (if grown) like any other — it emits a data-only request and the kernel reinstates an earlier compiled version.</dd>\n")
 	b.WriteString("</dl>\n")
 	b.WriteString("</section>\n")
 
@@ -287,7 +287,8 @@ func buildHTML(home string, commands []CommandInfo, projectors []ProjectorInfo, 
 	b.WriteString("<dt>kernel.initialized</dt><dd>written by <code>self init</code></dd>\n")
 	b.WriteString("<dt>command.declared</dt><dd>compiled into a command by <code>self grow</code> and <code>self run</code></dd>\n")
 	b.WriteString("<dt>projector.declared</dt><dd>compiled into a projection by <code>self grow</code> and <code>self run</code></dd>\n")
-	b.WriteString("<dt>script.compiled</dt><dd>a <strong>kernel-only</strong> receipt of a compile. Seeds and commands may not emit it — I only ever run code my own compiler authored, so the attack surface stays finite. <code>self restore</code> reads these receipts to roll a capability back to an earlier version.</dd>\n")
+	b.WriteString("<dt>restore.requested</dt><dd>a <strong>data-only</strong> rollback intent <code>{name, seq}</code> — any seed, command, or the CLI may emit it; I reinstate an earlier receipt. It carries no code, so it adds no attack surface. This is how the <code>restore</code> capability is just a normal seed.</dd>\n")
+	b.WriteString("<dt>script.compiled</dt><dd>a <strong>kernel-only</strong> receipt of a compile. Seeds and commands may not emit it — I only ever run code my own compiler authored, so the attack surface stays finite. A <code>restore.requested</code> reads these receipts to roll a capability back.</dd>\n")
 	b.WriteString("<dt>seed.planted</dt><dd>written by <code>self grow</code> as a receipt</dd>\n")
 	b.WriteString("</dl>\n")
 
@@ -539,6 +540,35 @@ func Restore(home, name string, targetSeq int) (restoredSeq int, kind string, er
 		return 0, "", fmt.Errorf("re-render kernel.html: %w", rErr)
 	}
 	return chosen.seq, k, nil
+}
+
+// ApplyRestores is the restore hook: it scans events for restore.requested
+// (a data-only {name, seq} intent) and performs each rollback via Restore. This
+// is what makes `restore` an ordinary capability — a seed or command emits the
+// intent, the kernel acts on it here — while the install stays kernel-only.
+// Mirrors CompileDeclarations: a logged intent in, a kernel-performed effect out.
+// Returns the names restored.
+func ApplyRestores(home string, events []event.Event) ([]string, error) {
+	var restored []string
+	for _, e := range events {
+		if e.Name != event.RestoreRequested {
+			continue
+		}
+		var req struct {
+			Name string `json:"name"`
+			Seq  int    `json:"seq"`
+		}
+		if err := json.Unmarshal(e.Payload, &req); err != nil || req.Name == "" {
+			return restored, fmt.Errorf("restore.requested: need a name (and optional seq): %s", e.Payload)
+		}
+		seq, kind, err := Restore(home, req.Name, req.Seq)
+		if err != nil {
+			return restored, err
+		}
+		fmt.Printf("restored %s %q from seq %d\n", kind, req.Name, seq)
+		restored = append(restored, req.Name)
+	}
+	return restored, nil
 }
 
 // Wiring is the parsed event→projector map extracted from kernel.html.

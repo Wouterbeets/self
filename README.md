@@ -116,13 +116,15 @@ Two consequences worth naming:
   garden; it is never installed as-is. Near-identical power to handing over code,
   but coherent with receiver adaptation and with zero new attack surface (see
   `poc/wall`).
-- **Rollback is the kernel's job, not a seed's.** Every compile is logged as a
-  `script.compiled` receipt. `self restore <name> [seq]` re-installs an earlier
-  one — and because only the kernel writes and reads those receipts, a restore
-  can only ever reinstate code this receiver's own compiler already authored. No
-  drift, no foreign bytes. The brain can call `restore` too (it's one of its
-  tools, alongside read/act/grow): the trigger carries only a name + seq — data,
-  not code — so "undo that" is brain-callable without widening the trust surface.
+- **Rollback splits cleanly into trigger and install.** Every compile is logged
+  as a kernel-only `script.compiled` receipt. *Installing* an earlier one is the
+  kernel's job — same privilege as compile. But *triggering* a rollback is just a
+  data-only `restore.requested {name, seq}` event, which anything may emit. So
+  `restore` is an ordinary **seed** (`seeds/restore`), the brain rolls back by
+  calling it like any other capability, and `self restore <name> [seq]` is a thin
+  always-on built-in that emits the same event — a safety net on a bare kernel.
+  Either way the install reads only the kernel's own receipts: no drift, no
+  foreign bytes, no special power.
 
 ## self heartbeat
 
@@ -205,11 +207,13 @@ Five things, irreducible:
 5. **web server** — `self live` serves the materialized `site/` and re-runs
    projections on demand
 
-The kernel acts on two events: `command.declared` and `projector.declared`
-(compile them into binaries, adapted to this receiver). It writes three:
-`kernel.initialized`, `script.compiled` (a compile receipt — kernel-only, never
-accepted from a seed or command), and `seed.planted`. Everything else comes from
-seeds — or from capabilities that emit declarations at run time.
+The kernel acts on three events, and all three carry **data, never code**:
+`command.declared` and `projector.declared` (compile a spec into a binary,
+adapted to this receiver) and `restore.requested` (reinstall an earlier
+receipt). It writes three: `kernel.initialized`, `script.compiled` (a compile
+receipt — kernel-only, never accepted from a seed or command), and
+`seed.planted`. Everything else comes from seeds — or from capabilities that
+emit declarations or restore intents at run time.
 
 ## seed format
 

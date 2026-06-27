@@ -271,29 +271,3 @@ var declareTool = map[string]any{
 		},
 	},
 }
-
-// restoreToolDef lets the brain roll a capability back to an earlier compiled
-// version. It carries only a name and an optional seq (data, not code); the
-// kernel performs the install from its own logged receipts, so this is strictly
-// weaker than declare (which compiles new code) and adds no attack surface.
-var restoreToolDef = map[string]any{
-	"type": "function",
-	"function": map[string]any{
-		"name":        "restore",
-		"description": "Roll a command or projection back to an earlier version of its compiled script. Use this to undo a change you (or the user) regret. Only ever reinstates code the kernel already compiled and logged here — never new code.",
-		"parameters": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name": map[string]any{
-					"type":        "string",
-					"description": "The capability (command or projection) to roll back.",
-				},
-				"seq": map[string]any{
-					"type":        "integer",
-					"description": "Optional: the seq of a specific script.compiled receipt to restore (from the event history). Omit or 0 to roll back one version.",
-				},
-			},
-			"required": []string{"name"},
-		},
-	},
-}

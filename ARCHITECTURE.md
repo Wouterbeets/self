@@ -269,15 +269,27 @@ lost. The kernel acts on **two** events once more (`command.declared`,
 without re-opening the code-install hole. That's the right place to spend kernel
 LOC.
 
-**Follow-up (done).** Restore is now also a brain tool, alongside read/act/grow.
-The key insight: *who performs the install* (must be the kernel — it writes bytes
-to `capabilities/` only from its own receipts) is a separate axis from *who
-triggers it* (anyone — the trigger carries only a name+seq, never code). Gating
-the trigger to the CLI was an unjustified special case: restore is strictly
-weaker than `grow` (which the brain already has and which compiles brand-new
-code), and fully reversible. So `restore(name, seq)` joins the brain's tools; the
-kernel still does the install. No new attack surface — data crosses the boundary,
-never bytes.
+**Follow-up (done) — restore is a seed, not a kernel verb.** The same insight
+pushed one step further. Two axes were tangled: *who performs the install* (must
+be the kernel — it writes `capabilities/` only from its own receipts, so the
+state stays a replayable, audited projection of the log) versus *who triggers a
+rollback* (anyone — the trigger carries a name+seq, never code). So a rollback is
+now a **data-only `restore.requested {name, seq}` event** the kernel acts on,
+exactly like it acts on `*.declared`:
+
+- `restore` is an ordinary **seed** (`seeds/restore`) — a command that emits
+  `restore.requested` from its argv, carried as a reference implementation.
+- The brain rolls back by *calling that capability* (plain act), not via a
+  bespoke tool — the special-case brain tool was removed.
+- `self restore <name> [seq]` remains as a thin, always-on built-in that emits
+  the same event, so the safety net exists on a bare kernel before any seed is
+  grown.
+
+The kernel now acts on **three** events — `command.declared`,
+`projector.declared`, `restore.requested` — and the line that matters is that all
+three carry *data, never code*. The privileged install (turning a logged intent
+into bytes on disk) stays the kernel's; everything that *triggers* it is a seed.
+That's the minimal-kernel thesis holding even for rollback.
 
 ---
 
