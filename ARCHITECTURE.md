@@ -640,12 +640,31 @@ category is gone; there is now one kind of thing the kernel talks to, a process 
 pipes events through. The trust model is unchanged because it never trusted the
 compiler: the brain's output is just events/JSON, and the only privileged step
 (sign + install a `script.compiled`) still happens kernel-side via the
-signed-receipt path (Slices 6–7), gated by examples (Slice 9). Crucially the
-migration cost is **zero**: `self think`'s contract is preserved exactly, so a
-repo with hundreds of events and an already-compiled `chat` just works after
-pulling the change. The composition payoff the lineage points at — multiple LLMs,
-swarms, a human, a deterministic transpiler, all interchangeable — is now just
-"set `$SELF_BRAIN`."
+signed-receipt path (Slices 6–7), gated by examples (Slice 9). The composition
+payoff the lineage points at — multiple LLMs, swarms, a human, a deterministic
+transpiler, all interchangeable — is now just "set `$SELF_BRAIN`."
+
+**Scope is narrow, and that is why migration is zero-cost.** Slice 12 changed
+exactly one thing behaviorally: the *transport* of the conversational `think`
+path (now a process, kept byte-compatible). The two operations a migration
+actually relies on are **untouched**:
+- *Replay* (`rehydrate` / `restore`) reinstalls the log's kernel-signed
+  `script.compiled` receipts verbatim — no brain, no LLM, no network (Slice 7). A
+  home moves as `events.jsonl` + `.secret`; the secret verifies the receipts. So
+  pulling Slice 12 into a repo with hundreds of events and rehydrating it
+  *circumvents the brain entirely* — the changed code never runs. Verified: the
+  shipped `home/`/`garden/` bodies rehydrate + selftest clean on the new binary
+  with the brain set to `/bin/false`; compiled `capabilities/` come out
+  byte-identical (only `kernel.html` differs, by the embedded absolute home
+  path); a *foreign* `.secret` installs nothing (signature gate holds).
+- *Compilation* (`grow` and the strange-loop `CompileDeclarations`) still uses the
+  in-process `seed.NewCompiler` — it was **not** extracted. So re-growing from a
+  log's declarations (the keyless cross-node path) is also unaffected.
+
+The brain-process change is confined to the live conversational surface, which is
+backward-compatible; neither replay nor compile — the paths that author and
+reconstruct state — were altered. That orthogonality is the real reason an
+existing garden just works.
 
 **Honest gaps.** (1) Only the `think` path was converted; `self heartbeat` and
 `self watch` still call `CallBrain` in-process (next beat — they carry a
