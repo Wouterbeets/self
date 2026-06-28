@@ -249,8 +249,11 @@ func cmdInit(home string) error {
 	if err := kernel.RenderHTML(home); err != nil {
 		return err
 	}
-	// Render the setup page so /setup is ready on first serve.
-	return runProjectorToSite(home, "setup")
+	// Render the onboarding pages so /setup and /interview are ready on first serve.
+	if err := runProjectorToSite(home, "setup"); err != nil {
+		return err
+	}
+	return runProjectorToSite(home, "interview")
 }
 
 func cmdGrow(home string, seedDir string) error {
@@ -1740,7 +1743,26 @@ func cmdBrain(home string, prompt string) error {
 	// from the key file) into SELF_LLM_* — unless those are already set, so an
 	// explicit env override still wins. This is what makes the setup page drive
 	// the brain.
-	loadBrainConfig(home)
+	provider := loadBrainConfig(home)
+
+	// Human-in-the-loop brain: there is no LLM to call. Park the prompt as a
+	// brain.asked event the human answers later via /interview, and reply with a
+	// placeholder so the caller's chat shows the question is pending. We append
+	// brain.asked DIRECTLY here rather than emitting it on stdout, because the
+	// brain is reached through `self think`, which is a pure query (it returns the
+	// reply but appends nothing) — so the parked question must persist itself.
+	// Async by design: the "thought continues" when the answer event flows
+	// through the normal pipeline, not when this process resumes.
+	if provider == "human" {
+		ask, _ := json.Marshal(map[string]any{"id": newAskID(), "prompt": prompt})
+		e := event.New(event_BrainAsked, ask)
+		if aErr := store.Open(home).Append(&e); aErr != nil {
+			return aErr
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"name": "chat.message", "payload": map[string]any{
+			"role": "assistant", "content": "🧑‍💻 parked for the human brain — open /interview to answer",
+		}})
+	}
 
 	compiler := seed.NewCompiler(home)
 	commands, invoke := brainTools(home)

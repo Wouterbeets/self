@@ -274,6 +274,72 @@ func TestOnboardingBrainSetup(t *testing.T) {
 	}
 }
 
+// TestHumanBrainInterview is the slice-14 evidence: with the human brain
+// selected, `self think` parks the prompt as a brain.asked, the interview
+// projection renders it with an answer form, and the answer command resolves it —
+// a full ask/answer loop with NO LLM (the human is the brain).
+func TestHumanBrainInterview(t *testing.T) {
+	bin := os.Getenv("SELF_TEST_BIN")
+	if bin == "" {
+		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
+	}
+	home := t.TempDir()
+	runSelf(t, home, "init")
+	runSelf(t, home, "run", "configure", "human", "", "", "")
+
+	// Ask: think parks the question (no LLM; the human brain just records it).
+	runSelf(t, home, "think", "what should I build?")
+
+	askID := ""
+	for _, line := range strings.Split(readLog(t, home), "\n") {
+		if line == "" {
+			continue
+		}
+		var e struct {
+			Name    string `json:"name"`
+			Payload struct {
+				ID     string `json:"id"`
+				Prompt string `json:"prompt"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &e) == nil && e.Name == "brain.asked" {
+			askID = e.Payload.ID
+			if e.Payload.Prompt != "what should I build?" {
+				t.Errorf("parked prompt = %q", e.Payload.Prompt)
+			}
+		}
+	}
+	if askID == "" {
+		t.Fatalf("think did not park a brain.asked:\n%s", readLog(t, home))
+	}
+
+	// The interview page renders the open question with an answer form.
+	page := runSelf(t, home, "show", "interview")
+	if !strings.Contains(page, "what should I build?") || !strings.Contains(page, "/run/answer") {
+		t.Errorf("interview page missing the open question or form:\n%s", page)
+	}
+
+	// Answer it — a plain reply, no LLM.
+	runSelf(t, home, "run", "answer", askID, "build a timer", "")
+	log := readLog(t, home)
+	if !strings.Contains(log, `"name":"brain.answered"`) || !strings.Contains(log, "build a timer") {
+		t.Errorf("answer did not record the resolution:\n%s", log)
+	}
+	// The question is now closed.
+	if page := runSelf(t, home, "show", "interview"); !strings.Contains(page, "no open questions") {
+		t.Errorf("answered question still shown as open:\n%s", page)
+	}
+}
+
+func readLog(t *testing.T, home string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	return string(data)
+}
+
 func TestSinceLastHeartbeat(t *testing.T) {
 	ev := func(name string) event.Event { return event.Event{Name: name} }
 	log := []event.Event{ev("kernel.initialized"), ev("task.captured"), ev("self.heartbeat"), ev("meal.planned"), ev("shopping.added")}

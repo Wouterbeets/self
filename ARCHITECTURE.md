@@ -749,6 +749,53 @@ committed `home/` body predates onboarding (a fresh `self init` gets the page).
 
 ---
 
+## Slice 14 — the human-in-the-loop brain, as a coding interview (VALIDATED)
+
+**Hypothesis.** Slice 13 made wiring an LLM a page, but a fresh user with *no* LLM
+and no key still hits a wall — and every slice so far was validated only against a
+stub/fake brain, never a real cognition. Both gaps have one answer: a *human* is a
+real brain. If "the brain is a process" (Slice 12) is true, a human answering
+through a page is a valid brain — and it's the zero-dependency first run. The
+asymmetry to resolve: an LLM brain answers synchronously inside `self think`; a
+human answers minutes later. The claim under test: the human brain fits the
+event-log model with no blocking and no bridge server — park the question as an
+event, render it as a projection, let a person answer it through a form.
+
+**Slice.** Two more baby-kernel builtins (signed at init, no LLM), plus a brain
+mode:
+- With provider `human`, `self brain` does not call an LLM. It **appends a
+  `brain.asked {id, prompt}` directly to the log** (it can't ride out on stdout:
+  `self think` is a pure query that appends nothing, so the parked question must
+  persist itself) and returns a placeholder reply.
+- An **`interview` projector** folds `brain.asked` / `brain.answered` into the set
+  of *open* questions and renders each with a form — a free-text reply and an
+  optional capability declaration — posting to `/run/answer`.
+- An **`answer` command** emits `brain.answered {id}` (closing the question), the
+  reply as a `chat.message`, and — if the human wrote a declaration — that event,
+  so the strange loop can grow the capability. The human is the brain; with a
+  compiler also wired, the human is the architect and the LLM the builder.
+
+**Evidence (e2e, no LLM).** Choose `human`; `self think "what should I build?"`
+parks a `brain.asked` and replies "open /interview"; the interview projection
+(read back as the oracle) shows the question + answer form; `self run answer <id>
+"…" ""` emits `brain.answered` + the assistant `chat.message` and the question
+flips to "no open questions". Selftest covers all four onboarding capabilities
+(`configure`/`setup`/`answer`/`interview`, 4/4) — they ship examples. The hybrid
+grow path (human declaration + compiler) builds the capability when a compiler is
+present. Full suite + preflight green.
+
+**Decision: keep.** It is the accessible-entry-point anchor reaching its limit —
+self now runs end-to-end on a machine with nothing installed but self itself, and
+the first *real* (non-stub) brain in the whole lineage is a person. No new trust
+surface: `answer` is an ordinary command, the question/answer are data events, and
+growing still goes through the signed compiler. Honest gaps: the pure no-LLM grow
+(the human pastes a *script*, not a spec) is deliberately not built — it would
+install operator-authored bytes, the foreign-code line Slices 4–6 drew, and
+deserves its own decision; the interview is single-tier (no threading/identity of
+who answered); and a parked question has no timeout/expiry.
+
+---
+
 ## How to reproduce
 
 ```sh
@@ -830,3 +877,22 @@ grep -c "$(cat "$SELF_HOME/.brain-key" 2>/dev/null)" "$SELF_HOME/events.jsonl" 2
 
 The setup surface rehydrates from `events.jsonl` + `.secret` with no LLM, like
 any capability — because the kernel authored and signed it at init.
+
+Slice 14 — the human-in-the-loop brain (a coding interview). With provider
+`human`, there is no LLM: self parks each prompt and a person answers it through a
+page — pure event log, zero external dependencies.
+
+```sh
+self init
+self run configure human "" "" ""          # choose the human brain
+self think "what should I build?"           # parks a brain.asked; reply: "open /interview"
+self live                                   # open /interview — the open question + an answer form
+# answer in the page (or CLI): a plain reply, and/or a capability declaration to grow
+self run answer <id> "build a timer" ""     # emits brain.answered + a chat.message; question closes
+```
+
+A plain reply works with no LLM (you ARE the brain). Growing a capability from a
+declaration still routes through the compiler — so "human spec + LLM build" is a
+hybrid that needs a compiler; the pure "human writes the script" path is a
+deliberate non-goal for now (it is a kernel trust-model decision, since installing
+operator-authored bytes is exactly the foreign-code line Slices 4–6 drew).

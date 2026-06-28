@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -83,10 +85,63 @@ func installOnboarding(home string) error {
 		}
 	}
 
+	// The human-in-the-loop brain surface: an interview projector (open questions
+	// + an answer form) and an answer command. Shipped as builtins too, so the
+	// zero-dependency "you are the brain" path works with no LLM at all.
+	answerDecl, _ := json.Marshal(map[string]any{
+		"name":        "answer",
+		"description": "Answer a parked brain question (the human-in-the-loop brain). Emits a reply and optionally grows a capability from a declaration.",
+		"params": map[string]string{
+			"id":          "string — the brain.asked id being answered",
+			"reply":       "string — a plain reply, shown in chat",
+			"declaration": "string — optional JSON event ({name,payload}) to grow a capability",
+		},
+		"event": map[string]any{
+			"name":   event_BrainAnswered,
+			"fields": map[string]string{"id": "string"},
+		},
+		"examples": []map[string]any{{
+			"note":            "a plain reply marks the question answered and shows in chat",
+			"args":            []string{"q1", "here is your answer", ""},
+			"expect_contains": []string{"brain.answered", "q1", "chat.message", "here is your answer"},
+		}},
+	})
+	interviewDecl, _ := json.Marshal(map[string]any{
+		"name":        "interview",
+		"description": "The human-in-the-loop brain page: renders open brain.asked questions, each with a form to answer (a reply and/or a capability declaration).",
+		"consumes":    []string{event_BrainAsked, event_BrainAnswered},
+		"examples": []map[string]any{{
+			"note": "an unanswered question renders with an answer form",
+			"events": []map[string]any{{
+				"name":    event_BrainAsked,
+				"payload": map[string]any{"id": "q1", "prompt": "build me a timer"},
+			}},
+			"expect_contains": []string{"brain interview", "build me a timer", "/run/answer"},
+		}},
+	})
+	for _, d := range []struct {
+		name    string
+		payload json.RawMessage
+	}{
+		{event.CommandDeclared, answerDecl},
+		{event.ProjectorDeclared, interviewDecl},
+	} {
+		e := event.New(d.name, d.payload)
+		if err := st.Append(&e); err != nil {
+			return err
+		}
+	}
+
 	if err := kernel.InstallBuiltin(home, "command", "configure", configureScript); err != nil {
 		return err
 	}
 	if err := kernel.InstallBuiltin(home, "projector", "setup", setupScript); err != nil {
+		return err
+	}
+	if err := kernel.InstallBuiltin(home, "command", "answer", answerScript); err != nil {
+		return err
+	}
+	if err := kernel.InstallBuiltin(home, "projector", "interview", interviewScript); err != nil {
 		return err
 	}
 
@@ -99,6 +154,22 @@ func installOnboarding(home string) error {
 // event_BrainConfigured is the data-only brain choice event. It deliberately
 // carries no secret — only which provider, where, and whether a key is set.
 const event_BrainConfigured = "brain.configured"
+
+// The human-in-the-loop brain's two events. A brain.asked is a parked question
+// (the prompt self could not answer itself, because the chosen brain is a human);
+// a brain.answered marks it resolved. The interview projector renders the open
+// ones; the answer command emits the resolution + any capability the human grows.
+const (
+	event_BrainAsked    = "brain.asked"
+	event_BrainAnswered = "brain.answered"
+)
+
+// newAskID mints a short opaque id correlating a parked question with its answer.
+func newAskID() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // loadBrainConfig reads the latest brain.configured event and, if the user has
 // chosen an OpenAI-compatible provider, exports SELF_LLM_URL / MODEL / API_KEY
@@ -269,6 +340,84 @@ for k, u in DEFAULT_URL.items():
     print("<tr><td>%s</td><td><code>%s</code></td></tr>" % (k, u))
 print("</table>")
 print("<p class=\"muted\">Most providers (llama.cpp, Ollama, OpenAI, vLLM) speak the OpenAI-compatible API and work as-is. Anthropic needs a dedicated adapter (pending) or an OpenAI-compatible proxy.</p>")
+print("</body></html>")
+`
+
+// answerScript: the `answer` command — the human brain's reply. argv is
+// id, reply, declaration (the interview form's field order). It marks the
+// question answered, emits the reply as a chat.message, and — if the human wrote
+// a declaration — emits that event so the strange loop grows the capability. The
+// human IS the compiler here.
+const answerScript = `#!/usr/bin/env python3
+import sys, json
+
+id_   = sys.argv[1] if len(sys.argv) > 1 else ""
+reply = sys.argv[2] if len(sys.argv) > 2 else ""
+decl  = sys.argv[3] if len(sys.argv) > 3 else ""
+
+print(json.dumps({"name": "brain.answered", "payload": {"id": id_}}))
+
+if reply.strip():
+    print(json.dumps({"name": "chat.message", "payload": {"role": "assistant", "content": reply}}))
+
+if decl.strip():
+    try:
+        ev = json.loads(decl)
+        if isinstance(ev, dict) and ev.get("name") and ev.get("payload") is not None:
+            print(json.dumps(ev))
+        else:
+            print(json.dumps({"name": "chat.message", "payload": {"role": "assistant",
+                "content": "(declaration ignored: expected a JSON object with name + payload)"}}))
+    except Exception as e:
+        print(json.dumps({"name": "chat.message", "payload": {"role": "assistant",
+            "content": "(declaration parse error: %s)" % e}}))
+`
+
+// interviewScript: the `interview` projector — the human-in-the-loop brain page.
+// It folds brain.asked / brain.answered into the set of OPEN questions and renders
+// each with a form: a free-text reply and an optional capability declaration. This
+// is the "coding interview" — self asks, the human answers (or writes the spec).
+const interviewScript = `#!/usr/bin/env python3
+import sys, json
+from html import escape
+
+asked = {}
+answered = set()
+order = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    e = json.loads(line)
+    n = e.get("name"); p = e.get("payload", {}) or {}
+    if n == "brain.asked":
+        i = p.get("id", "")
+        if i not in asked:
+            order.append(i)
+        asked[i] = p.get("prompt", "")
+    elif n == "brain.answered":
+        answered.add(p.get("id", ""))
+
+pending = [(i, asked[i]) for i in order if i not in answered]
+
+print("<!DOCTYPE html><html><head><title>interview</title></head><body>")
+print("<h1>brain interview</h1>")
+print("<p class=\"muted\">You are self's brain. It parks questions here; you answer them — a plain reply, or a capability spec to grow. No LLM: you do the thinking.</p>")
+if not pending:
+    print("<p class=\"tag\">no open questions</p>")
+for i, prompt in pending:
+    print("<div class=\"card\">")
+    print("<h3>question</h3>")
+    print("<p>%s</p>" % escape(prompt))
+    print("<form method=\"post\" action=\"/run/answer\">")
+    print("<input type=\"hidden\" name=\"id\" value=\"%s\">" % escape(i))
+    print("<label>reply</label>")
+    print("<textarea name=\"reply\" rows=\"3\" placeholder=\"a plain answer, shown in chat\"></textarea>")
+    print("<label>declaration — optional JSON, grows a capability</label>")
+    print("<textarea name=\"declaration\" rows=\"6\" placeholder='{\"name\": \"command.declared\", \"payload\": {\"name\": \"...\", \"description\": \"...\", \"params\": {}, \"event\": {\"name\": \"...\", \"fields\": {}}}}'></textarea>")
+    print("<button>answer</button>")
+    print("</form>")
+    print("</div>")
 print("</body></html>")
 `
 
