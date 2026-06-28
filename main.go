@@ -1008,7 +1008,14 @@ func cmdServe(home string, port string) error {
 				consumes = append(consumes, c)
 			}
 		}
-		if err := kernel.Teach(home, r.FormValue("kind"), r.FormValue("name"), consumes, r.FormValue("script")); err != nil {
+		var examples []seed.Example
+		if ex := strings.TrimSpace(r.FormValue("examples")); ex != "" {
+			if err := json.Unmarshal([]byte(ex), &examples); err != nil {
+				http.Error(w, "examples must be a JSON array: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if err := kernel.Teach(home, r.FormValue("kind"), r.FormValue("name"), consumes, r.FormValue("script"), examples); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1840,29 +1847,56 @@ func cmdBrain(home string, prompt string) error {
 // compiler" path — code enters via a kernel verb the person at the keyboard runs,
 // not via the LLM and not via a command-emitted event.
 //
-//	self teach command  <name>                  < script
-//	self teach projector <name> evt.a,evt.b      < script   (consumes for wiring)
+//	self teach command  <name>                          < script
+//	self teach projector <name> evt.a,evt.b              < script   (consumes for wiring)
+//	self teach command  <name> --examples=ex.json        < script   (verified before install)
 func cmdTeach(home string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: self teach <command|projector> <name> [consumes-csv]  (script on stdin)")
+	// Pull the optional --examples=<file> flag out of the positional args.
+	var examplesFile string
+	var pos []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "--examples=") {
+			examplesFile = strings.TrimPrefix(a, "--examples=")
+			continue
+		}
+		pos = append(pos, a)
 	}
-	kind, name := args[0], args[1]
+	if len(pos) < 2 {
+		return fmt.Errorf("usage: self teach <command|projector> <name> [consumes-csv] [--examples=file]  (script on stdin)")
+	}
+	kind, name := pos[0], pos[1]
 	var consumes []string
-	if len(args) > 2 {
-		for _, c := range strings.Split(args[2], ",") {
+	if len(pos) > 2 {
+		for _, c := range strings.Split(pos[2], ",") {
 			if c = strings.TrimSpace(c); c != "" {
 				consumes = append(consumes, c)
 			}
 		}
 	}
+
+	var examples []seed.Example
+	if examplesFile != "" {
+		raw, err := os.ReadFile(examplesFile)
+		if err != nil {
+			return fmt.Errorf("read examples: %w", err)
+		}
+		if err := json.Unmarshal(raw, &examples); err != nil {
+			return fmt.Errorf("parse examples (want a JSON array of {note,args,events,expect_contains}): %w", err)
+		}
+	}
+
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return err
 	}
-	if err := kernel.Teach(home, kind, name, consumes, string(data)); err != nil {
+	if err := kernel.Teach(home, kind, name, consumes, string(data), examples); err != nil {
 		return err
 	}
-	fmt.Printf("taught %s %q — operator-authored, signed + installed\n", kind, name)
+	gate := ""
+	if len(examples) > 0 {
+		gate = fmt.Sprintf(" (passed %d example(s))", len(examples))
+	}
+	fmt.Printf("taught %s %q — operator-authored, signed + installed%s\n", kind, name, gate)
 	return nil
 }
 

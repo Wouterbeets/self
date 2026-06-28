@@ -808,10 +808,22 @@ run/render over the log, and rehydrate; the provenance is in the log.
 The split that keeps the invariant intact: *who may install code* stays the kernel
 (via a signed receipt), and the operator reaches that power through a kernel verb,
 not through the event stream — exactly the Slice 5 shape (the trigger may be
-local-human, the privileged install is the kernel's). Honest gaps remain: the
-interview is single-tier (no identity of who answered); a parked question has no
-expiry; and `self teach` trusts the operator's bytes without an examples gate
-(verification is opt-in and not yet wired for the taught path).
+local-human, the privileged install is the kernel's).
+
+**Operator-authored code is held to the same contract as compiled code.** `self
+teach` (and the `/teach` form) take optional `examples`; if present, the kernel
+runs the script against them through the *same* `VerifyAndLog` gate the compiler
+uses (Slice 9) and refuses to install on failure, logging a signed
+`script.verified` attestation either way. The examples are carried in the
+declaration too, so `selftest` (Slice 11) re-checks the taught capability forever
+after. Verified e2e: a taught command with passing examples installs (and shows in
+selftest); one with a failing example is refused but its failed attestation is
+recorded for audit. So "the human is the compiler" inherits the whole verification
+spine — provably, not on trust.
+
+Honest gaps remain: the interview is single-tier (no identity of who answered); a
+parked question has no expiry; and examples are opt-in for taught code exactly as
+they are for compiled code (no examples → no gate).
 
 ---
 

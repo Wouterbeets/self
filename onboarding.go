@@ -431,6 +431,8 @@ for i, prompt in pending:
     print("<input name=\"consumes\" placeholder=\"e.g. workout.logged\">")
     print("<label>script</label>")
     print("<textarea name=\"script\" rows=\"10\" placeholder=\"#!/usr/bin/env python3&#10;import sys, json&#10;...emit JSONL events on stdout (command) or HTML (projector)...\"></textarea>")
+    print("<label>examples — optional JSON array; if given, the script must pass before it installs</label>")
+    print("<textarea name=\"examples\" rows=\"4\" placeholder='[{\"note\":\"...\",\"args\":[\"...\"],\"expect_contains\":[\"...\"]}]'></textarea>")
     print("<button>teach (install this code)</button>")
     print("</form>")
     print("</div>")

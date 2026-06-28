@@ -503,15 +503,29 @@ func InstallBuiltin(home, kind, name, script string) error {
 // provenance. A minimal declaration is appended for wiring (kernel.html,
 // projector auto-run); it is NOT run through the strange loop, so the human's
 // bytes are installed verbatim rather than recompiled.
-func Teach(home, kind, name string, consumes []string, script string) error {
+func Teach(home, kind, name string, consumes []string, script string, examples []seed.Example) error {
 	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
 		return fmt.Errorf("teach: unsafe or empty name %q", name)
 	}
 	if strings.TrimSpace(script) == "" {
 		return fmt.Errorf("teach: empty script")
 	}
-	st := store.Open(home)
+	if kind != "command" && kind != "projector" {
+		return fmt.Errorf("teach: kind must be command or projector, got %q", kind)
+	}
 
+	// Same conformance gate as the compiler (Slice 9): if the human ships
+	// examples, the script must pass them BEFORE it installs — operator-authored
+	// code is held to the same provable contract as compiled code, and the
+	// script.verified attestation records the outcome. No examples → no gate
+	// (opt-in), exactly as for compiled capabilities.
+	if ok, err := VerifyAndLog(home, kind, name, script, examples); err != nil {
+		return fmt.Errorf("teach: verify %q: %w", name, err)
+	} else if !ok {
+		return fmt.Errorf("teach: %q failed its examples — not installed", name)
+	}
+
+	st := store.Open(home)
 	switch kind {
 	case "command":
 		decl, _ := json.Marshal(map[string]any{
@@ -519,6 +533,7 @@ func Teach(home, kind, name string, consumes []string, script string) error {
 			"description": "taught directly by the human brain (operator-authored)",
 			"params":      map[string]string{},
 			"event":       map[string]any{"name": name + ".event", "fields": map[string]string{}},
+			"examples":    examples,
 		})
 		e := event.New(event.CommandDeclared, decl)
 		if err := st.Append(&e); err != nil {
@@ -532,13 +547,12 @@ func Teach(home, kind, name string, consumes []string, script string) error {
 			"name":        name,
 			"description": "taught directly by the human brain (operator-authored)",
 			"consumes":    consumes,
+			"examples":    examples,
 		})
 		e := event.New(event.ProjectorDeclared, decl)
 		if err := st.Append(&e); err != nil {
 			return err
 		}
-	default:
-		return fmt.Errorf("teach: kind must be command or projector, got %q", kind)
 	}
 
 	if err := InstallBuiltin(home, kind, name, script); err != nil {

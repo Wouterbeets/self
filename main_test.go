@@ -375,6 +375,50 @@ func TestTeachInstallsOperatorCode(t *testing.T) {
 	}
 }
 
+// TestTeachExamplesGate proves operator-authored code is held to the same
+// provable contract as compiled code (Slice 9): a taught script that ships
+// examples must pass them before it installs; one that fails is refused.
+func TestTeachExamplesGate(t *testing.T) {
+	bin := os.Getenv("SELF_TEST_BIN")
+	if bin == "" {
+		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
+	}
+	home := t.TempDir()
+	runSelf(t, home, "init")
+
+	teach := func(name, examplesJSON, script string) error {
+		exFile := filepath.Join(home, name+".ex.json")
+		if err := os.WriteFile(exFile, []byte(examplesJSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(bin, "teach", "command", name, "--examples="+exFile)
+		cmd.Env = append(os.Environ(), "SELF_HOME="+home)
+		cmd.Stdin = strings.NewReader(script)
+		return cmd.Run()
+	}
+
+	// Passing examples → installs.
+	good := "#!/usr/bin/env python3\nimport sys, json\nprint(json.dumps({\"name\": \"greet.said\", \"payload\": {\"who\": \" \".join(sys.argv[1:])}}))\n"
+	if err := teach("greet", `[{"args":["alice"],"expect_contains":["greet.said","alice"]}]`, good); err != nil {
+		t.Fatalf("teach with passing examples failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "greet")); err != nil {
+		t.Fatalf("verified capability not installed: %v", err)
+	}
+
+	// Failing examples → refused, NOT installed.
+	if err := teach("broken", `[{"args":["x"],"expect_contains":["NEVER_EMITTED"]}]`, good); err == nil {
+		t.Error("teach with failing examples should have errored")
+	}
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "broken")); err == nil {
+		t.Error("a capability that failed its examples must not install")
+	}
+	// The failed attestation is recorded for audit.
+	if log := readLog(t, home); !strings.Contains(log, `"name":"script.verified"`) {
+		t.Error("no script.verified attestation recorded")
+	}
+}
+
 func readLog(t *testing.T, home string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(home, "events.jsonl"))
