@@ -310,6 +310,22 @@ Brain resolution (highest first):
    quota / rate-limit error from a remote endpoint
 6. stub scripts — `SELF_LLM_STUB=1`, no key, no network
 
+## what's in the repo
+
+- `main.go`, `internal/` — the kernel: event store, LLM compiler, pipe
+  orchestrator, web server.
+- `seeds/` — starter capabilities you can grow: `chat` (talk to it and it grows
+  the rest), the `home` board, the `kitchen` planner, plus `artifact` and
+  `restore`.
+- `home/` — the demo body a cold `self` brings up (a task board + meal planner),
+  stored as just its event log.
+- `garden/` — a second example body: one organism's state after a few
+  heartbeats, stored as just its log + signing key.
+- `brain/` — the human-in-the-loop brain bridge (`bridge.py`) and notes.
+- `poc/` — proof-of-concept seeds that test the thesis (emergence, cross-node
+  sharing, the build log, …); not needed to use self.
+- `ARCHITECTURE.md` — the build log: every validated slice, with its evidence.
+
 ## getting started
 
 ```sh
