@@ -26,13 +26,12 @@ replay of it, rendered as HTML that you and your agent read identically.
 ## the loop
 
 ```sh
-self                       # start the live garden (web server) — the default
-self init                  # initialize a bare kernel (+ a brain-setup page)
-self live                  # open http://localhost:7777/ — first run lands on /setup
-                           #   pick your LLM (Ollama/llama.cpp/OpenAI/…) and save
-                           #   …or pick "human": no LLM, you answer at /interview yourself
-self teach command timer   # the human is the compiler: hand-write a capability (script on stdin)
-self grow seeds/chat       # grow a capability from a seed (LLM compiles it)
+self                       # the default — first run brings up a demo garden, then serves it at :7777
+                           #   land on /, connect your intelligence on /setup
+self init                  # initialize a bare kernel (welcome + setup pages, no demo)
+self live                  # start the web server explicitly (default port 7777)
+self teach command timer   # hand-write a capability yourself (script on stdin)
+self grow seeds/chat       # grow a capability from a seed (the LLM compiles it)
 self run chat "add a ..."  # run a capability; chat asks the brain, which can grow more
 self think "summarize ..." # ask the brain (a swappable process; default = LLM)
 self heartbeat             # one self-improvement cycle: the brain reflects & grows
