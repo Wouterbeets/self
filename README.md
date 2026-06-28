@@ -1,13 +1,13 @@
 # self
 
-A sovereign, self-improving capability system. **self** is born knowing almost
-nothing. Seeds teach it everything else. The LLM compiles seed declarations into
-runnable code; the kernel appends events, replays them through compiled
-projections, and renders HTML that you and your agent see identically.
+A local-first, self-modifying capability system. The kernel knows almost
+nothing; capabilities grow as **seeds** — declarations an LLM compiles into
+runnable scripts. State is one append-only event log; every view is a pure
+replay of it, rendered as HTML that you and your agent read identically.
 
-> One append-only event log + shared projections. A tiny kernel; everything else
-> grows as seeds through the strange loop. Nothing is hidden — every capability,
-> every projection, every byte of state is a plain file you can open.
+> One append-only event log + shared projections. A small kernel; everything
+> else grows as seeds. Every capability, projection, and byte of state is a
+> plain file you can open.
 
 ## mental model
 
@@ -27,7 +27,7 @@ projections, and renders HTML that you and your agent see identically.
 
 ```sh
 self                       # start the live garden (web server) — the default
-self init                  # initialize the baby kernel (+ a brain-setup page)
+self init                  # initialize a bare kernel (+ a brain-setup page)
 self live                  # open http://localhost:7777/ — first run lands on /setup
                            #   pick your LLM (Ollama/llama.cpp/OpenAI/…) and save
                            #   …or pick "human": no LLM, you answer at /interview yourself
@@ -43,17 +43,16 @@ self where                 # SELF_HOME and every important path
 self which capture         # full path to a command or projection
 ```
 
-Grow the chat seed and `self` can grow everything else. Ask the chat to add a
-note command, a todo board, a finance tracker — the brain reads the garden,
-produces valid declarations, the kernel compiles them. One seed, infinite
-capabilities. That's the strange loop.
+Grow the chat seed and the rest follows: ask it to add a note command, a board,
+a tracker — the brain reads the garden, emits declarations, the kernel compiles
+them. A capability can declare new capabilities, so one seed bootstraps the rest.
 
 ## CLI
 
 | command | behavior |
 | --- | --- |
 | `self` | Default: rehydrate the body from the log, then start the live garden (the most common action) |
-| `self init` | Initialize the baby kernel |
+| `self init` | Initialize a bare kernel (and the brain-setup page) |
 | `self rehydrate` | Rebuild `capabilities/` + `site/` from the log's signed receipts — no LLM, no network |
 | `self selftest` | Re-run every installed capability's examples against its binary — a regression gate (the projection/output is the oracle) |
 | `self identity` | Print this home's public verification key (shareable) |
@@ -62,6 +61,7 @@ capabilities. That's the strange loop.
 | `self run <command> [args]` | Run a capability — append events, refresh affected projections |
 | `self think "..."` | Ask the brain (runs the brain process, returns `{response, declarations}`; swap via `$SELF_BRAIN`) |
 | `self brain "..."` | The brain process itself — prompt in, event JSONL out (the default is the in-tree LLM) |
+| `self teach <command\|projector> <name> [consumes-csv] [--examples=file]` | Install a hand-written script as a capability (script on stdin); kernel-signed, examples-gated |
 | `self heartbeat` | One self-improvement cycle (the brain reflects on the garden and may grow a capability) |
 | `self restore <name> [seq]` | Roll a capability back to an earlier compiled version (kernel-only, audit-faithful) |
 | `self show <name>` | Render a projection. Piped → HTML on stdout; otherwise render and open in a browser |
@@ -166,25 +166,31 @@ kernel is the sole steward of LLM credentials.
 
 ## the brain (`self brain` / `self think`)
 
-The brain is a **process the kernel pipes to**, exactly like a command (Slice 12).
-`self brain` is the primitive: prompt in (argv), event JSONL out (stdout) — the
-reply as `chat.message`, anything it grows as `command.declared` /
-`projector.declared`. It's **swappable** via `$SELF_BRAIN`: any program honoring
-that contract is a valid brain — the default `self brain` (the in-tree LLM), a
-human-in-the-loop (`brain/bridge.py`), a deterministic script, or a swarm. The
-kernel can't tell the difference; intelligence is just one more process.
+The brain is a **process the kernel pipes to**, exactly like a command. `self
+brain` is the primitive: prompt in (argv), event JSONL out (stdout) — the reply
+as `chat.message`, anything it grows as `command.declared` / `projector.declared`.
+It's **swappable** via `$SELF_BRAIN`: any program honoring that contract is a
+valid brain — the default in-tree LLM, a deterministic script, a swarm, or a
+human (see below). The kernel can't tell the difference; intelligence is just
+another process.
 
-`self think` is the **call interface capabilities use**, kept byte-compatible with
-every garden ever grown: it spawns the configured brain process, then returns the
-same `{response, declarations}` JSON it always did (appending nothing — the caller
-owns that). So a capability that needs intelligence calls `self think` rather than
-reinventing HTTP, auth, and prompts, and pulling Slice 12 into an existing repo
-needs **no migration** — the contract didn't change, only the plumbing behind it.
+`self think` is the **call interface capabilities use**: it spawns the configured
+brain process and returns `{response, declarations}` JSON, appending nothing (the
+caller owns that). So a capability calls `self think` rather than reinventing
+HTTP, auth, and prompts, and the brain stays swappable underneath it.
 
-The brain has three powers: **read** (explore the garden — a local brain just
-reads `site/*.html` and the log directly), **act** (every capability is callable),
-and **grow** (declare new capabilities). The projection output *is* the memory, so
+The brain has three powers: **read** (explore the garden — a local brain reads
+`site/*.html` and the log directly), **act** (every capability is callable), and
+**grow** (declare new capabilities). The projection output *is* the memory, so
 conversation and context persist across calls.
+
+**Choosing a brain.** `self init` installs a setup page; first run lands on
+`/setup`, where you pick a provider (OpenAI, llama.cpp, Ollama, opencode, or a
+custom OpenAI-compatible endpoint) and save — provider/URL/model are recorded as
+a `brain.configured` event; the API token is written to `SELF_HOME/.brain-key`,
+never to the log. Pick **human** for a no-LLM, zero-dependency mode: `self think`
+parks each prompt and you answer it yourself at `/interview` (and can hand-write a
+capability there, installed via `self teach`).
 
 ## garden-aware compilation
 
@@ -237,9 +243,11 @@ Five things, irreducible:
    time** (the strange loop). Logs every compiled script as a `script.compiled`
    receipt **signed with the home's secret**; install verifies the signature, so
    only kernel-authored code reaches `capabilities/`. `self restore` reads those
-   receipts to roll back. A
-   declaration may carry a reference implementation the compiler verifies and
-   adapts — but the compiler always authors the binary; no foreign code runs.
+   receipts to roll back. A declaration may carry a reference implementation the
+   compiler verifies and adapts — but the compiler always authors the binary; no
+   foreign code runs. The operator can also author a script directly with `self
+   teach` (kernel-signed, examples-gated) — the same install path, a human
+   instead of the LLM.
 3. **the brain** (`self think`) — a process the kernel pipes events to (prompt
    in, event JSONL out), swappable via `$SELF_BRAIN`; the default `self brain`
    wraps the same LLM infrastructure as the compiler. Capabilities call it; it
@@ -249,14 +257,13 @@ Five things, irreducible:
 5. **web server** — `self live` serves the materialized `site/` and re-runs
    projections on demand
 
-The kernel acts on three events, and all three carry **data, never code**:
-`command.declared` and `projector.declared` (compile a spec into a binary,
-adapted to this receiver) and `restore.requested` (reinstall an earlier
-receipt). It writes three: `kernel.initialized`, `script.compiled` (a compile
-receipt, signed with the home's secret — anyone may append one, but only a
-kernel-signed receipt installs), and `seed.planted`. Everything else comes from
-seeds — or from capabilities that emit declarations or restore intents at run
-time.
+The events the kernel acts on carry **data, never code**: `command.declared` and
+`projector.declared` (compile a spec into a binary for this receiver) and
+`restore.requested` (reinstall an earlier receipt). It writes the receipts
+itself — `kernel.initialized`, `script.compiled` (signed compile receipts; anyone
+may append one, but only a kernel-signed receipt installs), `script.verified`
+(signed conformance attestations), and `seed.planted`. Everything else comes from
+seeds, or from capabilities that emit declarations or intents at run time.
 
 ## seed format
 
@@ -286,48 +293,48 @@ adaptation and the trust model.
 
 ```
 SELF_HOME        kernel home (default ~/.self)
-SELF_LLM_URL     LLM API base URL (overrides the opencode-go default)
-SELF_LLM_API_KEY LLM API key (overrides the opencode-go default)
-SELF_LLM_MODEL   LLM model name (overrides the opencode-go default)
+SELF_BRAIN       brain process to spawn (overrides everything below; e.g. a script or bridge)
+SELF_LLM_URL     LLM API base URL (no /v1 suffix; the kernel appends it)
+SELF_LLM_API_KEY LLM API key
+SELF_LLM_MODEL   LLM model name
 SELF_LLM_STUB    set to "1" to force stub scripts (no LLM, no network)
 ```
 
-Config precedence (highest first):
+Brain resolution (highest first):
 
-1. `SELF_LLM_*` env vars — explicit override of URL, key, or model
-2. opencode-go subscription — read from `~/.local/share/opencode/auth.json`
-   (endpoint `https://opencode.ai/zen/go`, model `glm-5.2`)
-3. local llama-server — `http://127.0.0.1:8080`, used when opencode-go isn't
-   configured, and as the automatic fallback when opencode-go returns a
-   quota / rate-limit error
-4. stub scripts — `SELF_LLM_STUB=1`, no key, no network
+1. `$SELF_BRAIN` — run this program as the brain, whatever it is
+2. `SELF_LLM_*` env vars — explicit OpenAI-compatible endpoint
+3. the `/setup` page — the saved `brain.configured` provider + `.brain-key` token
+4. opencode-go subscription — `~/.local/share/opencode/auth.json`
+5. local llama-server — `http://127.0.0.1:8080`, and the automatic fallback on a
+   quota / rate-limit error from a remote endpoint
+6. stub scripts — `SELF_LLM_STUB=1`, no key, no network
 
 ## getting started
 
-An LLM (opencode-go, a local llama-server, or `SELF_LLM_*`) is the compiler —
-growing a capability means compiling it, so configure one first:
-
 ```sh
 go build -o self .
-export SELF_HOME=$(mktemp -d)      # or just use the default ~/.self
-./self init
-./self grow poc/wall               # compiles the wall from its declaration +
-                                   #   reference implementation, adapted to you
-./self run post claude "hello"     # append a message
-./self                             # start the live garden, visit http://localhost:7777
+export SELF_HOME=$(mktemp -d)      # or use the default ~/.self
+./self init                        # installs the /setup page — no LLM needed
+./self live                        # open http://localhost:7777, pick a brain on /setup
 ```
 
-Then let it grow itself:
+Growing a capability means compiling it, so wire in an LLM on `/setup` (or via
+`SELF_LLM_*`), then:
 
 ```sh
+./self grow poc/wall               # compiles the wall from its declaration + reference impl
+./self run post claude "hello"
 ./self grow seeds/chat
 ./self run chat "add a note command and a notes board"
-./self                             # watch the new capability appear in the garden
 ```
+
+No LLM? Pick **human** on `/setup`: answer prompts yourself at `/interview`, or
+hand-write a capability with `self teach`.
 
 ## status
 
-Experimental. The thesis: the kernel is a baby that knows a handful of events,
-the LLM is the compiler that teaches it, the seed is the curriculum — and `self`
-can grow, reflect on, and rewrite itself through the strange loop while staying
-sovereign, local-first, and fully inspectable.
+Experimental. The thesis: a minimal kernel — event log, signed install, replay —
+plus an LLM compiler is enough for a system that grows, tests, and rewrites its
+own capabilities while staying local-first and fully inspectable. Every capability
+and every byte of state is a plain file or a replayable event.
