@@ -786,13 +786,30 @@ present. Full suite + preflight green.
 
 **Decision: keep.** It is the accessible-entry-point anchor reaching its limit —
 self now runs end-to-end on a machine with nothing installed but self itself, and
-the first *real* (non-stub) brain in the whole lineage is a person. No new trust
-surface: `answer` is an ordinary command, the question/answer are data events, and
-growing still goes through the signed compiler. Honest gaps: the pure no-LLM grow
-(the human pastes a *script*, not a spec) is deliberately not built — it would
-install operator-authored bytes, the foreign-code line Slices 4–6 drew, and
-deserves its own decision; the interview is single-tier (no threading/identity of
-who answered); and a parked question has no timeout/expiry.
+the first *real* (non-stub) brain in the whole lineage is a person. The
+chat/answer path adds no trust surface: `answer` is an ordinary command and the
+question/answer are data events.
+
+**Follow-up (done) — the human is the compiler.** The pure no-LLM grow — the human
+writes the capability's *script* by hand — is now built, as `self teach` (CLI) and
+a privileged `/teach` route the interview page posts to. The crucial design line:
+it is a **kernel operation, never a command-emitted event**, so it does NOT reopen
+the foreign-code hole Slices 4–6 drew. A seed or a remote node still cannot inject
+code — their bytes carry no valid signature for this home — but the *operator at
+the keyboard* (who holds `.secret` and owns the machine) can, and the kernel signs
+the result into a normal `script.compiled` receipt. So operator-authored code is
+first-class: it runs, it rehydrates from `events.jsonl` + `.secret` with no LLM,
+and a `capability.taught {by:"human"}` event records the provenance. Verified
+e2e (CLI + web): a hand-written `timer` command and a `timers` projector install,
+run/render over the log, and rehydrate; the provenance is in the log.
+
+The split that keeps the invariant intact: *who may install code* stays the kernel
+(via a signed receipt), and the operator reaches that power through a kernel verb,
+not through the event stream — exactly the Slice 5 shape (the trigger may be
+local-human, the privileged install is the kernel's). Honest gaps remain: the
+interview is single-tier (no identity of who answered); a parked question has no
+expiry; and `self teach` trusts the operator's bytes without an examples gate
+(verification is opt-in and not yet wired for the taught path).
 
 ---
 
@@ -891,8 +908,21 @@ self live                                   # open /interview — the open quest
 self run answer <id> "build a timer" ""     # emits brain.answered + a chat.message; question closes
 ```
 
-A plain reply works with no LLM (you ARE the brain). Growing a capability from a
-declaration still routes through the compiler — so "human spec + LLM build" is a
-hybrid that needs a compiler; the pure "human writes the script" path is a
-deliberate non-goal for now (it is a kernel trust-model decision, since installing
-operator-authored bytes is exactly the foreign-code line Slices 4–6 drew).
+A plain reply works with no LLM (you ARE the brain). To grow a capability with no
+LLM either, the human writes the script and the kernel signs + installs it:
+
+```sh
+# from the interview page's "write the code yourself" form, or the CLI:
+cat <<'PY' | self teach command timer
+#!/usr/bin/env python3
+import sys, json
+print(json.dumps({"name": "timer.set", "payload": {"minutes": sys.argv[1] if len(sys.argv)>1 else "5"}}))
+PY
+self run timer 10                  # the operator's code runs
+self show kernel                   # it's wired in, signed, and rehydratable
+```
+
+`self teach` is a kernel verb (and the `/teach` route), never a command-emitted
+event — so operator-authored code installs while foreign code still cannot.
+Growing from a *declaration* instead (human spec + LLM build) remains available
+when a compiler is configured.

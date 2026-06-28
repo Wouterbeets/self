@@ -490,6 +490,68 @@ func InstallBuiltin(home, kind, name, script string) error {
 	return store.Open(home).Append(&e)
 }
 
+// Teach installs an OPERATOR-AUTHORED capability — a script a human wrote by
+// hand, not one an LLM compiled. It is the "human is the compiler" path for the
+// human-in-the-loop brain: the local operator (who holds this home's .secret and
+// owns the machine) authors the bytes, and the kernel signs + installs them like
+// any capability. It is deliberately a KERNEL operation, never reachable from a
+// command-emitted event — so it does NOT reopen the foreign-code line Slices 4–6
+// drew: a seed or a remote node still cannot inject code (their bytes have no
+// valid signature for this home), only the person at the keyboard can. The result
+// is a normal signed script.compiled receipt, so it rehydrates and audits exactly
+// like a compiled capability; a capability.taught event records the human
+// provenance. A minimal declaration is appended for wiring (kernel.html,
+// projector auto-run); it is NOT run through the strange loop, so the human's
+// bytes are installed verbatim rather than recompiled.
+func Teach(home, kind, name string, consumes []string, script string) error {
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return fmt.Errorf("teach: unsafe or empty name %q", name)
+	}
+	if strings.TrimSpace(script) == "" {
+		return fmt.Errorf("teach: empty script")
+	}
+	st := store.Open(home)
+
+	switch kind {
+	case "command":
+		decl, _ := json.Marshal(map[string]any{
+			"name":        name,
+			"description": "taught directly by the human brain (operator-authored)",
+			"params":      map[string]string{},
+			"event":       map[string]any{"name": name + ".event", "fields": map[string]string{}},
+		})
+		e := event.New(event.CommandDeclared, decl)
+		if err := st.Append(&e); err != nil {
+			return err
+		}
+	case "projector":
+		if consumes == nil {
+			consumes = []string{}
+		}
+		decl, _ := json.Marshal(map[string]any{
+			"name":        name,
+			"description": "taught directly by the human brain (operator-authored)",
+			"consumes":    consumes,
+		})
+		e := event.New(event.ProjectorDeclared, decl)
+		if err := st.Append(&e); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("teach: kind must be command or projector, got %q", kind)
+	}
+
+	if err := InstallBuiltin(home, kind, name, script); err != nil {
+		return err
+	}
+	prov, _ := json.Marshal(map[string]any{"name": name, "kind": kind, "by": "human"})
+	pe := event.New("capability.taught", prov)
+	if err := st.Append(&pe); err != nil {
+		return err
+	}
+	return RenderHTML(home)
+}
+
 // VerifyAndLog runs a freshly compiled script against its declaration's examples
 // and appends a script.verified receipt recording the outcome (pass or fail) for
 // audit. It returns whether the script passed. With no examples it passes

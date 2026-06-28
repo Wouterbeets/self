@@ -116,7 +116,7 @@ func installOnboarding(home string) error {
 				"name":    event_BrainAsked,
 				"payload": map[string]any{"id": "q1", "prompt": "build me a timer"},
 			}},
-			"expect_contains": []string{"brain interview", "build me a timer", "/run/answer"},
+			"expect_contains": []string{"brain interview", "build me a timer", "/run/answer", "/teach"},
 		}},
 	})
 	for _, d := range []struct {
@@ -413,9 +413,26 @@ for i, prompt in pending:
     print("<input type=\"hidden\" name=\"id\" value=\"%s\">" % escape(i))
     print("<label>reply</label>")
     print("<textarea name=\"reply\" rows=\"3\" placeholder=\"a plain answer, shown in chat\"></textarea>")
-    print("<label>declaration — optional JSON, grows a capability</label>")
+    print("<label>declaration — optional JSON, grows a capability (needs a compiler)</label>")
     print("<textarea name=\"declaration\" rows=\"6\" placeholder='{\"name\": \"command.declared\", \"payload\": {\"name\": \"...\", \"description\": \"...\", \"params\": {}, \"event\": {\"name\": \"...\", \"fields\": {}}}}'></textarea>")
     print("<button>answer</button>")
+    print("</form>")
+
+    # The human IS the compiler: write the capability's script by hand and the
+    # kernel signs + installs it (no LLM). Posts to the privileged /teach route.
+    print("<hr><h3>or write the code yourself</h3>")
+    print("<p class=\"muted\">Author the script directly — the kernel signs and installs it as a real capability (operator-authored, no LLM).</p>")
+    print("<form method=\"post\" action=\"/teach\">")
+    print("<input type=\"hidden\" name=\"id\" value=\"%s\">" % escape(i))
+    print("<label>kind</label>")
+    print("<select name=\"kind\"><option value=\"command\">command</option><option value=\"projector\">projector</option></select>")
+    print("<label>name</label>")
+    print("<input name=\"name\" placeholder=\"capability name, e.g. timer\">")
+    print("<label>consumes — for projectors, comma-separated event names</label>")
+    print("<input name=\"consumes\" placeholder=\"e.g. workout.logged\">")
+    print("<label>script</label>")
+    print("<textarea name=\"script\" rows=\"10\" placeholder=\"#!/usr/bin/env python3&#10;import sys, json&#10;...emit JSONL events on stdout (command) or HTML (projector)...\"></textarea>")
+    print("<button>teach (install this code)</button>")
     print("</form>")
     print("</div>")
 print("</body></html>")

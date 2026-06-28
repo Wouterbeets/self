@@ -65,6 +65,8 @@ func main() {
 	case "brain":
 		prompt := strings.Join(args, " ")
 		err = cmdBrain(home, prompt)
+	case "teach":
+		err = cmdTeach(home, args)
 	case "heartbeat":
 		err = cmdHeartbeat(home)
 	case "watch":
@@ -986,6 +988,44 @@ func cmdServe(home string, port string) error {
 		fmt.Fprint(w, "ok")
 	})
 
+	// POST /teach — the human-is-the-compiler route. The operator authors a
+	// capability's script by hand (in the interview page) and the kernel signs +
+	// installs it. This is a privileged KERNEL route, distinct from /run: code
+	// enters only through a path the person at the keyboard drives, never through
+	// a command-emitted event, so the foreign-code line (Slices 4–6) stays drawn.
+	mux.HandleFunc("/teach", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var consumes []string
+		for _, c := range strings.Split(r.FormValue("consumes"), ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				consumes = append(consumes, c)
+			}
+		}
+		if err := kernel.Teach(home, r.FormValue("kind"), r.FormValue("name"), consumes, r.FormValue("script")); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// If this answered a parked question, close it.
+		if id := strings.TrimSpace(r.FormValue("id")); id != "" {
+			ans, _ := json.Marshal(map[string]string{"id": id})
+			e := event.New("brain.answered", ans)
+			_ = store.Open(home).Append(&e)
+		}
+		if ref := r.Header.Get("Referer"); ref != "" {
+			http.Redirect(w, r, ref, http.StatusSeeOther)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "taught")
+	})
+
 	addr := ":" + port
 	fmt.Fprintf(os.Stderr, "self: the living garden is at http://localhost:%s\n", port)
 	fmt.Fprintf(os.Stderr, "  /              my identity — capabilities, paths, wiring\n")
@@ -1792,6 +1832,37 @@ func cmdBrain(home string, prompt string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// cmdTeach installs an operator-authored capability: the human writes the script
+// (read from stdin) and the kernel signs + installs it. This is the "human is the
+// compiler" path — code enters via a kernel verb the person at the keyboard runs,
+// not via the LLM and not via a command-emitted event.
+//
+//	self teach command  <name>                  < script
+//	self teach projector <name> evt.a,evt.b      < script   (consumes for wiring)
+func cmdTeach(home string, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: self teach <command|projector> <name> [consumes-csv]  (script on stdin)")
+	}
+	kind, name := args[0], args[1]
+	var consumes []string
+	if len(args) > 2 {
+		for _, c := range strings.Split(args[2], ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				consumes = append(consumes, c)
+			}
+		}
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return err
+	}
+	if err := kernel.Teach(home, kind, name, consumes, string(data)); err != nil {
+		return err
+	}
+	fmt.Printf("taught %s %q — operator-authored, signed + installed\n", kind, name)
 	return nil
 }
 

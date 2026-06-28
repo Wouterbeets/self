@@ -331,6 +331,50 @@ func TestHumanBrainInterview(t *testing.T) {
 	}
 }
 
+// TestTeachInstallsOperatorCode is the slice-14 "human is the compiler" evidence:
+// a script the operator writes by hand becomes a real, signed, rehydratable
+// capability with NO LLM — and because it is a signed receipt, it survives a
+// log+secret-only rehydrate. A command-emitted script still cannot do this (the
+// foreign-code line holds); only the kernel verb can.
+func TestTeachInstallsOperatorCode(t *testing.T) {
+	bin := os.Getenv("SELF_TEST_BIN")
+	if bin == "" {
+		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
+	}
+	home := t.TempDir()
+	runSelf(t, home, "init")
+
+	script := "#!/usr/bin/env python3\nimport sys, json\nprint(json.dumps({\"name\": \"greet.said\", \"payload\": {\"who\": \" \".join(sys.argv[1:])}}))\n"
+	cmd := exec.Command(bin, "teach", "command", "greet")
+	cmd.Env = append(os.Environ(), "SELF_HOME="+home) // no LLM, no stub
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("teach: %v\n%s", err, out)
+	}
+
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "greet")); err != nil {
+		t.Fatalf("teach did not install the script: %v", err)
+	}
+	runSelf(t, home, "run", "greet", "world") // the operator's code runs
+
+	log := readLog(t, home)
+	if !strings.Contains(log, "capability.taught") || !strings.Contains(log, `"by":"human"`) {
+		t.Errorf("human provenance not recorded:\n%s", log)
+	}
+
+	// Signed receipt → rehydrates from log + secret alone, no LLM.
+	fresh := t.TempDir()
+	for _, f := range []string{"events.jsonl", ".secret", ".identity"} {
+		if data, rErr := os.ReadFile(filepath.Join(home, f)); rErr == nil {
+			os.WriteFile(filepath.Join(fresh, f), data, 0600)
+		}
+	}
+	runSelf(t, fresh, "rehydrate")
+	if _, err := os.Stat(filepath.Join(fresh, "capabilities", "commands", "greet")); err != nil {
+		t.Fatalf("taught capability did not rehydrate from the log: %v", err)
+	}
+}
+
 func readLog(t *testing.T, home string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(home, "events.jsonl"))
