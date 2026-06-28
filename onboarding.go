@@ -49,11 +49,26 @@ func installOnboarding(home string) error {
 			"name":   event_BrainConfigured,
 			"fields": map[string]string{"provider": "string", "base_url": "string", "model": "string", "key_set": "bool"},
 		},
+		// Regression oracle (Slice 9/11): blank key → no key-file write, so this is
+		// side-effect-free; asserts the non-secret config reaches the event.
+		"examples": []map[string]any{{
+			"note":            "ollama config emits a brain.configured event carrying provider/url/model",
+			"args":            []string{"ollama", "http://localhost:11434", "llama3.2", ""},
+			"expect_contains": []string{"brain.configured", "ollama", "http://localhost:11434", "llama3.2"},
+		}},
 	})
 	projDecl, _ := json.Marshal(map[string]any{
 		"name":        "setup",
 		"description": "Brain configuration page: pick a provider and enter LLM details + token. Renders the latest brain.configured.",
 		"consumes":    []string{event_BrainConfigured},
+		"examples": []map[string]any{{
+			"note": "renders the configured provider, its endpoint, and the key state",
+			"events": []map[string]any{{
+				"name":    event_BrainConfigured,
+				"payload": map[string]any{"provider": "ollama", "base_url": "http://localhost:11434", "model": "llama3.2", "key_set": true},
+			}},
+			"expect_contains": []string{"configure your brain", "ollama", "key set", "http://localhost:11434"},
+		}},
 	})
 	for _, d := range []struct {
 		name    string

@@ -265,6 +265,13 @@ func TestOnboardingBrainSetup(t *testing.T) {
 			t.Fatalf("rehydrate did not rebuild %s: %v", p, err)
 		}
 	}
+
+	// The onboarding surface ships examples, so the projection-as-oracle gate
+	// (selftest) covers it — no "untested" capabilities on a fresh init.
+	out := runSelf(t, home, "selftest")
+	if !strings.Contains(out, "configure") || !strings.Contains(out, "setup") || strings.Contains(out, "no examples — untested") {
+		t.Errorf("selftest did not cover the onboarding surface:\n%s", out)
+	}
 }
 
 func TestSinceLastHeartbeat(t *testing.T) {
