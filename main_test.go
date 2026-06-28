@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -141,24 +142,22 @@ print(json.dumps({"name": "command.declared", "payload": {
 }
 
 // TestThinkPipesToSwappableBrainProcess is the slice-12 evidence: `self think`
-// no longer links an LLM into the kernel — it pipes the prompt to whatever
-// $SELF_BRAIN names and ingests the events that process emits. Here the brain is
-// a 12-line Python script with no LLM at all; the kernel can't tell the
-// difference. Its emitted chat.message events land in the log (and render via
-// the chat projector), and a command.declared it emits flows through the same
-// strange-loop compile a real command's output would.
+// no longer links an LLM into the kernel — it spawns whatever $SELF_BRAIN names
+// (a process that reads a prompt and emits event JSONL on stdout) and folds the
+// result back into the SAME {response, declarations} JSON the old `self think`
+// returned. Here the brain is a 5-line Python script with no LLM at all; the
+// kernel can't tell the difference, and the legacy contract is preserved so
+// existing `chat`/`grow-spec` commands keep working unchanged.
 func TestThinkPipesToSwappableBrainProcess(t *testing.T) {
 	bin := os.Getenv("SELF_TEST_BIN")
 	if bin == "" {
 		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
 	}
 	home := t.TempDir()
-
 	runSelf(t, home, "init")
-	runSelf(t, home, "grow", "seeds/chat")
 
-	// A fake brain: prompt arrives as argv; it emits the conversation and grows a
-	// capability — purely via stdout JSONL. No network, no model.
+	// A fake brain: prompt arrives as argv; it emits the conversation and a
+	// declaration — purely via stdout JSONL. No network, no model.
 	fakeBrain := `#!/usr/bin/env python3
 import sys, json
 prompt = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -176,8 +175,7 @@ print(json.dumps({"name": "command.declared", "payload": {
 	cmd := exec.Command(bin, "think", "hello world")
 	cmd.Env = append(os.Environ(),
 		"SELF_HOME="+home,
-		"SELF_LLM_STUB=1",                          // declarations the brain emits compile via the stub
-		"SELF_BRAIN=python3 "+brainPath,            // <-- the kernel pipes to THIS, not an LLM
+		"SELF_BRAIN=python3 "+brainPath, // <-- the kernel pipes to THIS, not an LLM
 	)
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -186,27 +184,28 @@ print(json.dumps({"name": "command.declared", "payload": {
 		t.Fatalf("self think: %v\n%s", err, out.String())
 	}
 
-	// The brain's reply landed in the log as ordinary chat.message events — the
-	// kernel ingested the process's stdout exactly as it would a command's.
-	log, err := os.ReadFile(filepath.Join(home, "events.jsonl"))
-	if err != nil {
-		t.Fatalf("event log not written: %v", err)
+	// Legacy contract preserved: think prints {response, declarations} JSON and
+	// appends NOTHING (the caller owns appending). response = the brain's
+	// assistant message; the declaration is carried through verbatim.
+	var got struct {
+		Response     string           `json:"response"`
+		Declarations []map[string]any `json:"declarations"`
 	}
-	if !strings.Contains(string(log), "thought about: hello world") {
-		t.Errorf("brain's reply did not reach the event log:\n%s", string(log))
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("self think did not return JSON (legacy contract broken): %v\n%s", err, out.String())
 	}
-	// And the chat projector picked the new chat.message events up (auto-run).
-	runSelf(t, home, "show", "chat")
-	if _, err := os.Stat(filepath.Join(home, "site", "chat.html")); err != nil {
-		t.Fatalf("chat projection not written: %v", err)
+	if got.Response != "thought about: hello world" {
+		t.Errorf("response = %q, want the brain's assistant reply", got.Response)
 	}
-
-	// The command.declared the brain emitted flowed through the strange loop and
-	// was compiled to a real capability — growth via the brain process.
-	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "noted")); err != nil {
-		t.Fatalf("brain-declared command not compiled (strange loop did not fire): %v", err)
+	if len(got.Declarations) != 1 || got.Declarations[0]["name"] != "command.declared" {
+		t.Errorf("declarations = %v, want one command.declared", got.Declarations)
 	}
-	runSelf(t, home, "run", "noted", "it-works")
+	// think is a pure query: it must not have appended to the log itself.
+	if data, err := os.ReadFile(filepath.Join(home, "events.jsonl")); err == nil {
+		if strings.Contains(string(data), "thought about") {
+			t.Errorf("self think appended events (it must be pure); log:\n%s", string(data))
+		}
+	}
 }
 
 func TestSinceLastHeartbeat(t *testing.T) {

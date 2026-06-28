@@ -56,7 +56,8 @@ capabilities. That's the strange loop.
 | `self verify-attestation` | Check a `script.verified` attestation piped on stdin — no secret needed |
 | `self grow <seed>` | Grow a new capability from a seed |
 | `self run <command> [args]` | Run a capability — append events, refresh affected projections |
-| `self think "..."` | Ask the brain — pipe to the brain process, ingest its events (swap via `$SELF_BRAIN`) |
+| `self think "..."` | Ask the brain (runs the brain process, returns `{response, declarations}`; swap via `$SELF_BRAIN`) |
+| `self brain "..."` | The brain process itself — prompt in, event JSONL out (the default is the in-tree LLM) |
 | `self heartbeat` | One self-improvement cycle (the brain reflects on the garden and may grow a capability) |
 | `self restore <name> [seq]` | Roll a capability back to an earlier compiled version (kernel-only, audit-faithful) |
 | `self show <name>` | Render a projection. Piped → HTML on stdout; otherwise render and open in a browser |
@@ -159,26 +160,27 @@ The kernel sets `SELF_HOME` on every script. Capabilities that need intelligence
 call `self think` — the brain — instead of making their own HTTP calls. The
 kernel is the sole steward of LLM credentials.
 
-## the brain (`self think`)
+## the brain (`self brain` / `self think`)
 
-The brain is a **process the kernel pipes events to**, exactly like a command
-(Slice 12). `self think` doesn't link an LLM — it spawns the brain process, feeds
-it the prompt (argv) and the event log (stdin), and ingests the events it emits on
-stdout (the reply as `chat.message`, anything it grows as `command.declared` /
-`projector.declared`) through the same pipeline a command's output flows through.
-So a capability that needs intelligence just calls `self think` rather than
-reinventing HTTP, auth, and prompts.
+The brain is a **process the kernel pipes to**, exactly like a command (Slice 12).
+`self brain` is the primitive: prompt in (argv), event JSONL out (stdout) — the
+reply as `chat.message`, anything it grows as `command.declared` /
+`projector.declared`. It's **swappable** via `$SELF_BRAIN`: any program honoring
+that contract is a valid brain — the default `self brain` (the in-tree LLM), a
+human-in-the-loop (`brain/bridge.py`), a deterministic script, or a swarm. The
+kernel can't tell the difference; intelligence is just one more process.
+
+`self think` is the **call interface capabilities use**, kept byte-compatible with
+every garden ever grown: it spawns the configured brain process, then returns the
+same `{response, declarations}` JSON it always did (appending nothing — the caller
+owns that). So a capability that needs intelligence calls `self think` rather than
+reinventing HTTP, auth, and prompts, and pulling Slice 12 into an existing repo
+needs **no migration** — the contract didn't change, only the plumbing behind it.
 
 The brain has three powers: **read** (explore the garden — a local brain just
 reads `site/*.html` and the log directly), **act** (every capability is callable),
 and **grow** (declare new capabilities). The projection output *is* the memory, so
 conversation and context persist across calls.
-
-The brain is **swappable** via `$SELF_BRAIN`: any program that reads a prompt and
-emits event JSONL on stdout is a valid brain — the default `self brain` (the
-in-tree LLM), a human-in-the-loop (`brain/bridge.py`), a deterministic script, or
-a swarm. The kernel can't tell the difference, which is the point: it talks to one
-kind of thing — a process — and intelligence is just one more.
 
 ## garden-aware compilation
 

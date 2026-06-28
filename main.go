@@ -1624,12 +1624,15 @@ func cmdWatch(home string, args []string) error {
 	}
 }
 
-// cmdThink is the thin kernel side of thinking: it no longer knows what a brain
-// is. It spawns the configured brain *process*, pipes it the prompt + event log,
-// and ingests the events it emits through the very same pipeline a command's
-// output flows through. Thinking is just another process the kernel pipes events
-// to — the brain's conclusions (chat.message) and any capabilities it grows
-// (command.declared / projector.declared) are ordinary events in the log.
+// cmdThink is the brain's call interface for capabilities — backward-compatible
+// with every garden ever grown. Its contract is unchanged: read a prompt, return
+// {response, declarations} JSON, append nothing (the caller, e.g. the `chat`
+// command, owns appending the events). What changed underneath is only the
+// plumbing: instead of linking the LLM in-process, it spawns the brain *process*
+// ($SELF_BRAIN, default `self brain`), reads the events it emits, and folds them
+// back into the same JSON shape the old `self think` produced. So an existing
+// `chat` (or `grow-spec`) keeps working untouched, while the brain is now a
+// swappable process behind the pipe.
 func cmdThink(home string, prompt string) error {
 	if prompt == "" {
 		data, err := io.ReadAll(os.Stdin)
@@ -1642,32 +1645,41 @@ func cmdThink(home string, prompt string) error {
 		return fmt.Errorf("usage: self think <prompt> (or pipe prompt on stdin)")
 	}
 
-	newEvents, err := runBrain(home, prompt)
-	if err != nil {
-		return err
-	}
-	for _, e := range newEvents {
-		fmt.Printf("%s appended seq %d %s\n", e.ID, e.Seq, e.Name)
-	}
-	return nil
-}
-
-// runBrain spawns the brain as a Unix pipeline node and ingests its events.
-// Identical in shape to runCommand — the only difference is which executable is
-// piped to. The brain is swappable: $SELF_BRAIN may name any program that reads
-// a prompt (argv) + the event log (stdin) and emits events (stdout), so you can
-// point it at a different model, a human-in-the-loop bridge, or a swarm without
-// the kernel knowing or caring.
-func runBrain(home, prompt string) ([]event.Event, error) {
 	bin, argv := brainCommand(prompt)
-	newEvents, err := pipeProcess(home, bin, argv)
+	emitted, err := pipeProcess(home, bin, argv) // spawn the brain; parse its events; do NOT append
 	if err != nil {
-		return nil, fmt.Errorf("brain: %w", err)
+		return fmt.Errorf("brain: %w", err)
 	}
-	if err := ingestEvents(home, newEvents); err != nil {
-		return nil, err
+
+	// Fold the brain process's event stream back into the legacy {response,
+	// declarations} shape: assistant chat.message(s) → response; everything else
+	// (the *.declared events) → declarations, each already a {name, payload} event.
+	var responses []string
+	declarations := []map[string]any{}
+	for _, e := range emitted {
+		if e.Name == "chat.message" {
+			var p struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}
+			if json.Unmarshal(e.Payload, &p) == nil && p.Role == "assistant" {
+				responses = append(responses, p.Content)
+			}
+			continue
+		}
+		declarations = append(declarations, map[string]any{
+			"name":    e.Name,
+			"payload": json.RawMessage(e.Payload),
+		})
 	}
-	return newEvents, nil
+
+	output := map[string]any{
+		"response":     strings.Join(responses, "\n"),
+		"declarations": declarations,
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(output)
 }
 
 // brainCommand resolves the brain process to spawn. $SELF_BRAIN overrides it
