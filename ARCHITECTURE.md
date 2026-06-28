@@ -710,7 +710,7 @@ the one hazard — an API token — stays out of the log by construction.
   (declared so kernel.html wires them and `setup` auto-runs on `brain.configured`)
   and seeds an initial `brain.configured {provider:"none"}`.
 - The `setup` projector renders the **one HTML page**: a provider picker
-  (human / llama.cpp / Ollama / OpenAI / opencode / Anthropic / custom) + base-URL,
+  (human / llama.cpp / Ollama / OpenAI / opencode / custom) + base-URL,
   model, and token fields, posting to `/run/configure`. Bare semantic HTML, no JS.
 - The `configure` command splits the form's fields by destination — the **secret
   rule**: `provider`/`base_url`/`model` → a `brain.configured` *event* (in the log,
@@ -741,10 +741,12 @@ in-paradigm projection rather than out-of-band env editing — the
 accessible-entry-point anchor reaching the brain itself. The token-split also does
 real conceptual work: a secret is the one thing that must *not* be in "the log is
 the only truth," so it lives beside the log like `.secret`/`.identity`, and the
-projection is structurally incapable of leaking it. Honest gaps: Anthropic is in
-the picker but needs its adapter (OpenAI-compatible providers work as-is); the
-"human" choice records the intent but still points at `brain/bridge.py` rather
-than an in-page bridge (the web human-in-the-loop brain is the next tier); and the
+projection is structurally incapable of leaking it. Honest gaps: only
+OpenAI-compatible providers are offered (OpenAI, llama.cpp, Ollama, vLLM, opencode,
+or a custom endpoint) — the deliberate scope, since OpenAI's API is the market
+standard and a non-compatible vendor can be reached through a proxy; the "human"
+choice records the intent but still points at `brain/bridge.py` rather than an
+in-page bridge (the web human-in-the-loop brain is the next tier); and the
 committed `home/` body predates onboarding (a fresh `self init` gets the page).
 
 ---

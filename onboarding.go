@@ -42,7 +42,7 @@ func installOnboarding(home string) error {
 		"name":        "configure",
 		"description": "Configure self's brain: which LLM provider drives think/grow. Writes provider/url/model to the log and the token to a non-log key file.",
 		"params": map[string]string{
-			"provider": "string — human | llamacpp | ollama | openai | opencode | anthropic | custom",
+			"provider": "string — human | llamacpp | ollama | openai | opencode | custom",
 			"base_url": "string — OpenAI-compatible base URL (e.g. http://localhost:11434/v1)",
 			"model":    "string — model name",
 			"key":      "string — API token (blank keeps the current one); stored outside the log",
@@ -207,7 +207,7 @@ func loadBrainConfig(home string) string {
 	// human/opencode are resolved elsewhere (the bridge / opencode auth); for the
 	// OpenAI-compatible providers we fill the SELF_LLM_* the compiler already reads.
 	switch provider {
-	case "llamacpp", "ollama", "openai", "custom", "anthropic":
+	case "llamacpp", "ollama", "openai", "custom":
 		setIfUnset("SELF_LLM_URL", baseURL)
 		setIfUnset("SELF_LLM_MODEL", model)
 		if key, err := os.ReadFile(brainKeyFile(home)); err == nil {
@@ -299,7 +299,6 @@ PRESETS = [
     ("ollama",   "Ollama — http://localhost:11434"),
     ("openai",   "OpenAI — https://api.openai.com"),
     ("opencode", "opencode-go — uses your opencode auth"),
-    ("anthropic","Anthropic — adapter pending (use a proxy for now)"),
     ("custom",   "Custom OpenAI-compatible endpoint"),
 ]
 # base URLs WITHOUT the /v1 suffix — the kernel appends /v1/chat/completions.
@@ -339,7 +338,7 @@ print("<hr><h3>preset endpoints</h3><table><tr><th>provider</th><th>base URL</th
 for k, u in DEFAULT_URL.items():
     print("<tr><td>%s</td><td><code>%s</code></td></tr>" % (k, u))
 print("</table>")
-print("<p class=\"muted\">Most providers (llama.cpp, Ollama, OpenAI, vLLM) speak the OpenAI-compatible API and work as-is. Anthropic needs a dedicated adapter (pending) or an OpenAI-compatible proxy.</p>")
+print("<p class=\"muted\">Providers that speak the OpenAI-compatible API (OpenAI, llama.cpp, Ollama, vLLM, …) work as-is. OpenAI is the market standard. For anything else, point a custom OpenAI-compatible endpoint at it.</p>")
 print("</body></html>")
 `
 
