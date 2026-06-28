@@ -208,6 +208,65 @@ print(json.dumps({"name": "command.declared", "payload": {
 	}
 }
 
+// TestOnboardingBrainSetup is the slice-13 evidence: `self init` installs a
+// brain-configuration surface (a signed, kernel-authored command + projector)
+// with NO LLM, the page renders, configuring records the choice as an event
+// while the token goes to a non-log file, and the whole surface rehydrates from
+// the log + secret alone.
+func TestOnboardingBrainSetup(t *testing.T) {
+	bin := os.Getenv("SELF_TEST_BIN")
+	if bin == "" {
+		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
+	}
+	home := t.TempDir()
+	runSelf(t, home, "init")
+
+	// The onboarding surface is installed at init, with no LLM.
+	for _, p := range []string{"capabilities/commands/configure", "capabilities/projectors/setup", "site/setup.html"} {
+		if _, err := os.Stat(filepath.Join(home, p)); err != nil {
+			t.Fatalf("init did not install %s: %v", p, err)
+		}
+	}
+	page, _ := os.ReadFile(filepath.Join(home, "site", "setup.html"))
+	if !strings.Contains(string(page), `action="/run/configure"`) {
+		t.Errorf("setup page missing the configure form:\n%s", page)
+	}
+
+	// Configure the brain (what the form's POST does).
+	runSelf(t, home, "run", "configure", "ollama", "http://localhost:11434", "llama3.2", "sk-secret-xyz")
+
+	log, _ := os.ReadFile(filepath.Join(home, "events.jsonl"))
+	if !strings.Contains(string(log), `"provider":"ollama"`) {
+		t.Errorf("brain.configured did not record the provider:\n%s", log)
+	}
+	// The token must be on disk, NOT in the log.
+	key, err := os.ReadFile(filepath.Join(home, ".brain-key"))
+	if err != nil || strings.TrimSpace(string(key)) != "sk-secret-xyz" {
+		t.Fatalf(".brain-key not written correctly: %q (%v)", string(key), err)
+	}
+	if strings.Contains(string(log), "sk-secret-xyz") {
+		t.Errorf("token leaked into the event log — it must live only in .brain-key:\n%s", log)
+	}
+
+	// The surface rehydrates from the log + secret alone, no LLM.
+	fresh := t.TempDir()
+	for _, f := range []string{"events.jsonl", ".secret", ".identity"} {
+		data, rErr := os.ReadFile(filepath.Join(home, f))
+		if rErr != nil {
+			continue
+		}
+		if wErr := os.WriteFile(filepath.Join(fresh, f), data, 0600); wErr != nil {
+			t.Fatal(wErr)
+		}
+	}
+	runSelf(t, fresh, "rehydrate")
+	for _, p := range []string{"capabilities/commands/configure", "capabilities/projectors/setup"} {
+		if _, err := os.Stat(filepath.Join(fresh, p)); err != nil {
+			t.Fatalf("rehydrate did not rebuild %s: %v", p, err)
+		}
+	}
+}
+
 func TestSinceLastHeartbeat(t *testing.T) {
 	ev := func(name string) event.Event { return event.Event{Name: name} }
 	log := []event.Event{ev("kernel.initialized"), ev("task.captured"), ev("self.heartbeat"), ev("meal.planned"), ev("shopping.added")}

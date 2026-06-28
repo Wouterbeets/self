@@ -459,6 +459,37 @@ func CompileDeclarations(home string, events []event.Event) (commands, projector
 	return commands, projectors, nil
 }
 
+// InstallBuiltin installs a kernel-authored script (a command or projector that
+// ships with the binary, not an LLM-compiled seed) into capabilities/ and logs a
+// signed script.compiled receipt for it, so it rehydrates exactly like any other
+// capability. This is the bootstrap escape from the LLM-compiler chicken-and-egg:
+// the onboarding surface (the brain-setup page) must run BEFORE any LLM is wired,
+// so the kernel authors and signs it itself at init. It is sound because the
+// bytes are the kernel's own (shipped in the binary) and signed with this home's
+// freshly minted secret — the same provenance Restore/Rehydrate already trust; no
+// foreign code path is opened. Latest receipt wins, like CompileDeclarations.
+func InstallBuiltin(home, kind, name, script string) error {
+	capDir := filepath.Join(home, "capabilities")
+	switch kind {
+	case "command":
+		if err := seed.WriteCommandScript(capDir, name, script); err != nil {
+			return err
+		}
+	case "projector":
+		if err := seed.WriteProjectorScript(capDir, name, script); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("InstallBuiltin: unknown kind %q", kind)
+	}
+	payload, err := SignedReceipt(home, kind, name, script)
+	if err != nil {
+		return fmt.Errorf("sign builtin %q: %w", name, err)
+	}
+	e := event.New(event.ScriptCompiled, payload)
+	return store.Open(home).Append(&e)
+}
+
 // VerifyAndLog runs a freshly compiled script against its declaration's examples
 // and appends a script.verified receipt recording the outcome (pass or fail) for
 // audit. It returns whether the script passed. With no examples it passes

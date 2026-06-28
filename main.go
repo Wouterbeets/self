@@ -237,9 +237,20 @@ func cmdInit(home string) error {
 		return err
 	}
 
+	// Install the brain-setup surface (a baby-kernel onboarding seed, signed by
+	// the secret just minted) so a fresh user can wire in their LLM from a page,
+	// before any LLM exists. See onboarding.go.
+	if err := installOnboarding(home); err != nil {
+		return fmt.Errorf("install onboarding: %w", err)
+	}
+
 	fmt.Printf("initialized self at %s (seq %d %s)\n", home, e.Seq, e.Name)
-	fmt.Printf("a baby kernel — grow it: self grow <seed>\n")
-	return kernel.RenderHTML(home)
+	fmt.Printf("%s\n", onboardingURLHint(home))
+	if err := kernel.RenderHTML(home); err != nil {
+		return err
+	}
+	// Render the setup page so /setup is ready on first serve.
+	return runProjectorToSite(home, "setup")
 }
 
 func cmdGrow(home string, seedDir string) error {
@@ -833,6 +844,12 @@ func cmdServe(home string, port string) error {
 	// free as new events land.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimSuffix(strings.Trim(r.URL.Path, "/"), ".html")
+
+		// First-run: until a brain is configured, the root IS the setup page, so a
+		// fresh user lands on "wire in your LLM" instead of an empty kernel view.
+		if name == "" && !brainConfigured(home) {
+			name = "setup"
+		}
 
 		if name == "" || name == "kernel" {
 			if err := kernel.RenderHTML(home); err != nil {
@@ -1718,6 +1735,12 @@ func cmdBrain(home string, prompt string) error {
 	if prompt == "" {
 		return fmt.Errorf("usage: self brain <prompt> (or pipe prompt on stdin)")
 	}
+
+	// Resolve the page-configured brain (provider/url/model from the log, token
+	// from the key file) into SELF_LLM_* — unless those are already set, so an
+	// explicit env override still wins. This is what makes the setup page drive
+	// the brain.
+	loadBrainConfig(home)
 
 	compiler := seed.NewCompiler(home)
 	commands, invoke := brainTools(home)

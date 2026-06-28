@@ -688,6 +688,67 @@ swappable process.
 
 ---
 
+## Slice 13 — the brain configures itself through its own projection (VALIDATED)
+
+**Hypothesis.** Slice 12 made the brain swappable, but wiring one in still meant
+knowing `$SELF_BRAIN` / `SELF_LLM_*` and editing the environment — invisible to a
+fresh user who clones the repo. The accessible-entry-point anchor says the first
+run should be a *page*. But "configure the LLM" is a chicken-and-egg: a normal
+capability is LLM-compiled, and there is no LLM yet. The claim under test: the
+brain-setup surface can be an ordinary projection + command — the same
+forms-post-to-`/run` pattern the board uses — installed at `self init` *before any
+LLM*, because once `init` mints the home's `.secret` the kernel can author and
+sign its own onboarding scripts (the same provenance Rehydrate/Restore trust). And
+the one hazard — an API token — stays out of the log by construction.
+
+**Slice.**
+- `kernel.InstallBuiltin(home, kind, name, script)` installs a kernel-authored
+  script with a signed `script.compiled` receipt — no LLM, rehydratable like any
+  capability. The bootstrap escape: the kernel ships these bytes in the binary and
+  signs them with the freshly minted secret, so no foreign-code path opens.
+- `self init` now installs a **`configure` command** + **`setup` projector**
+  (declared so kernel.html wires them and `setup` auto-runs on `brain.configured`)
+  and seeds an initial `brain.configured {provider:"none"}`.
+- The `setup` projector renders the **one HTML page**: a provider picker
+  (human / llama.cpp / Ollama / OpenAI / opencode / Anthropic / custom) + base-URL,
+  model, and token fields, posting to `/run/configure`. Bare semantic HTML, no JS.
+- The `configure` command splits the form's fields by destination — the **secret
+  rule**: `provider`/`base_url`/`model` → a `brain.configured` *event* (in the log,
+  portable, replayable); the **token → `$SELF_HOME/.brain-key`** (0600), never an
+  event. The event records only `key_set: bool`.
+- `self brain` calls `loadBrainConfig`, which folds the chosen provider into
+  `SELF_LLM_*` (token read from the key file) *unless* those env vars are already
+  set — so the page-driven choice drives the LLM, with env override still winning.
+- The serve root lands a fresh user on `setup` until a brain is configured.
+
+**Evidence (e2e).**
+- `self init` installs `configure` + `setup` and renders `site/setup.html` (form
+  → `/run/configure`) with **no LLM**.
+- Configuring **through the live web form** (`POST /run/configure`) records
+  `{provider:"openai", base_url, model, key_set:true}` in the log and writes the
+  token to `.brain-key`; the token appears **0 times** in `events.jsonl`. The page
+  cannot render it — it isn't in any event the projector reads.
+- The configured provider drives the brain: `self brain` then targets
+  `…:11434/v1/chat/completions` (the chosen endpoint), not the default.
+- The whole surface **rehydrates from `events.jsonl` + `.secret` alone** (no LLM).
+- Root `/` serves the setup page before config, the kernel view after. Full suite
+  green; preflight (the pre-onboarding `home/` body) unaffected.
+
+**Decision: keep.** It changed the kernel (`InstallBuiltin` + the init/serve hooks
++ `onboarding.go`), justified the PoC way: it adds no new trust surface (the
+signed-install path is the existing one) and it makes the LLM-wiring an
+in-paradigm projection rather than out-of-band env editing — the
+accessible-entry-point anchor reaching the brain itself. The token-split also does
+real conceptual work: a secret is the one thing that must *not* be in "the log is
+the only truth," so it lives beside the log like `.secret`/`.identity`, and the
+projection is structurally incapable of leaking it. Honest gaps: Anthropic is in
+the picker but needs its adapter (OpenAI-compatible providers work as-is); the
+"human" choice records the intent but still points at `brain/bridge.py` rather
+than an in-page bridge (the web human-in-the-loop brain is the next tier); and the
+committed `home/` body predates onboarding (a fresh `self init` gets the page).
+
+---
+
 ## How to reproduce
 
 ```sh
@@ -750,3 +811,22 @@ SELF_BRAIN="python3 /tmp/brain.py" self think "what is here?"
 Existing gardens need **no migration**: `self think`'s output is unchanged, so an
 already-compiled `chat` (or `grow-spec`) keeps working; only the plumbing behind
 `self think` became a swappable process.
+
+Slice 13 — wire in your LLM from a page, no env editing, no LLM needed to do it:
+
+```sh
+go build -o self .
+export SELF_HOME=$(mktemp -d)
+self init            # installs the signed `configure`+`setup` surface (no LLM)
+self live            # open http://localhost:7777/ — you land on the setup page
+# pick a provider, paste a token, save → POSTs /run/configure, which writes:
+#   provider/url/model  -> a brain.configured event (in the log, portable)
+#   the token           -> $SELF_HOME/.brain-key (0600, NEVER in the log)
+# the same from the CLI:
+self run configure ollama http://localhost:11434 llama3.2 ""   # local, no token
+grep brain.configured "$SELF_HOME/events.jsonl"                # config is in the log
+grep -c "$(cat "$SELF_HOME/.brain-key" 2>/dev/null)" "$SELF_HOME/events.jsonl" 2>/dev/null  # token is NOT
+```
+
+The setup surface rehydrates from `events.jsonl` + `.secret` with no LLM, like
+any capability — because the kernel authored and signed it at init.

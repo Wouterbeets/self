@@ -27,7 +27,9 @@ projections, and renders HTML that you and your agent see identically.
 
 ```sh
 self                       # start the live garden (web server) — the default
-self init                  # initialize the baby kernel
+self init                  # initialize the baby kernel (+ a brain-setup page)
+self live                  # open http://localhost:7777/ — first run lands on /setup
+                           #   pick your LLM (Ollama/llama.cpp/OpenAI/…) and save
 self grow seeds/chat       # grow a capability from a seed (LLM compiles it)
 self run chat "add a ..."  # run a capability; chat asks the brain, which can grow more
 self think "summarize ..." # ask the brain (a swappable process; default = LLM)
