@@ -119,12 +119,26 @@ func installOnboarding(home string) error {
 			"expect_contains": []string{"brain interview", "build me a timer", "/run/answer", "/teach"},
 		}},
 	})
+	welcomeDecl, _ := json.Marshal(map[string]any{
+		"name":        "welcome",
+		"description": "The landing page: what this home is, the surfaces in it, and how to grow more.",
+		"consumes":    []string{event.ProjectorDeclared},
+		"examples": []map[string]any{{
+			"note": "lists grown surfaces and points to setup",
+			"events": []map[string]any{{
+				"name":    event.ProjectorDeclared,
+				"payload": map[string]any{"name": "board", "description": "a task board"},
+			}},
+			"expect_contains": []string{"self", "board", "/setup"},
+		}},
+	})
 	for _, d := range []struct {
 		name    string
 		payload json.RawMessage
 	}{
 		{event.CommandDeclared, answerDecl},
 		{event.ProjectorDeclared, interviewDecl},
+		{event.ProjectorDeclared, welcomeDecl},
 	} {
 		e := event.New(d.name, d.payload)
 		if err := st.Append(&e); err != nil {
@@ -142,6 +156,9 @@ func installOnboarding(home string) error {
 		return err
 	}
 	if err := kernel.InstallBuiltin(home, "projector", "interview", interviewScript); err != nil {
+		return err
+	}
+	if err := kernel.InstallBuiltin(home, "projector", "welcome", welcomeScript); err != nil {
 		return err
 	}
 
@@ -436,6 +453,57 @@ for i, prompt in pending:
     print("<button>teach (install this code)</button>")
     print("</form>")
     print("</div>")
+print("</body></html>")
+`
+
+// welcomeScript: the landing page. It lists the surfaces grown in this garden
+// (from projector.declared, skipping the system pages) and frames self as a
+// shared home for a person and their intelligence — same state, same surfaces,
+// growing to fit what you need.
+const welcomeScript = `#!/usr/bin/env python3
+import sys, json
+from html import escape
+
+SYSTEM = {"welcome", "setup", "interview", "kernel"}
+surfaces = {}
+order = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    e = json.loads(line)
+    if e.get("name") == "projector.declared":
+        p = e.get("payload", {}) or {}
+        n = p.get("name", "")
+        if not n or n in SYSTEM:
+            continue
+        if n not in surfaces:
+            order.append(n)
+        surfaces[n] = p.get("description", "")
+
+print("<!DOCTYPE html><html><head><title>self</title></head><body>")
+print("<h1>self</h1>")
+print("<p>A home you and your agent share. You say what you need; the intelligence living here turns it into a working surface — and you both use the same one, looking at the same state.</p>")
+
+print("<h3>what's here</h3>")
+if order:
+    print("<p class=\"muted\">Surfaces grown in this garden — open any of them:</p>")
+    print("<ul>")
+    for n in order:
+        d = (surfaces[n] or "").strip()
+        d = (" &mdash; " + escape(d[:80])) if d else ""
+        print("  <li><a href=\"/%s\">%s</a>%s</li>" % (escape(n), escape(n), d))
+    print("</ul>")
+else:
+    print("<p class=\"muted\">No surfaces yet — grow the first one below.</p>")
+
+print("<h3>grow it</h3>")
+print("<p>Tell it what you need and the capability appears here, wired into the same garden. It reads what already exists and adapts, so new surfaces fit the ones you already have.</p>")
+print("<p><code>self run chat \"add a habit tracker\"</code></p>")
+print("<p class=\"muted\">Connect your intelligence on <a href=\"/setup\">/setup</a> — a model, or yourself via <a href=\"/interview\">/interview</a>.</p>")
+
+print("<hr>")
+print("<p class=\"muted\">Plain, inspectable state throughout: <a href=\"/events\">the event log</a> is the only truth, and <a href=\"/kernel\">the wiring</a> shows how every surface is built.</p>")
 print("</body></html>")
 `
 

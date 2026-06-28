@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	htmlesc "html"
@@ -22,6 +23,14 @@ import (
 	"self/internal/store"
 )
 
+// demoEventsLog is the shipped demo body (a task board + meal planner), embedded
+// so a cold `self` can bring a living garden up with no setup. It is imported
+// into a fresh, sovereign home (re-signed under that home's own key — never the
+// committed demo key), then populated with a little example content.
+//
+//go:embed home/events.jsonl
+var demoEventsLog []byte
+
 func main() {
 	home := homeDir()
 
@@ -30,7 +39,14 @@ func main() {
 	// matches the one truth — clone a home that is just events.jsonl + .secret
 	// and `self` brings the whole body back before serving it.
 	if len(os.Args) < 2 {
-		if _, _, err := rehydrateFromLog(home); err != nil {
+		if !homeInitialized(home) {
+			// First run: bring up a living garden so the cold open is something to
+			// explore, not an empty page.
+			fmt.Fprintf(os.Stderr, "self: new home %s — bringing up the demo garden…\n", home)
+			if err := loadDemo(home); err != nil {
+				fmt.Fprintf(os.Stderr, "self: demo: %s\n", err)
+			}
+		} else if _, _, err := rehydrateFromLog(home); err != nil {
 			fmt.Fprintf(os.Stderr, "self: rehydrate: %s\n", err)
 		}
 		if err := cmdServe(home, ""); err != nil {
@@ -67,6 +83,8 @@ func main() {
 		err = cmdBrain(home, prompt)
 	case "teach":
 		err = cmdTeach(home, args)
+	case "demo":
+		err = cmdDemo(home)
 	case "heartbeat":
 		err = cmdHeartbeat(home)
 	case "watch":
@@ -214,6 +232,106 @@ current state. The kernel is the sole steward of LLM credentials.
 `)
 }
 
+// homeInitialized reports whether a home has been minted (its signing key
+// exists). A bare `self` on an uninitialized home brings up the demo.
+func homeInitialized(home string) bool {
+	_, err := os.Stat(filepath.Join(home, ".secret"))
+	return err == nil
+}
+
+// loadDemo brings up a living garden in a fresh home with no LLM: it initializes
+// the home (keys + onboarding), imports the shipped demo's capabilities
+// (re-signing their scripts under THIS home's key, so the result is sovereign —
+// not a copy of the committed demo key), wires their declarations, then runs a
+// few real commands so the board and kitchen open with content to click.
+func loadDemo(home string) error {
+	if !homeInitialized(home) {
+		if err := cmdInit(home); err != nil {
+			return err
+		}
+	}
+	st := store.Open(home)
+
+	type script struct{ kind, body string }
+	latest := map[string]script{}
+	var order []string
+	for _, line := range strings.Split(string(demoEventsLog), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var e struct {
+			Name    string          `json:"name"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		switch e.Name {
+		case event.ScriptCompiled:
+			// Don't carry the demo's receipts (signed with the demo key); keep the
+			// bytes and re-sign them under this home below.
+			var cs struct{ Type, Name, Script string }
+			if json.Unmarshal(e.Payload, &cs) == nil && cs.Name != "" {
+				if _, seen := latest[cs.Name]; !seen {
+					order = append(order, cs.Name)
+				}
+				latest[cs.Name] = script{cs.Type, cs.Script}
+			}
+		case event.CommandDeclared, event.ProjectorDeclared:
+			ev := event.New(e.Name, e.Payload) // declarations wire kernel.html + auto-run
+			if err := st.Append(&ev); err != nil {
+				return err
+			}
+			// Skip kernel.initialized, script.verified, seed.planted, and the demo's
+			// own content — we regenerate fresh content below.
+		}
+	}
+	for _, name := range order {
+		s := latest[name]
+		if err := kernel.InstallBuiltin(home, s.kind, name, s.body); err != nil {
+			return err
+		}
+	}
+
+	// Populate with a little real content (no LLM — these are plain commands).
+	demo := [][]string{
+		{"capture", "Email the contractor about the deck"},
+		{"capture", "Draft the Q3 planning doc"},
+		{"capture", "Book the dentist"},
+		{"move", "1", "This week"},
+		{"move", "3", "Done"},
+		{"plan", "mon", "Tacos"},
+		{"plan", "tue", "Sheet-pan salmon"},
+		{"shop", "olive oil"},
+		{"shop", "limes"},
+	}
+	for _, run := range demo {
+		_, _ = runCommand(home, run[0], run[1:]) // best-effort; demo content only
+	}
+
+	if err := kernel.RenderHTML(home); err != nil {
+		return err
+	}
+	for _, p := range []string{"welcome", "board", "kitchen"} {
+		_ = runProjectorToSite(home, p)
+	}
+	return nil
+}
+
+// cmdDemo loads the demo into the current home (use a fresh SELF_HOME if the
+// current one is already in use).
+func cmdDemo(home string) error {
+	if homeInitialized(home) {
+		return fmt.Errorf("home %s already exists — point SELF_HOME at a fresh dir to try the demo (e.g. SELF_HOME=$(mktemp -d) self demo)", home)
+	}
+	if err := loadDemo(home); err != nil {
+		return err
+	}
+	fmt.Printf("demo loaded at %s — run `self` and open http://localhost:7777\n", home)
+	return nil
+}
+
 func cmdInit(home string) error {
 	if err := os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755); err != nil {
 		return err
@@ -251,11 +369,13 @@ func cmdInit(home string) error {
 	if err := kernel.RenderHTML(home); err != nil {
 		return err
 	}
-	// Render the onboarding pages so /setup and /interview are ready on first serve.
-	if err := runProjectorToSite(home, "setup"); err != nil {
-		return err
+	// Render the onboarding pages so /, /setup and /interview are ready on first serve.
+	for _, p := range []string{"welcome", "setup", "interview"} {
+		if err := runProjectorToSite(home, p); err != nil {
+			return err
+		}
 	}
-	return runProjectorToSite(home, "interview")
+	return nil
 }
 
 func cmdGrow(home string, seedDir string) error {
@@ -850,13 +970,18 @@ func cmdServe(home string, port string) error {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimSuffix(strings.Trim(r.URL.Path, "/"), ".html")
 
-		// First-run: until a brain is configured, the root IS the setup page, so a
-		// fresh user lands on "wire in your LLM" instead of an empty kernel view.
-		if name == "" && !brainConfigured(home) {
-			name = "setup"
+		// The root is the welcome page — the human landing. The dev wiring view
+		// lives at /kernel. Fall back to it if welcome isn't installed (an older
+		// home that predates onboarding).
+		if name == "" {
+			if _, err := os.Stat(filepath.Join(home, "capabilities", "projectors", "welcome")); err == nil {
+				name = "welcome"
+			} else {
+				name = "kernel"
+			}
 		}
 
-		if name == "" || name == "kernel" {
+		if name == "kernel" {
 			if err := kernel.RenderHTML(home); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

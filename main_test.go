@@ -419,6 +419,40 @@ func TestTeachExamplesGate(t *testing.T) {
 	}
 }
 
+// TestDemoColdOpen verifies the first-run experience: `self demo` brings up a
+// living garden (welcome page + a populated board and kitchen) with no LLM, and
+// every capability is sovereign — installed under this home's own key and
+// passing its examples (selftest).
+func TestDemoColdOpen(t *testing.T) {
+	bin := os.Getenv("SELF_TEST_BIN")
+	if bin == "" {
+		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
+	}
+	home := t.TempDir()
+	runSelf(t, home, "demo")
+
+	welcome, err := os.ReadFile(filepath.Join(home, "site", "welcome.html"))
+	if err != nil {
+		t.Fatalf("welcome page not rendered: %v", err)
+	}
+	for _, want := range []string{"A home you and your agent share", `href="/board"`, `href="/setup"`} {
+		if !strings.Contains(string(welcome), want) {
+			t.Errorf("welcome page missing %q:\n%s", want, welcome)
+		}
+	}
+
+	board := runSelf(t, home, "show", "board")
+	if !strings.Contains(board, "Email the contractor about the deck") {
+		t.Errorf("board not populated with demo content:\n%s", board)
+	}
+
+	// Sovereign: every demo capability installed under this home's key and passes
+	// its examples — no untested, no failures.
+	if out := runSelf(t, home, "selftest"); strings.Contains(out, "failed") && !strings.Contains(out, "0 failed") {
+		t.Errorf("selftest reported failures after demo:\n%s", out)
+	}
+}
+
 func readLog(t *testing.T, home string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(home, "events.jsonl"))

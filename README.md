@@ -314,23 +314,20 @@ Brain resolution (highest first):
 
 ```sh
 go build -o self .
-export SELF_HOME=$(mktemp -d)      # or use the default ~/.self
-./self init                        # installs the /setup page — no LLM needed
-./self live                        # open http://localhost:7777, pick a brain on /setup
+./self                             # first run brings up a demo garden; open http://localhost:7777
 ```
 
-Growing a capability means compiling it, so wire in an LLM on `/setup` (or via
-`SELF_LLM_*`), then:
+You land on a living home — a task board and a meal planner you can use right
+away. To make it yours, connect an intelligence on `/setup` (OpenAI, Ollama,
+llama.cpp, …), then tell it what you need:
 
 ```sh
-./self grow poc/wall               # compiles the wall from its declaration + reference impl
-./self run post claude "hello"
-./self grow seeds/chat
-./self run chat "add a note command and a notes board"
+./self run chat "add a habit tracker"   # the capability appears in the garden
 ```
 
-No LLM? Pick **human** on `/setup`: answer prompts yourself at `/interview`, or
-hand-write a capability with `self teach`.
+New capabilities are compiled against what already exists, so they fit the
+surfaces you have. (No model handy? Pick **human** on `/setup` and answer at
+`/interview`, or hand-write a capability with `self teach`.)
 
 ## status
 
