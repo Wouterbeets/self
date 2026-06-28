@@ -140,6 +140,75 @@ print(json.dumps({"name": "command.declared", "payload": {
 	runSelf(t, home, "run", "echo", "it-works")
 }
 
+// TestThinkPipesToSwappableBrainProcess is the slice-12 evidence: `self think`
+// no longer links an LLM into the kernel — it pipes the prompt to whatever
+// $SELF_BRAIN names and ingests the events that process emits. Here the brain is
+// a 12-line Python script with no LLM at all; the kernel can't tell the
+// difference. Its emitted chat.message events land in the log (and render via
+// the chat projector), and a command.declared it emits flows through the same
+// strange-loop compile a real command's output would.
+func TestThinkPipesToSwappableBrainProcess(t *testing.T) {
+	bin := os.Getenv("SELF_TEST_BIN")
+	if bin == "" {
+		t.Skip("set SELF_TEST_BIN to the self binary to run integration tests")
+	}
+	home := t.TempDir()
+
+	runSelf(t, home, "init")
+	runSelf(t, home, "grow", "seeds/chat")
+
+	// A fake brain: prompt arrives as argv; it emits the conversation and grows a
+	// capability — purely via stdout JSONL. No network, no model.
+	fakeBrain := `#!/usr/bin/env python3
+import sys, json
+prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+print(json.dumps({"name": "chat.message", "payload": {"role": "user", "content": prompt}}))
+print(json.dumps({"name": "chat.message", "payload": {"role": "assistant", "content": "thought about: " + prompt}}))
+print(json.dumps({"name": "command.declared", "payload": {
+    "name": "noted", "description": "note a thing", "params": {"text": "string"},
+    "event": {"name": "noted.added", "fields": {"text": "string"}}}}))
+`
+	brainPath := filepath.Join(home, "fakebrain.py")
+	if err := os.WriteFile(brainPath, []byte(fakeBrain), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "think", "hello world")
+	cmd.Env = append(os.Environ(),
+		"SELF_HOME="+home,
+		"SELF_LLM_STUB=1",                          // declarations the brain emits compile via the stub
+		"SELF_BRAIN=python3 "+brainPath,            // <-- the kernel pipes to THIS, not an LLM
+	)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("self think: %v\n%s", err, out.String())
+	}
+
+	// The brain's reply landed in the log as ordinary chat.message events — the
+	// kernel ingested the process's stdout exactly as it would a command's.
+	log, err := os.ReadFile(filepath.Join(home, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("event log not written: %v", err)
+	}
+	if !strings.Contains(string(log), "thought about: hello world") {
+		t.Errorf("brain's reply did not reach the event log:\n%s", string(log))
+	}
+	// And the chat projector picked the new chat.message events up (auto-run).
+	runSelf(t, home, "show", "chat")
+	if _, err := os.Stat(filepath.Join(home, "site", "chat.html")); err != nil {
+		t.Fatalf("chat projection not written: %v", err)
+	}
+
+	// The command.declared the brain emitted flowed through the strange loop and
+	// was compiled to a real capability — growth via the brain process.
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "noted")); err != nil {
+		t.Fatalf("brain-declared command not compiled (strange loop did not fire): %v", err)
+	}
+	runSelf(t, home, "run", "noted", "it-works")
+}
+
 func TestSinceLastHeartbeat(t *testing.T) {
 	ev := func(name string) event.Event { return event.Event{Name: name} }
 	log := []event.Event{ev("kernel.initialized"), ev("task.captured"), ev("self.heartbeat"), ev("meal.planned"), ev("shopping.added")}

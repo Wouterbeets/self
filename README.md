@@ -30,7 +30,7 @@ self                       # start the live garden (web server) — the default
 self init                  # initialize the baby kernel
 self grow seeds/chat       # grow a capability from a seed (LLM compiles it)
 self run chat "add a ..."  # run a capability; chat asks the brain, which can grow more
-self think "summarize ..." # ask the brain directly (LLM + garden exploration)
+self think "summarize ..." # ask the brain (a swappable process; default = LLM)
 self heartbeat             # one self-improvement cycle: the brain reflects & grows
 self show board            # render a projection (browser, or stdout when piped)
 self history               # recent events, human-readable
@@ -56,7 +56,7 @@ capabilities. That's the strange loop.
 | `self verify-attestation` | Check a `script.verified` attestation piped on stdin — no secret needed |
 | `self grow <seed>` | Grow a new capability from a seed |
 | `self run <command> [args]` | Run a capability — append events, refresh affected projections |
-| `self think "..."` | Ask the brain (LLM + garden exploration) |
+| `self think "..."` | Ask the brain — pipe to the brain process, ingest its events (swap via `$SELF_BRAIN`) |
 | `self heartbeat` | One self-improvement cycle (the brain reflects on the garden and may grow a capability) |
 | `self restore <name> [seq]` | Roll a capability back to an earlier compiled version (kernel-only, audit-faithful) |
 | `self show <name>` | Render a projection. Piped → HTML on stdout; otherwise render and open in a browser |
@@ -161,12 +161,24 @@ kernel is the sole steward of LLM credentials.
 
 ## the brain (`self think`)
 
-The kernel exposes its LLM as a callable pipe. Capabilities that need
-intelligence call `self think` instead of reinventing HTTP, auth, and prompts.
-The brain has three powers: **read** (a sandboxed bash tool to explore the
-garden), **act** (every capability is a callable tool), and **grow** (declare
-new capabilities). It reads `site/*.html` for current state — the projection
-output *is* the memory — so conversation and context persist across calls.
+The brain is a **process the kernel pipes events to**, exactly like a command
+(Slice 12). `self think` doesn't link an LLM — it spawns the brain process, feeds
+it the prompt (argv) and the event log (stdin), and ingests the events it emits on
+stdout (the reply as `chat.message`, anything it grows as `command.declared` /
+`projector.declared`) through the same pipeline a command's output flows through.
+So a capability that needs intelligence just calls `self think` rather than
+reinventing HTTP, auth, and prompts.
+
+The brain has three powers: **read** (explore the garden — a local brain just
+reads `site/*.html` and the log directly), **act** (every capability is callable),
+and **grow** (declare new capabilities). The projection output *is* the memory, so
+conversation and context persist across calls.
+
+The brain is **swappable** via `$SELF_BRAIN`: any program that reads a prompt and
+emits event JSONL on stdout is a valid brain — the default `self brain` (the
+in-tree LLM), a human-in-the-loop (`brain/bridge.py`), a deterministic script, or
+a swarm. The kernel can't tell the difference, which is the point: it talks to one
+kind of thing — a process — and intelligence is just one more.
 
 ## garden-aware compilation
 
@@ -222,9 +234,10 @@ Five things, irreducible:
    receipts to roll back. A
    declaration may carry a reference implementation the compiler verifies and
    adapts — but the compiler always authors the binary; no foreign code runs.
-3. **the brain** (`self think`) — the same LLM infrastructure as the compiler,
-   exposed as a callable pipe. Capabilities call it; it reads `site/*.html` for
-   state and produces valid declarations.
+3. **the brain** (`self think`) — a process the kernel pipes events to (prompt
+   in, event JSONL out), swappable via `$SELF_BRAIN`; the default `self brain`
+   wraps the same LLM infrastructure as the compiler. Capabilities call it; it
+   reads `site/*.html` for state and produces valid declarations.
 4. **pipe orchestrator** — runs commands and projections, moves events,
    persists projection output to `site/`
 5. **web server** — `self live` serves the materialized `site/` and re-runs

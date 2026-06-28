@@ -62,6 +62,9 @@ func main() {
 	case "think":
 		prompt := strings.Join(args, " ")
 		err = cmdThink(home, prompt)
+	case "brain":
+		prompt := strings.Join(args, " ")
+		err = cmdBrain(home, prompt)
 	case "heartbeat":
 		err = cmdHeartbeat(home)
 	case "watch":
@@ -145,7 +148,8 @@ usage: self [command] [args]
   self verify-attestation check a script.verified attestation piped on stdin (no secret needed)
   self grow <seed>        grow a new capability from a seed
   self run <command> ...  run a capability — append events, refresh projections
-  self think "..."        ask the brain (LLM + garden exploration)
+  self think "..."        ask the brain — pipe the prompt to the brain process, ingest the events it emits
+  self brain "..."        the default brain process itself (prompt in, event JSONL out); swap via $SELF_BRAIN
   self heartbeat          run one self-improvement cycle (brain reflects & grows)
   self watch [secs]       resident loop: react to new activity (or report it, no brain). Ctrl-C to stop
   self restore <name> [seq]   roll a capability back to an earlier compiled version
@@ -355,14 +359,32 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 		return nil, fmt.Errorf("command %q not found (grow a seed that declares it)", command)
 	}
 
+	newEvents, err := pipeProcess(home, scriptPath, args)
+	if err != nil {
+		return nil, err
+	}
+	if err := ingestEvents(home, newEvents); err != nil {
+		return nil, err
+	}
+	return newEvents, nil
+}
+
+// pipeProcess runs an executable as a Unix pipeline node: it sets SELF_HOME and
+// cwd-relevant env, feeds the current event log as JSONL on stdin, and parses
+// the new events the process emits as JSONL on stdout. This is the one shape the
+// kernel uses to talk to *any* outside intelligence — a compiled command, or the
+// brain process — so a command and a brain are the same kind of thing: a process
+// the kernel pipes events through.
+func pipeProcess(home, bin string, argv []string) ([]event.Event, error) {
 	st := store.Open(home)
 	current, err := st.Read()
 	if err != nil {
 		return nil, err
 	}
 
-	cmd := exec.Command(scriptPath, args...)
+	cmd := exec.Command(bin, argv...)
 	cmd.Env = append(os.Environ(), "SELF_HOME="+home)
+	cmd.Dir = home // the process can read the garden directly (ls/cat), no tool round-trip
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -374,7 +396,7 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start command: %w", err)
+		return nil, fmt.Errorf("start %s: %w", filepath.Base(bin), err)
 	}
 
 	feedEvents(stdin, current)
@@ -392,29 +414,39 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 			Payload json.RawMessage `json:"payload"`
 		}
 		if err := json.Unmarshal([]byte(line), &partial); err != nil {
-			return nil, fmt.Errorf("command output parse error: %w", err)
+			return nil, fmt.Errorf("%s output parse error: %w", filepath.Base(bin), err)
 		}
 		if partial.Name == "" {
-			return nil, fmt.Errorf("command output missing event name: %s", line)
+			return nil, fmt.Errorf("%s output missing event name: %s", filepath.Base(bin), line)
 		}
 		newEvents = append(newEvents, event.New(partial.Name, partial.Payload))
 	}
 
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("command exited: %w", err)
+		return nil, fmt.Errorf("%s exited: %w", filepath.Base(bin), err)
 	}
+	return newEvents, nil
+}
 
-	// No reserve filter: a command may emit a script.compiled, but it can't sign
+// ingestEvents appends the events a piped process emitted and runs the kernel's
+// three reactions over them: the strange-loop compile (command/projector
+// declarations), restore (data-only restore.requested), and projector auto-run.
+// Shared by command invocation and the brain — whatever emits the events, the
+// kernel reacts to them identically.
+func ingestEvents(home string, newEvents []event.Event) error {
+	st := store.Open(home)
+
+	// No reserve filter: a process may emit a script.compiled, but it can't sign
 	// it for this home, so it's inert — Restore verifies before installing. Code
 	// reaches capabilities/ only through the kernel's own signed receipts.
 	for i := range newEvents {
 		if err := st.Append(&newEvents[i]); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	// Strange-loop hook: compile any command.declared / projector.declared the
-	// command emitted, so a command can grow new capabilities at run time.
+	// process emitted, so a command — or the brain — can grow new capabilities.
 	compiledCmds, compiledProjs, cErr := kernel.CompileDeclarations(home, newEvents)
 	if cErr != nil {
 		fmt.Fprintf(os.Stderr, "self: warning: declaration compile failed: %s\n", cErr)
@@ -424,7 +456,7 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 			len(compiledCmds), len(compiledProjs))
 	}
 
-	// Restore hook: a command may emit a data-only restore.requested {name, seq};
+	// Restore hook: a process may emit a data-only restore.requested {name, seq};
 	// the kernel acts on it by reinstalling its own earlier receipt. This is how
 	// the `restore` capability works — an ordinary command, no special kernel verb.
 	if restored, rErr := kernel.ApplyRestores(home, newEvents); rErr != nil {
@@ -439,7 +471,7 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 	wiring, wErr := kernel.ReadWiring(home)
 	if wErr != nil {
 		fmt.Fprintf(os.Stderr, "self: warning: could not read kernel wiring: %s\n", wErr)
-		return newEvents, nil
+		return nil
 	}
 	ran := map[string]bool{}
 	for _, e := range newEvents {
@@ -454,8 +486,7 @@ func runCommand(home string, command string, args []string) ([]event.Event, erro
 			}
 		}
 	}
-
-	return newEvents, nil
+	return nil
 }
 
 // cmdRun is the CLI wrapper around runCommand: it prints each appended
@@ -1593,6 +1624,12 @@ func cmdWatch(home string, args []string) error {
 	}
 }
 
+// cmdThink is the thin kernel side of thinking: it no longer knows what a brain
+// is. It spawns the configured brain *process*, pipes it the prompt + event log,
+// and ingests the events it emits through the very same pipeline a command's
+// output flows through. Thinking is just another process the kernel pipes events
+// to — the brain's conclusions (chat.message) and any capabilities it grows
+// (command.declared / projector.declared) are ordinary events in the log.
 func cmdThink(home string, prompt string) error {
 	if prompt == "" {
 		data, err := io.ReadAll(os.Stdin)
@@ -1605,25 +1642,100 @@ func cmdThink(home string, prompt string) error {
 		return fmt.Errorf("usage: self think <prompt> (or pipe prompt on stdin)")
 	}
 
-	compiler := seed.NewCompiler(home)
+	newEvents, err := runBrain(home, prompt)
+	if err != nil {
+		return err
+	}
+	for _, e := range newEvents {
+		fmt.Printf("%s appended seq %d %s\n", e.ID, e.Seq, e.Name)
+	}
+	return nil
+}
 
+// runBrain spawns the brain as a Unix pipeline node and ingests its events.
+// Identical in shape to runCommand — the only difference is which executable is
+// piped to. The brain is swappable: $SELF_BRAIN may name any program that reads
+// a prompt (argv) + the event log (stdin) and emits events (stdout), so you can
+// point it at a different model, a human-in-the-loop bridge, or a swarm without
+// the kernel knowing or caring.
+func runBrain(home, prompt string) ([]event.Event, error) {
+	bin, argv := brainCommand(prompt)
+	newEvents, err := pipeProcess(home, bin, argv)
+	if err != nil {
+		return nil, fmt.Errorf("brain: %w", err)
+	}
+	if err := ingestEvents(home, newEvents); err != nil {
+		return nil, err
+	}
+	return newEvents, nil
+}
+
+// brainCommand resolves the brain process to spawn. $SELF_BRAIN overrides it
+// (its first word is the executable, the rest are leading args, then the prompt
+// is appended as one final argument); the default is self's own `brain` mode,
+// which wraps the in-tree LLM compiler. The prompt is always passed as a single
+// argv element so multi-word prompts survive without re-quoting.
+func brainCommand(prompt string) (string, []string) {
+	if v := strings.TrimSpace(os.Getenv("SELF_BRAIN")); v != "" {
+		parts := strings.Fields(v)
+		return parts[0], append(parts[1:], prompt)
+	}
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		exe = "self"
+	}
+	return exe, []string{"brain", prompt}
+}
+
+// cmdBrain is the *default* brain process — the one self ships, behind the same
+// stdin/stdout contract any replacement must honor. It wraps the in-tree LLM
+// compiler (CallBrain): explore the garden, optionally act by running commands,
+// optionally grow by declaring capabilities. Its whole effect is the JSONL event
+// stream it writes to stdout: the user's message and the brain's reply as
+// chat.message events, then any declarations verbatim. The kernel (cmdThink)
+// ingests that stream like any command's output. Because it is just a process,
+// it can be replaced wholesale via $SELF_BRAIN.
+func cmdBrain(home string, prompt string) error {
+	if prompt == "" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		prompt = strings.TrimSpace(string(data))
+	}
+	if prompt == "" {
+		return fmt.Errorf("usage: self brain <prompt> (or pipe prompt on stdin)")
+	}
+
+	compiler := seed.NewCompiler(home)
 	commands, invoke := brainTools(home)
 	result, err := compiler.CallBrain(prompt, commands, invoke)
 	if err != nil {
 		return err
 	}
 
-	output := map[string]any{
-		"response":     result.Response,
-		"declarations": result.Declarations,
-	}
-	if output["declarations"] == nil {
-		output["declarations"] = []any{}
-	}
-
 	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(output)
+	emit := func(name string, payload any) error {
+		return enc.Encode(map[string]any{"name": name, "payload": payload})
+	}
+	if err := emit("chat.message", map[string]any{"role": "user", "content": prompt}); err != nil {
+		return err
+	}
+	if strings.TrimSpace(result.Response) != "" {
+		if err := emit("chat.message", map[string]any{"role": "assistant", "content": result.Response}); err != nil {
+			return err
+		}
+	}
+	for _, d := range result.Declarations {
+		name, _ := d["name"].(string)
+		if name == "" || d["payload"] == nil {
+			continue
+		}
+		if err := emit(name, d["payload"]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // brainTools returns the capabilities the brain may call as tools and an

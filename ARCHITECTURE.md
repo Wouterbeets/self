@@ -569,6 +569,94 @@ the compositional path is covered, just not the literal command pipeline).
 
 ---
 
+## Slice 12 — the brain is a process, not a wire (VALIDATED)
+
+**Hypothesis.** Everything in self composes the Unix way — a command or a
+projector is a process the kernel pipes the event log through (argv + JSONL in →
+JSONL/HTML out). One thing didn't: the brain/compiler was an OpenAI-shaped HTTP
+call (`/v1/chat/completions`) linked *into* the kernel — a networked oracle with
+its own 15-round tool-calling loop, opencode default, and llama fallback, ~600
+LOC of transport living inside the kernel module. `brain/bridge.py` already hinted
+the endpoint was swappable (it parks each request for a human/Claude to answer),
+but it was still HTTP, and `self think` still called `CallBrain` as a library and
+returned a `{response, declarations}` struct. The claim under test: thinking is
+just another process the kernel pipes events to. Put the brain behind the *same*
+stdin/stdout contract as a command — prompt in, **event JSONL out** — and the
+kernel stops needing a "brain" concept at all; the brain becomes swappable,
+composable, and able to read the garden directly (no tool round-trips), because a
+local process can just `ls`/`cat`.
+
+**Slice.**
+- `runCommand`'s body split into two reusable halves: `pipeProcess` (exec a node
+  with `cwd=SELF_HOME`, feed the log on stdin, parse events off stdout) and
+  `ingestEvents` (append + strange-loop compile + restore + projector auto-run).
+  A command and a brain are now literally the same call shape; only the
+  executable differs.
+- `self think` no longer links an LLM. It calls `runBrain`, which spawns the
+  brain *process* (`brainCommand`: `$SELF_BRAIN` if set — first word is the exe,
+  prompt appended as one arg — else self's own `brain` mode) through
+  `pipeProcess` and ingests its events through the identical pipeline a command's
+  output flows through. The brain's reply (`chat.message`) and anything it grows
+  (`command.declared` / `projector.declared`) are ordinary events in the log.
+- `self brain` is the *default* brain process, shipped behind that contract. It
+  wraps the in-tree compiler (`CallBrain`) — explore, act, grow — and its whole
+  effect is the JSONL it writes to stdout: the user + assistant `chat.message`s,
+  then any declarations verbatim. The 600 LOC of LLM transport didn't shrink, but
+  it **moved out of the kernel's think path into a replaceable plugin**; the
+  kernel side of thinking is now ~40 LOC of "spawn, pipe, ingest."
+
+**Evidence.**
+- **The kernel can't tell a brain from a shell script** (e2e test +
+  reproduction): with `$SELF_BRAIN` pointed at a 6-line Python script and **no
+  LLM at all** (`SELF_LLM_STUB=1`), `self think "…"` piped the prompt to it, the
+  script explored the garden itself (`os.listdir("capabilities/commands")`),
+  emitted two `chat.message`s, and the kernel ingested them as ordinary events —
+  auto-running the chat projector. The conversation is in `events.jsonl` like any
+  other events.
+- **Growth through the brain process** works the same as through a command: a
+  `command.declared` the fake brain emitted on stdout flowed through the
+  strange-loop compile (`ingestEvents` → `CompileDeclarations`) and installed a
+  real `noted` capability — no special path for brain-grown capabilities.
+- **Swappability is the contract, not a config knob**: the same `self think`
+  drove an LLM (`self brain` default), a human-in-the-loop (`bridge.py` behind
+  `self brain`), or a fake script (above) with zero kernel change between them.
+- Full suite green; preflight (rehydrate + selftest, 10/10 examples) unaffected —
+  the refactor preserved `runCommand` behavior exactly.
+
+**Decision: keep.** This *did* touch the kernel, but as the PoC rule wants: it is
+net **subtraction of concept** — the "networked oracle" category is gone; there
+is now one kind of thing the kernel talks to, a process it pipes events through.
+The trust model is unchanged because it was never trusting the compiler: the
+brain's output is just events, and the only privileged step (sign + install a
+`script.compiled`) still happens kernel-side via the existing signed-receipt path
+(Slices 6–7), gated by examples (Slice 9). Moving the brain across a pipe weakens
+nothing those already cover. The composition payoff the lineage points at —
+multiple LLMs, swarms, a human, a deterministic transpiler, all interchangeable —
+is now just "set `$SELF_BRAIN`."
+
+**Honest gaps.** (1) Only `self think` was converted; `self heartbeat` and `self
+watch` still call `CallBrain` in-process (next beat — they carry a feedback-guard
+and a `brainOn` gate that want care). (2) `self brain`'s acting still uses an
+in-process `invoke` closure rather than shelling out to `self run`, so "the brain
+composes by calling the CLI like anything else" is true in shape but not yet
+literal. (3) An LLM-compiled `chat` command still calls `self think` expecting the
+old `{response, declarations}` JSON; with this slice `think` emits events instead,
+so `chat` collapses into `think` (think emits the `chat.message`s itself) and an
+existing garden's `chat` command would want re-growing — `self brain` keeps the
+struct-shaped knowledge only inside the process. (4) The brain inherits the
+remote-LLM tool loop; only a *local* brain with filesystem access gets the
+collapse of bash/declare/run into shell/stdout/`self run` — the headline
+simplification is realized by the fake brain, demonstrated, not yet the default.
+
+**Next (slice 13 candidates).** Convert heartbeat/watch onto `runBrain`; make
+`self brain` act via `self run` subprocesses (full CLI composition); fan-out — run
+N brains and vote/diff before the kernel signs (a natural fit with the
+`script.verified` tier); or the symmetric move for the *compiler* (`CompileCommand`
+/`CompileProjector` behind `$SELF_COMPILER`), so even capability compilation is a
+swappable process.
+
+---
+
 ## How to reproduce
 
 ```sh
@@ -599,4 +687,26 @@ self show wall                # render the board
 # then, after a re-grow changes a capability: roll it back, audit-faithfully
 self history                  # find an earlier script.compiled seq
 self restore wall <seq>       # reinstate that exact, kernel-authored version
+```
+
+Slice 12 — the brain is a swappable process. `self think` pipes the prompt to
+whatever `$SELF_BRAIN` names and ingests the events it emits; the default is
+self's own `self brain` (the in-tree LLM). Any program that reads a prompt (argv)
+and emits event JSONL on stdout is a valid brain — here a 6-line script, no LLM:
+
+```sh
+go build -o self .
+export SELF_HOME=$(mktemp -d)
+self init
+SELF_LLM_STUB=1 self grow seeds/chat
+cat > /tmp/brain.py <<'PY'
+#!/usr/bin/env python3
+import sys, json, os
+p = sys.argv[1] if len(sys.argv) > 1 else ""
+caps = os.listdir("capabilities/commands")          # the brain reads the garden itself
+print(json.dumps({"name":"chat.message","payload":{"role":"user","content":p}}))
+print(json.dumps({"name":"chat.message","payload":{"role":"assistant","content":f"I see {len(caps)} commands; you said: {p}"}}))
+PY
+SELF_BRAIN="python3 /tmp/brain.py" self think "what is here?"   # kernel pipes to it; no LLM
+grep chat.message "$SELF_HOME/events.jsonl"                     # the conversation is ordinary events
 ```
