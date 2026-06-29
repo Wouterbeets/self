@@ -24,8 +24,12 @@ rendered as HTML that you and your agent read identically.
   invariants. The kernel stays minimal; `self` grows itself.
 - **The strange loop.** A running capability can declare *new* capabilities, and
   the kernel compiles them on the spot — so `self` can grow itself while it runs.
-  The loop always carries *specs*, never code: the LLM is always the compiler, so
-  every binary is authored for this receiver and nothing foreign ever runs.
+  The loop carries *specs*, never code: the LLM recompiles every declaration here,
+  so what installs is locally-authored bytes, not imported ones. The boundary is
+  *provenance, not containment* — code enters only through your own compiler, and
+  only a kernel-signed receipt installs. Installed scripts then run unsandboxed
+  (ordinary executables); the protection is that nothing reaches that point
+  without your compiler authoring it, not that what runs is jailed.
 
 ## the loop
 
@@ -116,13 +120,16 @@ self run summarize "..."           # the new capability works right away
 
 **The loop carries specs, never code.** The LLM is *always* the compiler, so
 every binary is authored for this receiver — adaptation is never skipped, and the
-only way code enters the system is through the compiler (the original, finite
-attack surface). When the kernel compiles, it logs the bytes as a
-`script.compiled` receipt **signed with a per-home secret** (`SELF_HOME/.secret`,
-never in the log). Anything may append a `script.compiled`, but only a
-kernel-signed one ever installs — provenance is intrinsic to the receipt, not
-enforced by filtering who may write it. A forged receipt is inert: it sits in the
-log and is ignored on install.
+compiler is the *single* ingress for code. That makes it the attack surface, not
+the absence of one: adversarial seed or garden content can steer what the
+compiler authors, so the signature proves *your kernel authored these bytes*, not
+that they are safe. What the gate buys is provenance — no log entry can smuggle
+in code your own compiler didn't write. When the kernel compiles, it logs the
+bytes as a `script.compiled` receipt **signed with a per-home secret**
+(`SELF_HOME/.secret`, never in the log). Anything may append a `script.compiled`,
+but only a kernel-signed one ever installs — provenance is intrinsic to the
+receipt, not enforced by filtering who may write it. A forged receipt is inert:
+it sits in the log and is ignored on install.
 
 Two consequences worth naming:
 
@@ -130,8 +137,9 @@ Two consequences worth naming:
   ships a *reference implementation* — an `implementation` field on a declaration.
   The compiler verifies it against the pipe contract and adapts it to the local
   garden; it is never installed as-is. Near-identical power to handing over code,
-  but coherent with receiver adaptation and with zero new attack surface (see
-  `poc/wall`).
+  but coherent with receiver adaptation and opening no new ingress — the
+  reference implementation flows through the same single compiler, never around
+  it (see `poc/wall`).
 - **Rollback splits cleanly into trigger and install.** Every compile is logged
   as a signed `script.compiled` receipt. *Installing* an earlier one is the
   kernel's job — it verifies the signature, so it only ever reinstates code its
@@ -235,6 +243,14 @@ be stored, committed, and moved as just those two files. The `.secret` is what
 verifies the receipts; without the signing key a log's bytes are inert (you'd
 re-grow from its declarations through a brain instead). See `garden/` for a body
 stored exactly this way.
+
+A distinction worth keeping sharp: **rehydrate is reproducible; grow is not.**
+Rehydrate replays bytes already in the log, so it is deterministic by
+construction (the one exception is `site/kernel.html`, which embeds this home's
+absolute path). *Growth* runs the LLM compiler against a non-pinned model, so the
+same seed on another machine — or the same machine tomorrow — can yield different
+bytes. Reproducibility here comes from *storing the compiled output in the log*,
+not from compilation being repeatable.
 
 ## what the kernel is
 
@@ -380,3 +396,11 @@ Experimental. The thesis: a minimal kernel — event log, signed install, replay
 plus an LLM compiler is enough for a system that grows, tests, and rewrites its
 own capabilities while staying local-first and fully inspectable. Every capability
 and every byte of state is a plain file or a replayable event.
+
+Two limits this design does not paper over. **Trust is provenance, not
+containment**: the compiler is the single code ingress and therefore the attack
+surface — adversarial seed/garden content can steer it, and installed scripts run
+unsandboxed. **The log is unbounded**: every compile stores its full bytes and
+every projection replays the whole log, so a long-lived home grows without bound
+and re-renders in O(log length). Neither is solved here; both are honest costs of
+the model.
