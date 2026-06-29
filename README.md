@@ -314,8 +314,9 @@ Brain resolution (highest first):
 - `main.go`, `internal/` — the kernel: event store, LLM compiler, pipe
   orchestrator, web server.
 - `seeds/` — starter capabilities you can grow: `chat` (talk to it and it grows
-  the rest), the `home` board, the `kitchen` planner, plus `artifact` and
-  `restore`.
+  the rest), the `home` board, the `kitchen` planner, `plant` (a browser page to
+  grow capabilities from a pasted spec — the strange loop, with a UI), plus
+  `artifact` and `restore`.
 - `home/` — the demo body a cold `self` brings up (a task board + meal planner),
   stored as just its event log.
 - `garden/` — a second example body: one organism's state after a few
@@ -338,6 +339,15 @@ llama.cpp, …), then tell it what you need:
 
 ```sh
 ./self run chat "add a habit tracker"   # the capability appears in the garden
+```
+
+Prefer growing from the browser? Grow the `plant` seed once and a `/plant` page
+appears: paste a spec (a seed's `command.declared` / `projector.declared`), or
+click a starter, and the strange loop compiles it into a running capability —
+no CLI in the loop after that.
+
+```sh
+./self grow seeds/plant                 # then open http://localhost:7777/plant
 ```
 
 New capabilities are compiled against what already exists, so they fit the
