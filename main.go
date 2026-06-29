@@ -400,106 +400,133 @@ func cmdGrowIntent(home string, seedDir string) error {
 		return err
 	}
 
-	// 2. Develop: the orchestrator designs the decomposition from intent + garden.
 	compiler := seed.NewCompiler(home)
 	compiler.Intent = s.Intent
-	fmt.Printf("orchestrating %q from intent...\n", s.Name)
-	res, err := compiler.Orchestrate(s.Intent, s.Invariants)
-	if err != nil {
-		return fmt.Errorf("orchestrate %q: %w", s.Name, err)
-	}
-	if len(res.Declarations) == 0 {
-		return fmt.Errorf("the orchestrator declared nothing for %q", s.Name)
-	}
-
-	// 3. Compile each declared capability (intent woven into every compile),
-	//    install it, and log a signed receipt.
 	capDir := filepath.Join(home, "capabilities")
-	type compiled struct{ Type, Name, Script string }
-	var compiledScripts []compiled
-	for _, d := range res.Declarations {
-		name, _ := d["name"].(string)
-		payload, _ := json.Marshal(d["payload"])
-		switch name {
-		case event.CommandDeclared:
-			var cmd seed.Command
-			if err := json.Unmarshal(payload, &cmd); err != nil || cmd.Name == "" {
-				fmt.Fprintf(os.Stderr, "self: skipping malformed command declaration\n")
-				continue
+
+	// Develop under selection: orchestrate → compile (intent woven into each) →
+	// lay the maternal deposit → check the phenotype against the invariants. If it
+	// fails its fitness function, feed the failures back and re-grow, up to a small
+	// bound. Every attempt is on the log (audit); the surviving one's scripts win.
+	const maxAttempts = 2
+	var failures []string
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		feedback := ""
+		if attempt == 1 {
+			fmt.Printf("orchestrating %q from intent...\n", s.Name)
+		} else {
+			feedback = "- " + strings.Join(failures, "\n- ")
+			fmt.Printf("selection: %d invariant(s) unmet — re-growing %q (attempt %d/%d)\n",
+				len(failures), s.Name, attempt, maxAttempts)
+		}
+
+		res, oErr := compiler.Orchestrate(s.Intent, s.Invariants, feedback)
+		if oErr != nil {
+			return fmt.Errorf("orchestrate %q: %w", s.Name, oErr)
+		}
+		if len(res.Declarations) == 0 {
+			return fmt.Errorf("the orchestrator declared nothing for %q", s.Name)
+		}
+
+		type compiled struct{ Type, Name, Script string }
+		var compiledScripts []compiled
+		for _, d := range res.Declarations {
+			name, _ := d["name"].(string)
+			payload, _ := json.Marshal(d["payload"])
+			switch name {
+			case event.CommandDeclared:
+				var cmd seed.Command
+				if err := json.Unmarshal(payload, &cmd); err != nil || cmd.Name == "" {
+					fmt.Fprintf(os.Stderr, "self: skipping malformed command declaration\n")
+					continue
+				}
+				de := event.New(event.CommandDeclared, payload)
+				if err := st.Append(&de); err != nil {
+					return err
+				}
+				fmt.Printf("compiling command %q...", cmd.Name)
+				script, cErr := compiler.CompileCommand(cmd)
+				if cErr != nil {
+					fmt.Printf(" failed\n")
+					return fmt.Errorf("command %q: %w", cmd.Name, cErr)
+				}
+				if err := seed.WriteCommandScript(capDir, cmd.Name, script); err != nil {
+					return err
+				}
+				fmt.Printf(" compiled\n")
+				compiledScripts = append(compiledScripts, compiled{"command", cmd.Name, script})
+			case event.ProjectorDeclared:
+				var proj seed.ProjectorDecl
+				if err := json.Unmarshal(payload, &proj); err != nil || proj.Name == "" {
+					fmt.Fprintf(os.Stderr, "self: skipping malformed projector declaration\n")
+					continue
+				}
+				de := event.New(event.ProjectorDeclared, payload)
+				if err := st.Append(&de); err != nil {
+					return err
+				}
+				fmt.Printf("compiling projector %q...", proj.Name)
+				script, cErr := compiler.CompileProjector(proj)
+				if cErr != nil {
+					fmt.Printf(" failed\n")
+					return fmt.Errorf("projector %q: %w", proj.Name, cErr)
+				}
+				if err := seed.WriteProjectorScript(capDir, proj.Name, script); err != nil {
+					return err
+				}
+				fmt.Printf(" compiled\n")
+				compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
 			}
-			de := event.New(event.CommandDeclared, payload)
-			if err := st.Append(&de); err != nil {
+		}
+
+		for _, cs := range compiledScripts {
+			payload, sErr := kernel.SignedReceipt(home, cs.Type, cs.Name, cs.Script)
+			if sErr != nil {
+				return sErr
+			}
+			e := event.New(event.ScriptCompiled, payload)
+			if err := st.Append(&e); err != nil {
 				return err
 			}
-			fmt.Printf("compiling command %q...", cmd.Name)
-			script, cErr := compiler.CompileCommand(cmd)
-			if cErr != nil {
-				fmt.Printf(" failed\n")
-				return fmt.Errorf("command %q: %w", cmd.Name, cErr)
+		}
+
+		// The maternal deposit is the genotype's, not the decomposition's — lay it
+		// once, on the first attempt, not again on a re-grow.
+		if attempt == 1 {
+			for i := range s.Content {
+				ce := event.New(s.Content[i].Name, s.Content[i].Payload)
+				if err := st.Append(&ce); err != nil {
+					return err
+				}
 			}
-			if err := seed.WriteCommandScript(capDir, cmd.Name, script); err != nil {
-				return err
+		}
+
+		_ = kernel.RenderHTML(home)
+		for _, cs := range compiledScripts {
+			if cs.Type == "projector" {
+				_ = runProjectorToSite(home, cs.Name)
 			}
-			fmt.Printf(" compiled\n")
-			compiledScripts = append(compiledScripts, compiled{"command", cmd.Name, script})
-		case event.ProjectorDeclared:
-			var proj seed.ProjectorDecl
-			if err := json.Unmarshal(payload, &proj); err != nil || proj.Name == "" {
-				fmt.Fprintf(os.Stderr, "self: skipping malformed projector declaration\n")
-				continue
-			}
-			de := event.New(event.ProjectorDeclared, payload)
-			if err := st.Append(&de); err != nil {
-				return err
-			}
-			fmt.Printf("compiling projector %q...", proj.Name)
-			script, cErr := compiler.CompileProjector(proj)
-			if cErr != nil {
-				fmt.Printf(" failed\n")
-				return fmt.Errorf("projector %q: %w", proj.Name, cErr)
-			}
-			if err := seed.WriteProjectorScript(capDir, proj.Name, script); err != nil {
-				return err
-			}
-			fmt.Printf(" compiled\n")
-			compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
+		}
+		fmt.Printf("grew %q: %d capabilit(ies) from intent\n", s.Name, len(compiledScripts))
+
+		failures = checkInvariants(capDir, s.Invariants)
+		if len(failures) == 0 {
+			fmt.Printf("selection: all invariants hold — %q survives\n", s.Name)
+			return nil
 		}
 	}
+	return fmt.Errorf("%d invariant(s) unmet after %d attempt(s) — %q does not satisfy its intent: %s",
+		len(failures), maxAttempts, s.Name, strings.Join(failures, "; "))
+}
 
-	for _, cs := range compiledScripts {
-		payload, sErr := kernel.SignedReceipt(home, cs.Type, cs.Name, cs.Script)
-		if sErr != nil {
-			return sErr
-		}
-		e := event.New(event.ScriptCompiled, payload)
-		if err := st.Append(&e); err != nil {
-			return err
-		}
-	}
-
-	// Lay down the maternal deposit — initial content (e.g. self.identity) so the
-	// grown surface has something to render and the brain a voice to begin with.
-	for i := range s.Content {
-		ce := event.New(s.Content[i].Name, s.Content[i].Payload)
-		if err := st.Append(&ce); err != nil {
-			return err
-		}
-	}
-
-	// Refresh kernel wiring + render the grown projections.
-	_ = kernel.RenderHTML(home)
-	for _, cs := range compiledScripts {
-		if cs.Type == "projector" {
-			_ = runProjectorToSite(home, cs.Name)
-		}
-	}
-	fmt.Printf("grew %q: %d capabilit(ies) from intent\n", s.Name, len(compiledScripts))
-
-	// 4. Selection: check the grown phenotype against the invariants (the fitness
-	//    function). Brain-dependent invariants are noted, not statically replayed.
-	failed := 0
+// checkInvariants runs a seed's machine-checkable invariants against the grown
+// binaries (the fitness function), printing each result and returning the failed
+// ones (name + reason). Brain-dependent invariants are noted, not statically run —
+// a capability that thinks can't be replayed without a brain.
+func checkInvariants(capDir string, invs []seed.Invariant) []string {
+	var failed []string
 	fmt.Println("invariants:")
-	for _, iv := range s.Invariants {
+	for _, iv := range invs {
 		ex := iv.Example()
 		if ex == nil {
 			fmt.Printf("  ~  %s (brain-dependent — checked live)\n", iv.Name)
@@ -512,7 +539,7 @@ func cmdGrowIntent(home string, seedDir string) error {
 		data, rErr := os.ReadFile(filepath.Join(capDir, sub, iv.Capability))
 		if rErr != nil {
 			fmt.Printf("  ✗  %s — no %s %q was grown\n", iv.Name, iv.Kind, iv.Capability)
-			failed++
+			failed = append(failed, fmt.Sprintf("%s (no %s %q was grown)", iv.Name, iv.Kind, iv.Capability))
 			continue
 		}
 		vr, _ := seed.VerifyScript(string(data), iv.Kind, []seed.Example{*ex})
@@ -520,13 +547,10 @@ func cmdGrowIntent(home string, seedDir string) error {
 			fmt.Printf("  ✓  %s\n", iv.Name)
 		} else {
 			fmt.Printf("  ✗  %s — %s\n", iv.Name, strings.Join(vr.Failures, "; "))
-			failed++
+			failed = append(failed, fmt.Sprintf("%s (%s)", iv.Name, strings.Join(vr.Failures, "; ")))
 		}
 	}
-	if failed > 0 {
-		return fmt.Errorf("%d invariant(s) unmet — the grown phenotype does not satisfy the intent", failed)
-	}
-	return nil
+	return failed
 }
 
 func cmdGrow(home string, seedDir string) error {

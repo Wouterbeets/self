@@ -122,11 +122,16 @@ Explore, declare every capability, then reply with a one-line summary of the dec
 // commands/projectors that realize the intent here, and returns those
 // declarations. The caller compiles each (with the intent woven into every
 // compile) and checks the invariants. Design only — the orchestrator does not act.
-func (c *Compiler) Orchestrate(intent string, invariants []Invariant) (*BrainResult, error) {
+func (c *Compiler) Orchestrate(intent string, invariants []Invariant, feedback string) (*BrainResult, error) {
 	if !c.Available() {
 		return nil, fmt.Errorf("no LLM available to orchestrate (growing from intent needs a compiler)")
 	}
 	var b strings.Builder
+	if strings.TrimSpace(feedback) != "" {
+		b.WriteString("Your previous attempt to grow this product did not survive selection — it failed the invariants below. Redesign the decomposition so every invariant holds, then summarize what you grew.\n\n--- WHAT FAILED ---\n")
+		b.WriteString(feedback)
+		b.WriteString("\n--- END ---\n\n")
+	}
 	b.WriteString("Grow the capabilities that realize this product, then summarize what you grew.\n\n--- INTENT ---\n")
 	b.WriteString(intent)
 	b.WriteString("\n--- END INTENT ---\n")
