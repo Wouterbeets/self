@@ -79,6 +79,10 @@ type IntentSeed struct {
 	Name       string
 	Intent     string
 	Invariants []Invariant
+	// Content is the maternal deposit: initial events (e.g. a self.identity) the
+	// grow lays into the log after the decomposition is compiled, so the surface
+	// has something to render and the brain a voice to start from. Optional.
+	Content []event.Event
 }
 
 // Invariant is one must-hold for a grown surface, written in the receiver's
@@ -134,6 +138,20 @@ func LoadIntent(dir string) (*IntentSeed, error) {
 				return nil, fmt.Errorf("parse invariant: %w", err)
 			}
 			s.Invariants = append(s.Invariants, iv)
+		}
+	}
+	// seed.jsonl: optional initial content events (the maternal deposit).
+	if raw, err := os.ReadFile(filepath.Join(dir, "seed.jsonl")); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var e event.Event
+			if err := json.Unmarshal([]byte(line), &e); err != nil {
+				return nil, fmt.Errorf("parse seed content: %w", err)
+			}
+			s.Content = append(s.Content, e)
 		}
 	}
 	return s, nil

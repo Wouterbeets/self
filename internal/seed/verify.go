@@ -98,6 +98,23 @@ func VerifyScript(script, kind string, examples []Example) (VerifyResult, error)
 	return res, nil
 }
 
+// brainFreeEnv returns the parent environment with every brain/LLM pointer
+// removed, so a capability run under verification cannot reach a model: any
+// `self think` it makes errors immediately rather than blocking. Conformance is
+// thus a pure, fast function of the script and its inputs.
+func brainFreeEnv() []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "SELF_LLM") || k == "SELF_BRAIN" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	// A belt-and-suspenders signal that there is no brain here.
+	return append(out, "SELF_NO_BRAIN=1")
+}
+
 // runExample executes the script once with the example's argv and JSONL stdin,
 // returning its stdout. A timeout guards against a hanging script.
 func runExample(path string, ex Example) (string, error) {
@@ -110,6 +127,12 @@ func runExample(path string, ex Example) (string, error) {
 		cmd.Dir = wd
 		defer os.RemoveAll(wd)
 	}
+	// Verify in a brain-free sandbox: strip every way to reach an LLM, so a
+	// capability that calls `self think` fails fast instead of blocking on a real
+	// brain. This keeps conformance deterministic and lets us check the
+	// brain-independent part of a thinking command (e.g. that chat records the
+	// user's turn before it ever consults the brain) without a 10s timeout.
+	cmd.Env = brainFreeEnv()
 
 	var stdin bytes.Buffer
 	for _, e := range ex.Events {

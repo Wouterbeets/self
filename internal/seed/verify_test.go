@@ -2,12 +2,65 @@ package seed
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestLoadIntent(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "intent.md"), []byte("# foo\nthe intent prose"), 0644)
+	os.WriteFile(filepath.Join(dir, "invariants.jsonl"),
+		[]byte(`{"name":"i1","capability":"foo","kind":"command","args":["x"],"expect_contains":["y"]}`+"\n"+
+			`{"name":"i2","capability":"bar","kind":"command","brain":true,"asserts":"thinks"}`+"\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "seed.jsonl"),
+		[]byte(`{"name":"self.identity","payload":{"text":"hi"}}`+"\n"), 0644)
+
+	if !HasIntent(dir) {
+		t.Fatal("HasIntent should be true for a dir with intent.md")
+	}
+	s, err := LoadIntent(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.Intent, "the intent prose") {
+		t.Errorf("intent not loaded: %q", s.Intent)
+	}
+	if len(s.Invariants) != 2 {
+		t.Fatalf("invariants: got %d, want 2", len(s.Invariants))
+	}
+	if len(s.Content) != 1 || s.Content[0].Name != "self.identity" {
+		t.Errorf("seed content not loaded: %v", s.Content)
+	}
+	// A machine-checkable invariant yields an Example; a brain one does not.
+	if s.Invariants[0].Example() == nil {
+		t.Error("machine invariant should yield a runnable Example")
+	}
+	if s.Invariants[1].Example() != nil {
+		t.Error("brain-dependent invariant must not be statically run")
+	}
+}
 
 func raw(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+func TestVerifyIsBrainFree(t *testing.T) {
+	// Verification must run capabilities with no path to a brain, so a thinking
+	// command fails fast and its deterministic output is still checkable.
+	t.Setenv("SELF_LLM_URL", "http://should-be-stripped")
+	t.Setenv("SELF_LLM_API_KEY", "should-be-stripped")
+	t.Setenv("SELF_BRAIN", "should-be-stripped")
+	script := "#!/usr/bin/env python3\nimport os\nprint('URL=' + os.environ.get('SELF_LLM_URL','NONE') + ' BRAIN=' + os.environ.get('SELF_BRAIN','NONE'))\n"
+	res, err := VerifyScript(script, "command", []Example{{ExpectContains: []string{"URL=NONE", "BRAIN=NONE"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK() {
+		t.Errorf("brain env reached the verify sandbox (should be stripped): %v", res.Failures)
+	}
 }
 
 func TestVerifyScriptPassesAndFails(t *testing.T) {

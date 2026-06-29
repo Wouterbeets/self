@@ -477,6 +477,15 @@ func cmdGrowIntent(home string, seedDir string) error {
 		}
 	}
 
+	// Lay down the maternal deposit — initial content (e.g. self.identity) so the
+	// grown surface has something to render and the brain a voice to begin with.
+	for i := range s.Content {
+		ce := event.New(s.Content[i].Name, s.Content[i].Payload)
+		if err := st.Append(&ce); err != nil {
+			return err
+		}
+	}
+
 	// Refresh kernel wiring + render the grown projections.
 	_ = kernel.RenderHTML(home)
 	for _, cs := range compiledScripts {
