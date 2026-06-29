@@ -20,6 +20,11 @@ type Compiler struct {
 	Stub  bool
 	Home  string
 
+	// Intent is the whole-seed genotype (set during a developmental grow). When
+	// present it is woven into every per-trio compile prompt, so a projector is
+	// never compiled in a dark room — it knows the product it is part of.
+	Intent string
+
 	// fallback is the local llama-server endpoint used when the primary
 	// (opencode-go by default) refuses a request with a quota-exceeded /
 	// rate-limit error. Nil when the primary is already the local endpoint.
@@ -93,6 +98,91 @@ func (c *Compiler) CallBrain(user string, commands []Command, invoke CommandInvo
 	return c.callBrainLLM(BrainSystemPrompt, user, commands, invoke)
 }
 
+// OrchestratorSystemPrompt frames the developmental compile: a product's intent
+// goes in, a coherent decomposition comes out. The orchestrator is the brain
+// wearing a designer's hat — it explores the garden and declares the capabilities
+// that realize the intent here, holding the whole intent the whole time.
+const OrchestratorSystemPrompt = `You are self's developmental compiler. You are given a product's INTENT — what it is for, its core intuitions, the feel, the anti-goals — and its INVARIANTS, the things that must end up true. Your job is to grow it: design the SMALLEST coherent set of capabilities that realizes this intent in THIS garden, and declare each one.
+
+You have two tools:
+- bash: read-only exploration of the garden (cwd = SELF_HOME). Look before you design — what events already flow (head events.jsonl), what capabilities and surfaces exist (ls capabilities/*, cat site/kernel.html), what conventions are in use. Reuse and extend what is there; do not duplicate it.
+- declare: emit one capability. Call it once per command/projector. For a command: {"name":"command.declared","payload":{"name","description","params","event":{"name","fields"}}}. For a projector: {"name":"projector.declared","payload":{"name","description","consumes":[...]}}.
+
+How to design well:
+- Decompose the intent into commands (verbs that emit events) and projectors (views over events). Let the events be the seams between them — name a shared event vocabulary and make the pieces agree on it.
+- Write each description richly enough that someone compiling that one piece in isolation would still serve the WHOLE intent: name the sibling capabilities, the shared events, the layering, the feel. The description is the bridge between this piece and the product.
+- Honor the public surface names the intent fixes (a route, a command the user types). How you realize them — how many scripts, which events — is yours to choose for this garden.
+- Respect the kernel's contracts: commands read argv + JSONL stdin and emit JSONL events; projectors read JSONL stdin and emit BARE semantic HTML on the kernel class vocabulary (no inline CSS); affordances are plain /run/<command> forms, no JavaScript. If the intent's wording conflicts with these, the contracts win.
+- The invariants are non-negotiable: your decomposition must make every one of them true.
+
+Explore, declare every capability, then reply with a one-line summary of the decomposition you grew.`
+
+// Orchestrate grows a decomposition from a seed's intent. It hands the LLM the
+// whole intent + invariants, lets it explore the garden and declare the
+// commands/projectors that realize the intent here, and returns those
+// declarations. The caller compiles each (with the intent woven into every
+// compile) and checks the invariants. Design only — the orchestrator does not act.
+func (c *Compiler) Orchestrate(intent string, invariants []Invariant, feedback string) (*BrainResult, error) {
+	if !c.Available() {
+		return nil, fmt.Errorf("no LLM available to orchestrate (growing from intent needs a compiler)")
+	}
+	var b strings.Builder
+	if strings.TrimSpace(feedback) != "" {
+		b.WriteString("Your previous attempt to grow this product did not survive selection — it failed the invariants below. Redesign the decomposition so every invariant holds, then summarize what you grew.\n\n--- WHAT FAILED ---\n")
+		b.WriteString(feedback)
+		b.WriteString("\n--- END ---\n\n")
+	}
+	b.WriteString("Grow the capabilities that realize this product, then summarize what you grew.\n\n--- INTENT ---\n")
+	b.WriteString(intent)
+	b.WriteString("\n--- END INTENT ---\n")
+	if len(invariants) > 0 {
+		b.WriteString("\nINVARIANTS — your decomposition must make all of these true:\n")
+		for _, iv := range invariants {
+			line := "- "
+			if iv.Capability != "" {
+				line += "[" + iv.Capability + "] "
+			}
+			line += iv.Name
+			if iv.Asserts != "" {
+				line += " — " + iv.Asserts
+			} else if iv.Note != "" {
+				line += " — " + iv.Note
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+	return c.callBrainLLM(OrchestratorSystemPrompt, b.String(), nil, nil)
+}
+
+// conversationTurns turns the brain's input into message turns. If `user` is a
+// JSON array of {role, content} (every element having a role), those become the
+// turns — letting a caller supply full turn-based history and a leading system
+// turn. Otherwise it's a single user message, so `self think "..."` is unchanged.
+func conversationTurns(user string) []map[string]any {
+	s := strings.TrimSpace(user)
+	if strings.HasPrefix(s, "[") {
+		var raw []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal([]byte(s), &raw) == nil && len(raw) > 0 {
+			turns := make([]map[string]any, 0, len(raw))
+			ok := true
+			for _, m := range raw {
+				if m.Role == "" {
+					ok = false
+					break
+				}
+				turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
+			}
+			if ok {
+				return turns
+			}
+		}
+	}
+	return []map[string]any{{"role": "user", "content": user}}
+}
+
 func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke CommandInvoker) (*BrainResult, error) {
 	// bash (read), declare (grow), and run (act) are the three kernel powers — a
 	// FIXED set, regardless of how many capabilities exist. Rather than one typed
@@ -110,10 +200,11 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 		tools = append(tools, runToolDef)
 		sys += "\n\nCAPABILITIES YOU CAN RUN — call the `run` tool with {\"name\": \"<one of these>\", \"args\": \"<space-separated args, in order>\"}:\n" + commandCatalog(commands)
 	}
-	messages := []map[string]any{
-		{"role": "system", "content": sys},
-		{"role": "user", "content": user},
-	}
+	// The caller's input is normally a single user message, but may instead be a
+	// JSON array of {role, content} turns — so a chat capability can hand the brain
+	// real turn-based history (and its own identity as a leading system turn)
+	// without the kernel knowing anything about chat.
+	messages := append([]map[string]any{{"role": "system", "content": sys}}, conversationTurns(user)...)
 
 	var declarations []map[string]any
 	ep := llmEndpoint{c.URL, c.Key, c.Model}
@@ -444,7 +535,7 @@ func (c *Compiler) CompileCommand(cmd Command) (string, error) {
 	if !c.Available() {
 		return c.stubCommand(cmd), nil
 	}
-	result, err := c.callLLM(CommandSystemPrompt, buildCommandPrompt(cmd), submitCommandTool)
+	result, err := c.callLLM(CommandSystemPrompt, buildCommandPrompt(cmd, c.Intent), submitCommandTool)
 	if err != nil {
 		return "", err
 	}
@@ -464,7 +555,7 @@ func (c *Compiler) CompileProjector(p ProjectorDecl) (string, error) {
 	if !c.Available() {
 		return c.stubProjector(p), nil
 	}
-	result, err := c.callLLM(ProjectorSystemPrompt, buildProjectorPrompt(p), submitProjectorTool)
+	result, err := c.callLLM(ProjectorSystemPrompt, buildProjectorPrompt(p, c.Intent), submitProjectorTool)
 	if err != nil {
 		return "", err
 	}
@@ -545,7 +636,7 @@ If the declaration includes a REFERENCE IMPLEMENTATION, treat it as a strong, pr
 
 When you're done exploring, call submit_projector with the full script source.`
 
-func buildCommandPrompt(cmd Command) string {
+func buildCommandPrompt(cmd Command, intent string) string {
 	prompt := fmt.Sprintf(`Compile this command declaration into a command script.
 
 COMMAND: %s
@@ -561,10 +652,10 @@ Write the command_script. It must produce an event with the declared name and po
 		cmd.Description, jsonRepr(cmd.Params),
 		cmd.Event.Name, jsonRepr(cmd.Event.Fields),
 	)
-	return prompt + referenceBlock(cmd.Implementation)
+	return intentBlock(intent) + prompt + referenceBlock(cmd.Implementation)
 }
 
-func buildProjectorPrompt(p ProjectorDecl) string {
+func buildProjectorPrompt(p ProjectorDecl, intent string) string {
 	prompt := fmt.Sprintf(`Compile this projector declaration into a projector script.
 
 PROJECTOR declaration:
@@ -575,7 +666,17 @@ PROJECTOR declaration:
 Write the projector_script. It must filter events by the consumed names and render HTML.`,
 		p.Name, p.Description, jsonRepr(p.Consumes),
 	)
-	return prompt + referenceBlock(p.Implementation)
+	return intentBlock(intent) + prompt + referenceBlock(p.Implementation)
+}
+
+// intentBlock prepends the whole-seed intent (genotype) to a per-trio compile
+// prompt, so the piece is authored toward the product it belongs to — its
+// siblings, shared events, and the feel — not from its one-line description alone.
+func intentBlock(intent string) string {
+	if strings.TrimSpace(intent) == "" {
+		return ""
+	}
+	return "This capability is one part of a product with the following INTENT. Compile it so the whole intent is served — honor the shared events and sibling surfaces it implies, and the kernel's conventions over any detail of this description that conflicts with them.\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---\n\n"
 }
 
 // referenceBlock appends a seed-supplied reference implementation to a compile

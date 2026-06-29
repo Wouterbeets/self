@@ -54,15 +54,36 @@ func TestReferenceImplementationReachesPrompt(t *testing.T) {
 	marker := "MARKER_ref_impl_42"
 	cmd := Command{Name: "post", Description: "post", Event: EventDecl{Name: "wall.posted"},
 		Implementation: "#!/usr/bin/env python3\n# " + marker + "\n"}
-	if got := buildCommandPrompt(cmd); !strings.Contains(got, marker) || !strings.Contains(got, "REFERENCE IMPLEMENTATION") {
+	if got := buildCommandPrompt(cmd, ""); !strings.Contains(got, marker) || !strings.Contains(got, "REFERENCE IMPLEMENTATION") {
 		t.Errorf("command prompt missing reference implementation:\n%s", got)
 	}
-	if got := buildCommandPrompt(Command{Name: "x", Event: EventDecl{Name: "x.done"}}); strings.Contains(got, "REFERENCE IMPLEMENTATION") {
+	if got := buildCommandPrompt(Command{Name: "x", Event: EventDecl{Name: "x.done"}}, ""); strings.Contains(got, "REFERENCE IMPLEMENTATION") {
 		t.Error("no implementation should mean no reference block")
 	}
 	proj := ProjectorDecl{Name: "wall", Consumes: []string{"wall.posted"}, Implementation: "# " + marker}
-	if got := buildProjectorPrompt(proj); !strings.Contains(got, marker) {
+	if got := buildProjectorPrompt(proj, ""); !strings.Contains(got, marker) {
 		t.Errorf("projector prompt missing reference implementation:\n%s", got)
+	}
+	// The whole-seed intent is woven into the per-trio compile prompt when present.
+	if got := buildCommandPrompt(Command{Name: "x", Event: EventDecl{Name: "x.done"}}, "INTENT_MARKER_99"); !strings.Contains(got, "INTENT_MARKER_99") || !strings.Contains(got, "--- INTENT ---") {
+		t.Errorf("intent not woven into command prompt:\n%s", got)
+	}
+}
+
+func TestConversationTurns(t *testing.T) {
+	// A plain prompt → one user turn (the unchanged `self think "..."` path).
+	if ts := conversationTurns("hello"); len(ts) != 1 || ts[0]["role"] != "user" || ts[0]["content"] != "hello" {
+		t.Errorf("plain prompt: got %v", ts)
+	}
+	// A JSON turns array → expanded turns, in order.
+	j := `[{"role":"system","content":"you are self"},{"role":"user","content":"hi"}]`
+	ts := conversationTurns(j)
+	if len(ts) != 2 || ts[0]["role"] != "system" || ts[1]["content"] != "hi" {
+		t.Errorf("turns: got %v", ts)
+	}
+	// A JSON array without roles is NOT a conversation — treat as a single prompt.
+	if ts := conversationTurns(`[1,2,3]`); len(ts) != 1 || ts[0]["role"] != "user" {
+		t.Errorf("non-turns array should be one user message: got %v", ts)
 	}
 }
 

@@ -44,6 +44,14 @@ const (
 	// install; the receipt is logged either way as audit.
 	ScriptVerified = "script.verified"
 	SeedPlanted    = "seed.planted"
+	// IntentDeclared carries a seed's genotype — the prose intent (what the
+	// product is for, the intuitions, the feel, the anti-goals) plus its
+	// invariants (the fitness function the grown phenotype must satisfy). The
+	// developmental compiler (the orchestrator) reads it, explores the garden, and
+	// grows a coherent decomposition (command.declared / projector.declared) that
+	// realizes the intent here. The intent persists, so the surface can be
+	// re-grown against a different environment rather than translated.
+	IntentDeclared = "intent.declared"
 	// RestoreRequested is a data-only intent ({name, seq}) that the kernel acts
 	// on by reinstalling an earlier compiled receipt. It carries no code, so any
 	// seed, command, or the CLI may emit it — but the install itself stays the
