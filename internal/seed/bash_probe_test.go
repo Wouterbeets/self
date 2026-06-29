@@ -29,6 +29,9 @@ func TestBashBlocksKnownEscapes(t *testing.T) {
 		"sort --output":  `sort --output=pwned /etc/hostname`,
 		"sort bundled o": `sort -uo pwned /etc/hostname`,
 		"uniq OUT":       `uniq /etc/hostname pwned`,
+		"brain key":      `cat .brain-key`,
+		"kernel secret":  `cat .secret`,
+		"identity key":   `cat .identity`,
 	}
 	for name, cmd := range escapes {
 		if _, err := runBash(dir, cmd); err == nil {
@@ -51,6 +54,7 @@ func TestBashAllowsReadOnlySortUniqFind(t *testing.T) {
 		"uniq -c data.txt",
 		"uniq -f 1 data.txt",
 		"find . -maxdepth 1 -name '*.txt' -print",
+		"ls . 2>/dev/null",
 	}
 	for _, cmd := range ok {
 		if _, err := runBash(dir, cmd); err != nil {

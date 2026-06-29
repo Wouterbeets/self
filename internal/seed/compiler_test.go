@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStubCommandPureStdout(t *testing.T) {
@@ -297,6 +298,141 @@ func TestNewCompilerLocalWhenNoAuth(t *testing.T) {
 	}
 	if !c.Available() {
 		t.Error("local llama-server should be available without a key")
+	}
+}
+
+func TestLLMTimeoutDefaultAllowsSlowRemoteOrchestration(t *testing.T) {
+	t.Setenv("SELF_LLM_TIMEOUT", "")
+	if got := llmTimeout(); got != 10*time.Minute {
+		t.Errorf("llmTimeout default = %s, want 10m", got)
+	}
+}
+
+func TestLLMTimeoutOverride(t *testing.T) {
+	t.Setenv("SELF_LLM_TIMEOUT", "30s")
+	if got := llmTimeout(); got != 30*time.Second {
+		t.Errorf("llmTimeout override = %s, want 30s", got)
+	}
+}
+
+func TestCallBrainReturnsDeclarationsWhenFinalSummaryNeverArrives(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"tool_calls": []map[string]any{
+							{
+								"id":   "call_1",
+								"type": "function",
+								"function": map[string]any{
+									"name":      "declare",
+									"arguments": `{"name":"command.declared","payload":{"name":"note","description":"capture a note","params":{},"event":{"name":"note.captured","fields":{}}}}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	c := &Compiler{URL: server.URL, Key: "sk-test", Model: "glm-5.2", Home: t.TempDir()}
+	res, err := c.CallBrain("declare a note capability", nil, nil)
+	if err != nil {
+		t.Fatalf("CallBrain should return collected declarations after tool-round exhaustion: %v", err)
+	}
+	if len(res.Declarations) != 1 {
+		t.Fatalf("declarations = %d, want duplicate declare calls deduped to 1", len(res.Declarations))
+	}
+	if res.Response == "" {
+		t.Error("response should summarize collected declarations")
+	}
+}
+
+func TestCallBrainStopsAfterToolCallLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"tool_calls": []map[string]any{
+							{
+								"id":   "call_1",
+								"type": "function",
+								"function": map[string]any{
+									"name":      "tree",
+									"arguments": `{"path":".","depth":1}`,
+								},
+							},
+							{
+								"id":   "call_2",
+								"type": "function",
+								"function": map[string]any{
+									"name":      "latest_state",
+									"arguments": `{}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	c := &Compiler{URL: server.URL, Key: "sk-test", Model: "glm-5.2", Home: t.TempDir()}
+	_, err := c.CallBrain("loop forever", nil, nil)
+	if err == nil {
+		t.Fatal("expected runaway tool loop to stop with an error")
+	}
+	if !strings.Contains(err.Error(), "stopped after 60 brain tool calls") {
+		t.Fatalf("error = %v, want tool-call limit", err)
+	}
+}
+
+func TestInspectionToolsDenyPrivateFiles(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".brain-key"), []byte("sk-secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := &Compiler{Home: home}
+	for _, tool := range []string{"read", "tree", "list", "search"} {
+		t.Run(tool, func(t *testing.T) {
+			args := `{"path":".brain-key"}`
+			if tool == "search" {
+				args = `{"pattern":"sk-","path":".brain-key"}`
+			}
+			out := c.executeInspectTool(tool, args)
+			if !strings.Contains(out, "private kernel files") {
+				t.Fatalf("%s output = %q, want private-file denial", tool, out)
+			}
+			if strings.Contains(out, "sk-secret") {
+				t.Fatalf("%s leaked secret: %q", tool, out)
+			}
+		})
+	}
+}
+
+func TestTreeReportsCountsAndOmissions(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "site"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.html", "b.html", "c.html"} {
+		if err := os.WriteFile(filepath.Join(home, "site", name), []byte(name), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := &Compiler{Home: home}
+	out := c.inspectTree("site", 1, 2)
+	if !strings.Contains(out, "site/ (3 entries)") || !strings.Contains(out, "limit reached") {
+		t.Fatalf("tree output missing counts/limit:\n%s", out)
 	}
 }
 

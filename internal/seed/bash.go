@@ -51,8 +51,12 @@ var sortWriteRe = regexp.MustCompile(`^(-[a-zA-Z]*o|--output(=.*)?)$`)
 // jail — the LLM is cooperative; the real risk is prompt injection from seed
 // content — but unlike a denylist it fails closed.
 func runBash(home, command string) (string, error) {
+	command = stripHarmlessStderrRedirect(command)
 	if strings.Contains(command, "$(") || strings.ContainsRune(command, '`') {
 		return "", fmt.Errorf("command blocked: command substitution not allowed")
+	}
+	if referencesPrivateKernelFile(command) {
+		return "", fmt.Errorf("command blocked: private kernel files are not visible to the LLM")
 	}
 	if strings.ContainsAny(command, "<>") {
 		return "", fmt.Errorf("command blocked: redirection not allowed")
@@ -97,6 +101,24 @@ func runBash(home, command string) (string, error) {
 		out = out[:bashMaxOutput] + fmt.Sprintf("\n... (truncated at %d bytes)", bashMaxOutput)
 	}
 	return out, nil
+}
+
+func stripHarmlessStderrRedirect(command string) string {
+	command = strings.ReplaceAll(command, "2>/dev/null", "")
+	command = strings.ReplaceAll(command, "2> /dev/null", "")
+	return strings.TrimSpace(command)
+}
+
+func referencesPrivateKernelFile(command string) bool {
+	for _, field := range strings.Fields(command) {
+		field = strings.Trim(field, `"'`)
+		base := field[strings.LastIndexByte(field, '/')+1:]
+		switch base {
+		case ".brain-key", ".secret", ".identity":
+			return true
+		}
+	}
+	return false
 }
 
 // commandSegments splits a command line on top-level pipeline/sequence
@@ -192,26 +214,6 @@ func checkWriteOperands(base string, args []string) error {
 		}
 	}
 	return nil
-}
-
-// bashToolDef is the OpenAI-compatible tool schema passed to the LLM
-// so it can explore the garden at compile time.
-var bashToolDef = map[string]any{
-	"type": "function",
-	"function": map[string]any{
-		"name":        "bash",
-		"description": "Run a read-only bash command to explore your garden — the live state of self. Working directory is SELF_HOME. Allowed inspectors: ls, cat, head, tail, grep, rg, find, wc, jq, sort, uniq, cut, tr, strings, file, stat, diff (and similar read-only tools); pipelines of these are fine. Use them to inspect commands (capabilities/commands/), projectors (capabilities/projectors/), events (events.jsonl), and wiring (site/kernel.html). Anything not on the allowlist is blocked: interpreters (python, awk, sed, perl), writes, network, redirection, command substitution, and find -exec/-delete.",
-		"parameters": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"command": map[string]any{
-					"type":        "string",
-					"description": "The bash command to run",
-				},
-			},
-			"required": []string{"command"},
-		},
-	},
 }
 
 var submitCommandTool = map[string]any{

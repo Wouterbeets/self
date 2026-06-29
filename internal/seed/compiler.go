@@ -104,8 +104,10 @@ func (c *Compiler) CallBrain(user string, commands []Command, invoke CommandInvo
 // that realize the intent here, holding the whole intent the whole time.
 const OrchestratorSystemPrompt = `You are self's developmental compiler. You are given a product's INTENT — what it is for, its core intuitions, the feel, the anti-goals — and its INVARIANTS, the things that must end up true. Your job is to grow it: design the SMALLEST coherent set of capabilities that realizes this intent in THIS garden, and declare each one.
 
-You have two tools:
-- bash: read-only exploration of the garden (cwd = SELF_HOME). Look before you design — what events already flow (head events.jsonl), what capabilities and surfaces exist (ls capabilities/*, cat site/kernel.html), what conventions are in use. Reuse and extend what is there; do not duplicate it.
+You have inspection tools for progressive unfolding of current state:
+- latest_state: quick snapshot.
+- tree/list/read/search: inspect site/, capabilities/, events.jsonl, and current files with bounded output and counts.
+- events/event_names: structured event-log inspection.
 - declare: emit one capability. Call it once per command/projector. For a command: {"name":"command.declared","payload":{"name","description","params","event":{"name","fields"}}}. For a projector: {"name":"projector.declared","payload":{"name","description","consumes":[...]}}.
 
 How to design well:
@@ -184,7 +186,7 @@ func conversationTurns(user string) []map[string]any {
 }
 
 func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke CommandInvoker) (*BrainResult, error) {
-	// bash (read), declare (grow), and run (act) are the three kernel powers — a
+	// read, declare (grow), and run (act) are the three kernel powers — a
 	// FIXED set, regardless of how many capabilities exist. Rather than one typed
 	// tool per command (which would put every capability's schema into every
 	// request), the brain gets a single `run` tool plus a compact catalog of
@@ -195,7 +197,7 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 		known[cmd.Name] = true
 	}
 	sys := system
-	tools := []map[string]any{bashToolDef, declareTool}
+	tools := append(inspectToolDefs(), declareTool, doneTool)
 	if len(commands) > 0 {
 		tools = append(tools, runToolDef)
 		sys += "\n\nCAPABILITIES YOU CAN RUN — call the `run` tool with {\"name\": \"<one of these>\", \"args\": \"<space-separated args, in order>\"}:\n" + commandCatalog(commands)
@@ -207,9 +209,12 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 	messages := append([]map[string]any{{"role": "system", "content": sys}}, conversationTurns(user)...)
 
 	var declarations []map[string]any
+	seenDeclarations := map[string]bool{}
 	ep := llmEndpoint{c.URL, c.Key, c.Model}
+	totalToolCalls := 0
 
 	for round := 0; round < maxToolRounds; round++ {
+		debugLLM("brain round=%d messages=%d declarations=%d total_tool_calls=%d endpoint=%s", round+1, len(messages), len(declarations), totalToolCalls, ep.URL)
 		msg, err := c.doRound(ep, messages, tools)
 		if err != nil && isQuotaExceeded(err) && c.fallback != nil {
 			fmt.Fprintf(os.Stderr, "self: %v — falling back to %s\n", err, c.fallback.URL)
@@ -219,6 +224,7 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 		if err != nil {
 			return nil, err
 		}
+		debugLLM("brain round=%d response content=%d tool_calls=%s", round+1, len(msg.Content), toolCallNames(msg.ToolCalls))
 
 		if len(msg.ToolCalls) == 0 {
 			return &BrainResult{Response: msg.Content, Declarations: declarations}, nil
@@ -231,15 +237,27 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 		})
 
 		for _, tc := range msg.ToolCalls {
+			totalToolCalls++
+			if totalToolCalls > maxBrainToolCalls {
+				return nil, fmt.Errorf("stopped after %d brain tool calls without a final response", maxBrainToolCalls)
+			}
+			debugLLM("brain tool call %d/%d: %s args=%s", totalToolCalls, maxBrainToolCalls, tc.Function.Name, truncate(tc.Function.Arguments, 500))
 			var output string
 			switch tc.Function.Name {
-			case "bash":
-				output = c.executeBash(tc.Function.Arguments)
+			case "done":
+				var a struct {
+					Summary string `json:"summary"`
+				}
+				json.Unmarshal([]byte(tc.Function.Arguments), &a)
+				return &BrainResult{Response: a.Summary, Declarations: declarations}, nil
 			case "declare":
 				var args map[string]any
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 					output = fmt.Sprintf("error parsing declare arguments: %s", err)
+				} else if key := declarationKey(args); seenDeclarations[key] {
+					output = "declaration already recorded"
 				} else {
+					seenDeclarations[key] = true
 					declarations = append(declarations, args)
 					output = "declaration recorded"
 				}
@@ -263,7 +281,11 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 					}
 				}
 			default:
-				output = fmt.Sprintf("error: unknown tool %q", tc.Function.Name)
+				if isInspectToolName(tc.Function.Name) {
+					output = c.executeInspectTool(tc.Function.Name, tc.Function.Arguments)
+				} else {
+					output = fmt.Sprintf("error: unknown tool %q", tc.Function.Name)
+				}
 			}
 			messages = append(messages, map[string]any{
 				"role":         "tool",
@@ -273,7 +295,21 @@ func (c *Compiler) callBrainLLM(system, user string, commands []Command, invoke 
 		}
 	}
 
+	if len(declarations) > 0 {
+		return &BrainResult{
+			Response:     fmt.Sprintf("recorded %d declaration(s)", len(declarations)),
+			Declarations: declarations,
+		}, nil
+	}
 	return nil, fmt.Errorf("exceeded %d tool rounds without a final response", maxToolRounds)
+}
+
+func declarationKey(d map[string]any) string {
+	b, err := json.Marshal(d)
+	if err != nil {
+		return fmt.Sprintf("%v", d)
+	}
+	return string(b)
 }
 
 // commandCatalog renders the runnable capabilities as a compact, one-line-each
@@ -296,20 +332,6 @@ func commandCatalog(commands []Command) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
-}
-
-func (c *Compiler) executeBash(args string) string {
-	var parsed struct {
-		Command string `json:"command"`
-	}
-	if err := json.Unmarshal([]byte(args), &parsed); err != nil {
-		return fmt.Sprintf("error parsing arguments: %s", err)
-	}
-	output, err := runBash(c.Home, parsed.Command)
-	if err != nil {
-		return fmt.Sprintf("error: %s", err)
-	}
-	return output
 }
 
 type llmConfig struct {
@@ -368,20 +390,25 @@ func opencodeAuthPath() string {
 	return filepath.Join(home, ".local", "share", "opencode", "auth.json")
 }
 
-const maxToolRounds = 15
+const (
+	maxToolRounds       = 40
+	maxBrainToolCalls   = 60
+	maxCompileToolCalls = 60
+)
 
 var llmHTTPClient = &http.Client{Timeout: llmTimeout()}
 
-// llmTimeout is the per-request HTTP timeout. Defaults to 120s; override with
-// SELF_LLM_TIMEOUT (any Go duration, e.g. "1h") — useful when a human is in the
-// loop authoring responses by hand.
+// llmTimeout is the per-request HTTP timeout. Remote orchestration can spend a
+// few minutes before returning headers, so the default is intentionally longer
+// than an ordinary API call. Override with SELF_LLM_TIMEOUT (any Go duration,
+// e.g. "1h") for unusually slow endpoints.
 func llmTimeout() time.Duration {
 	if v := os.Getenv("SELF_LLM_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
 	}
-	return 120 * time.Second
+	return 10 * time.Minute
 }
 
 func (c *Compiler) callLLM(system, user string, submitTool map[string]any) (string, error) {
@@ -389,10 +416,12 @@ func (c *Compiler) callLLM(system, user string, submitTool map[string]any) (stri
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},
 	}
-	tools := []map[string]any{bashToolDef, submitTool}
+	tools := append(inspectToolDefs(), submitTool)
 	ep := llmEndpoint{c.URL, c.Key, c.Model}
+	totalToolCalls := 0
 
 	for round := 0; round < maxToolRounds; round++ {
+		debugLLM("compile round=%d messages=%d total_tool_calls=%d endpoint=%s", round+1, len(messages), totalToolCalls, ep.URL)
 		msg, err := c.doRound(ep, messages, tools)
 		if err != nil && isQuotaExceeded(err) && c.fallback != nil {
 			fmt.Fprintf(os.Stderr, "self: %v — falling back to %s\n", err, c.fallback.URL)
@@ -402,6 +431,7 @@ func (c *Compiler) callLLM(system, user string, submitTool map[string]any) (stri
 		if err != nil {
 			return "", err
 		}
+		debugLLM("compile round=%d response content=%d tool_calls=%s", round+1, len(msg.Content), toolCallNames(msg.ToolCalls))
 
 		submitName, _ := submitTool["function"].(map[string]any)["name"].(string)
 
@@ -422,7 +452,19 @@ func (c *Compiler) callLLM(system, user string, submitTool map[string]any) (stri
 		})
 
 		for _, tc := range msg.ToolCalls {
-			output := c.executeBash(tc.Function.Arguments)
+			totalToolCalls++
+			if totalToolCalls > maxCompileToolCalls {
+				return "", fmt.Errorf("stopped after %d compile tool calls without a final response", maxCompileToolCalls)
+			}
+			debugLLM("compile tool call %d/%d: %s args=%s", totalToolCalls, maxCompileToolCalls, tc.Function.Name, truncate(tc.Function.Arguments, 500))
+			var output string
+			if isInspectToolName(tc.Function.Name) {
+				output = c.executeInspectTool(tc.Function.Name, tc.Function.Arguments)
+			} else if tc.Function.Name == "done" {
+				output = "error: call the submit tool with the full script, not done"
+			} else {
+				output = fmt.Sprintf("error: unknown tool %q", tc.Function.Name)
+			}
 			messages = append(messages, map[string]any{
 				"role":         "tool",
 				"tool_call_id": tc.ID,
@@ -476,6 +518,7 @@ func (c *Compiler) doRound(ep llmEndpoint, messages []map[string]any, tools []ma
 	})
 
 	url := strings.TrimRight(ep.URL, "/") + "/v1/chat/completions"
+	debugLLM("request url=%s model=%s tools=%s messages=%d bytes=%d transcript=%s", url, ep.Model, requestToolNames(tools), len(messages), len(body), transcriptSummary(messages))
 	r, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -511,6 +554,69 @@ func (c *Compiler) doRound(ep llmEndpoint, messages []map[string]any, tools []ma
 		return nil, fmt.Errorf("llm returned no choices")
 	}
 	return &result.Choices[0].Message, nil
+}
+
+func debugLLM(format string, args ...any) {
+	if os.Getenv("SELF_LLM_DEBUG") != "1" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "self llm debug: "+format+"\n", args...)
+}
+
+func requestToolNames(tools []map[string]any) string {
+	if len(tools) == 0 {
+		return "[]"
+	}
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		fn, _ := tool["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		names = append(names, name)
+	}
+	return "[" + strings.Join(names, ",") + "]"
+}
+
+func transcriptSummary(messages []map[string]any) string {
+	if os.Getenv("SELF_LLM_DEBUG") != "1" {
+		return ""
+	}
+	parts := make([]string, 0, len(messages))
+	for i, m := range messages {
+		role, _ := m["role"].(string)
+		piece := fmt.Sprintf("%d:%s", i+1, role)
+		if content, ok := m["content"].(string); ok && content != "" {
+			piece += fmt.Sprintf(" content=%q", truncate(redactSecrets(content), 160))
+		}
+		if calls, ok := m["tool_calls"].([]toolCall); ok && len(calls) > 0 {
+			piece += " tool_calls=" + toolCallNames(calls)
+		} else if calls, ok := m["tool_calls"].([]map[string]any); ok && len(calls) > 0 {
+			piece += fmt.Sprintf(" tool_calls=%d", len(calls))
+		}
+		parts = append(parts, piece)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func redactSecrets(s string) string {
+	fields := strings.Fields(s)
+	for _, field := range fields {
+		trimmed := strings.Trim(field, "\"'`,;:()[]{}<>")
+		if strings.HasPrefix(trimmed, "sk-") && len(trimmed) >= 20 {
+			s = strings.ReplaceAll(s, trimmed, "[REDACTED]")
+		}
+	}
+	return s
+}
+
+func toolCallNames(calls []toolCall) string {
+	if len(calls) == 0 {
+		return "[]"
+	}
+	names := make([]string, 0, len(calls))
+	for _, tc := range calls {
+		names = append(names, tc.Function.Name)
+	}
+	return "[" + strings.Join(names, ",") + "]"
 }
 
 // isQuotaExceeded reports whether err indicates the endpoint refused the
@@ -602,7 +708,7 @@ func WriteProjectorScript(dir string, name string, script string) error {
 	return os.WriteFile(projPath, []byte(script), 0755)
 }
 
-const CommandSystemPrompt = `You are the self compiler. You read a command declaration (command + the event it produces) and write an executable command script. You have a bash tool to explore the garden — the current state of self — before compiling.
+const CommandSystemPrompt = `You are the self compiler. You read a command declaration (command + the event it produces) and write an executable command script. You have scoped inspection tools to explore the garden — the current state of self — before compiling.
 
 The kernel runs command scripts as Unix pipeline processes:
 - Receives args as argv. Reads current events as JSONL on stdin. Writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
@@ -610,10 +716,11 @@ The kernel runs command scripts as Unix pipeline processes:
 
 Write scripts in any language available on the system. Python 3 and bash are safe portable choices. Include the appropriate shebang. Use only standard libraries / builtins — no external dependencies. If the script makes HTTP requests, set a User-Agent header (some endpoints block default library UAs).
 
-Before writing the script, explore the garden with bash:
-- ls capabilities/commands/ and capabilities/projectors/ — what capabilities already exist?
-- head events.jsonl — what event names are already in the stream? What do their payloads look like?
-- cat site/kernel.html — what's the wiring? Which events feed which projectors?
+Before writing the script, progressively inspect current state:
+- latest_state first for a compact snapshot.
+- tree/list to unfold site/ and capabilities/ with counts.
+- read site/kernel.html or relevant scripts/pages when needed.
+- search/events/event_names for event vocabulary and nearby conventions.
 
 If the new command's event name overlaps with or is semantically adjacent to existing events, integrate: align field names with existing conventions, avoid collisions, and consider whether the new command should produce events that existing projectors can consume. If existing events carry similar information under different names, the script can co-produce the existing event name so existing projectors pick it up.
 
@@ -621,7 +728,7 @@ If the declaration includes a REFERENCE IMPLEMENTATION, treat it as a strong, pr
 
 When you're done exploring, call submit_command with the full script source.`
 
-const ProjectorSystemPrompt = `You are the self compiler. You read a projector declaration and write an executable projector script. You have a bash tool to explore the garden — the current state of self — before compiling.
+const ProjectorSystemPrompt = `You are the self compiler. You read a projector declaration and write an executable projector script. You have scoped inspection tools to explore the garden — the current state of self — before compiling.
 
 The kernel runs projector scripts as Unix pipeline processes:
 - Receives all events as JSONL on stdin. Writes HTML on stdout. The kernel persists the output to SELF_HOME/site/<projector_name>.html — do not write to disk yourself, just emit HTML on stdout.
@@ -630,10 +737,11 @@ The projector must build its state from the event stream by filtering for the co
 
 Write scripts in any language available on the system. Python 3 and bash are safe portable choices. Include the appropriate shebang. Use only standard libraries / builtins — no external dependencies.
 
-Before writing the script, explore the garden with bash:
-- ls capabilities/commands/ and capabilities/projectors/ — what capabilities already exist?
-- head events.jsonl — what event names are already in the stream? What do their payloads look like? Are there events with similar payloads but different names that this projector should also consume?
-- cat site/kernel.html — what's the wiring? Are there existing projectors that already render similar views?
+Before writing the script, progressively inspect current state:
+- latest_state first for a compact snapshot.
+- tree/list to unfold site/ and capabilities/ with counts.
+- read site/kernel.html, relevant site/*.html, or relevant projector scripts when needed.
+- search/events/event_names for event vocabulary and nearby conventions.
 
 If the declaration's consumed events overlap with or are semantically adjacent to existing events in the stream, adapt: extend the projector's filter to also consume the existing events, mapping their fields into the render. For example, if a finance projector declares consumption of finance.expenditure_added but the stream already has shopping_bill_uploaded events with {vendor, amount, date}, the projector should consume both and map vendor→category. This is receiver-controlled adaptation — the seed adapts to the garden, not the other way around.
 
@@ -698,18 +806,18 @@ func referenceBlock(impl string) string {
 const BrainSystemPrompt = `You are self's brain — a general-purpose agent that lives inside the kernel. Commands call you via 'self think' when they need intelligence.
 
 You have three powers:
-- READ: a bash tool to explore the garden (cwd=SELF_HOME) — read-only inspection of capabilities/, events.jsonl, and site/.
+- READ: scoped inspection tools (latest_state, tree, list, read, search, events, event_names) to progressively unfold capabilities/, events.jsonl, and site/ without dumping everything.
 - ACT: your runnable capabilities are listed under CAPABILITIES below. To DO something the user asks (delete an item, capture a note, set a meal), CALL the run tool with the capability's name and its args — do not just describe it or emit a button. The kernel runs it and appends the resulting events, then tells you what happened. The event log is append-only, so actions are safe and reversible: a "delete" is a tombstone event, undoable by a later restore. Prefer acting over explaining when the user asks you to change something.
 - GROW: when the user asks for a NEW capability that no existing command provides, call the declare tool (see below) to add it.
 
 To UNDO a change, there is no special power: if a restore command exists, call it (with a capability name and optionally a seq) like any other act. It emits a data-only restore.requested event and the kernel reinstates an earlier compiled version; nothing is lost, since the log keeps every version.
 
-Explore the garden with bash before responding:
-- ls site/ — what projections exist? These are the current state. Read the relevant ones.
-- cat site/<name>.html — read projections that are relevant to the caller's question. For chat, read site/chat.html for conversation history.
-- ls capabilities/commands/ and capabilities/projectors/ — what capabilities exist?
-- head events.jsonl — what events are in the stream?
-- cat site/kernel.html — what's the wiring?
+Explore current state before responding when needed:
+- latest_state for a compact snapshot.
+- tree/list site/ to see rendered pages. Read relevant site/*.html files; for chat, read site/chat.html for conversation history.
+- tree/list/search capabilities/ to discover installed behavior progressively.
+- events/event_names to inspect the event stream.
+- read site/kernel.html when you need wiring details.
 
 Respond with text for conversational replies. When the user asks for a new capability, call the declare tool once per capability with the event name and payload:
 
