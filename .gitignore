@@ -3,3 +3,9 @@
 
 # the brain bridge's runtime queue — parked requests/answers, ledger, logs
 brain/queue/
+
+# a self home's DERIVED state — rebuilt by `self rehydrate` from the log's
+# signed receipts (events.jsonl + .secret are the only source of truth)
+**/capabilities/
+**/site/
+**/.identity
