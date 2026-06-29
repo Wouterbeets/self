@@ -940,3 +940,49 @@ self show kernel                   # it's wired in, signed, and rehydratable
 event — so operator-authored code installs while foreign code still cannot.
 Growing from a *declaration* instead (human spec + LLM build) remains available
 when a compiler is configured.
+
+## Slice 15 — a seed is intent (the developmental compiler)
+
+The biggest reshaping so far, and it began as a naming smell: every interesting
+seed had become a *bundle* of trios, and a seed file was a frozen, pre-decomposed
+parts-list. A seed should be the **genotype** — the compressed intent of how a
+surface should work — grown into whatever the environment needs. We were
+persisting the phenotype (the trios) and discarding the genotype (the intent):
+inheritance backwards. Symptom seen directly while wired in as the LLM: a
+projector was compiled with only its own one-line description in the prompt —
+nothing about the command it pairs with — so coherence depended on the author
+pre-packing each fragment, and the reference-impl/examples machinery was scar
+tissue around the missing whole-intent layer.
+
+The fix. A seed is now `intent.md` (prose genotype) + `invariants.jsonl` (the
+fitness function) + optional `seed.jsonl` (a maternal deposit of initial content).
+Growth is development: `intent.declared` carries the genotype onto the log; an
+**orchestrator** (`Compiler.Orchestrate` — the brain holding the whole intent)
+explores the garden and declares the decomposition that realizes the intent here;
+each trio is compiled with the **whole intent woven in** (`Compiler.Intent`), so
+nothing is compiled in a dark room; the maternal deposit is laid; and the
+phenotype is **selected** against the invariants — re-grown with the failures fed
+back if it doesn't survive. Verification runs in a **brain-free sandbox** (every
+LLM pointer stripped) so a thinking command fails fast and its deterministic part
+is still checkable; genuinely brain-written outputs are marked `brain: true` and
+checked live.
+
+Evidence (each with a Claude wired in as the orchestrator over a localhost shim,
+no mocks): `chat` grown from intent alone into a coherent four-capability bundle
+(identity prism, turn-based memory, compaction) that passed its invariants; the
+selection loop driven from a deliberately-failing phenotype ("hi") to a surviving
+one ("HELLO") via fed-back failures; and `home` — four verbs + the four-lane board
+— grown cold from its intent and surviving all six invariants. All seeds migrated
+to genotypes (`home`, `kitchen`, `plant`, `artifact`, `restore`, `chat`); their
+invariants were validated against the prior known-good implementations before
+cutover.
+
+Honest scope. `onboarding` stays a verbatim embedded bundle — it must work before
+a brain exists, and growing from intent needs the orchestrator, so it is the one
+deliberate exception. The selection loop is bounded (one re-grow) and its failed
+attempts remain on the log as audit; a richer search (more attempts, perspective
+diversity) is future work. Invariants validated against the old implementation
+prove correctness + satisfiability, not that a cold LLM will design a passing
+decomposition every time — the selection loop is the safety net there (it refuses
+to install a phenotype that doesn't survive), and the `chat`/`home` cold grows are
+the positive evidence.

@@ -1,9 +1,10 @@
 # self
 
 A local-first, self-modifying capability system. The kernel knows almost
-nothing; capabilities grow as **seeds** — declarations an LLM compiles into
-runnable scripts. State is one append-only event log; every view is a pure
-replay of it, rendered as HTML that you and your agent read identically.
+nothing; capabilities grow from **seeds** — a seed is *intent* (the genotype: how
+a surface should work) that an LLM grows into running capabilities fitted to this
+receiver. State is one append-only event log; every view is a pure replay of it,
+rendered as HTML that you and your agent read identically.
 
 > One append-only event log + shared projections. A small kernel; everything
 > else grows as seeds. Every capability, projection, and byte of state is a
@@ -16,8 +17,11 @@ replay of it, rendered as HTML that you and your agent read identically.
 - **Projections are replays.** A projection is a pure function of the log. Run
   it twice, get byte-identical HTML. The HTML in `site/` *is* the shared memory
   the human reads in a browser and the agent reads as context — the same reality.
-- **Capabilities grow.** A capability is LLM-compiled from a declaration, not
-  hand-written into the kernel. The kernel stays minimal; `self` extends itself.
+- **Seeds are intent; growth is development.** A seed is the *genotype* — prose
+  intent plus invariants (a fitness function) — not a parts-list. An orchestrator
+  (the LLM, holding the whole intent) reads the garden and grows the decomposition
+  that realizes the intent here, then the phenotype is selected against the
+  invariants. The kernel stays minimal; `self` grows itself.
 - **The strange loop.** A running capability can declare *new* capabilities, and
   the kernel compiles them on the spot — so `self` can grow itself while it runs.
   The loop always carries *specs*, never code: the LLM is always the compiler, so
@@ -31,7 +35,7 @@ self                       # the default — first run brings up a demo garden, 
 self init                  # initialize a bare kernel (welcome + setup pages, no demo)
 self live                  # start the web server explicitly (default port 7777)
 self teach command timer   # hand-write a capability yourself (script on stdin)
-self grow seeds/chat       # grow a capability from a seed (the LLM compiles it)
+self grow seeds/chat       # grow a seed's intent into capabilities (the orchestrator decomposes + compiles)
 self run chat "add a ..."  # run a capability; chat asks the brain, which can grow more
 self think "summarize ..." # ask the brain (a swappable process; default = LLM)
 self heartbeat             # one self-improvement cycle: the brain reflects & grows
@@ -82,17 +86,17 @@ them. A capability can declare new capabilities, so one seed bootstraps the rest
 
 ## the trio
 
-The atomic unit of a seed is a **trio**, declared via separate
-`command.declared` and `projector.declared` events:
+The unit a *grown* capability falls into is a **trio** — what the orchestrator
+emits and the compiler turns into scripts:
 
 - **command** — what you run (params, intent, the event it produces)
 - **event** — what the command produces (name, payload schema)
 - **projector** — how events become a view (consumed events, desired output)
 
-All three are declarations. The LLM compiles them into scripts when you grow the
-seed. The seed is source; the LLM is the compiler; the generated scripts are the
-binary. Same seed, different receiver, different binary — receiver-controlled
-adaptation.
+But the trio is the *output* of growth, not the seed. You don't hand-write trios;
+the orchestrator designs them from the seed's intent against the garden. Same
+intent, different receiver, different decomposition — receiver-controlled
+adaptation, all the way down to which trios even exist here.
 
 ## self-improvement (the strange loop)
 
@@ -237,16 +241,16 @@ stored exactly this way.
 Five things, irreducible:
 
 1. **event store** — append-only JSONL log (the only truth)
-2. **LLM compiler** — reads `command.declared` / `projector.declared`, explores
-   the garden via a read-only bash tool, writes scripts at grow time **and at run
-   time** (the strange loop). Logs every compiled script as a `script.compiled`
-   receipt **signed with the home's secret**; install verifies the signature, so
-   only kernel-authored code reaches `capabilities/`. `self restore` reads those
-   receipts to roll back. A declaration may carry a reference implementation the
-   compiler verifies and adapts — but the compiler always authors the binary; no
-   foreign code runs. The operator can also author a script directly with `self
-   teach` (kernel-signed, examples-gated) — the same install path, a human
-   instead of the LLM.
+2. **LLM compiler / orchestrator** — at grow time it reads a seed's *intent*,
+   explores the garden via a read-only bash tool, and **designs the decomposition**
+   (the `command.declared` / `projector.declared` that realize the intent here),
+   then compiles each piece with the whole intent woven in; it also compiles
+   declarations a running capability emits (the strange loop). Logs every compiled
+   script as a `script.compiled` receipt **signed with the home's secret**; install
+   verifies the signature, so only kernel-authored code reaches `capabilities/`.
+   `self restore` reads those receipts to roll back. The operator can author a
+   script directly with `self teach` (kernel-signed) — the same install path, a
+   human instead of the LLM, and the no-brain way to add a capability.
 3. **the brain** (`self think`) — a process the kernel pipes events to (prompt
    in, event JSONL out), swappable via `$SELF_BRAIN`; the default `self brain`
    wraps the same LLM infrastructure as the compiler. Capabilities call it; it
@@ -256,37 +260,49 @@ Five things, irreducible:
 5. **web server** — `self live` serves the materialized `site/` and re-runs
    projections on demand
 
-The events the kernel acts on carry **data, never code**: `command.declared` and
-`projector.declared` (compile a spec into a binary for this receiver) and
-`restore.requested` (reinstall an earlier receipt). It writes the receipts
-itself — `kernel.initialized`, `script.compiled` (signed compile receipts; anyone
-may append one, but only a kernel-signed receipt installs), `script.verified`
-(signed conformance attestations), and `seed.planted`. Everything else comes from
-seeds, or from capabilities that emit declarations or intents at run time.
+The events the kernel acts on carry **data, never code**: `intent.declared` (grow
+a genotype into capabilities for this receiver), `command.declared` /
+`projector.declared` (compile a spec into a binary), and `restore.requested`
+(reinstall an earlier receipt). It writes the receipts itself —
+`kernel.initialized`, `script.compiled` (signed compile receipts; anyone may
+append one, but only a kernel-signed receipt installs), `script.verified` (signed
+conformance attestations), and `seed.planted`. Everything else comes from seeds,
+or from capabilities that emit declarations or intents at run time.
 
 ## seed format
 
-A seed is a directory containing `events.jsonl`. The first events are typically
-declarations (`command.declared` / `projector.declared`); the rest are content
-the receiver replays on growing. A declaration may carry an **`implementation`**
-field — a reference implementation the compiler verifies against the pipe
-contract and adapts to the local garden (never installed as-is), so a seed can
-be precise without importing code (see `poc/wall`). A declaration may also carry
-**`examples`** — input → output-must-contain conformance tests the kernel runs
-against the freshly compiled binary *before installing it*; a binary that fails
-them is rejected and a `script.verified` receipt records the outcome. The receipt
-is an **ed25519-signed attestation** — bound to the sha256 of the exact script and
-examples — so a *third* node can verify the receiver's claim ("this binary passed
-these examples") from its public key alone, with no shared secret and without
-re-running (`self identity`, `self verify-attestation`). Because the examples are
-written in the author's vocabulary, a receiver that recompiles the seed to a
-*different* vocabulary must still satisfy them, which turns "the compiler adapted
-it correctly" into a property anyone can check (see `poc/crossnode`). A seed with only declarations
-is a pure capability seed; one with only content is a pure memory seed; a full
-seed has both. A seed *can* technically include a `script.compiled` event, but
-it's inert: it won't carry this home's signature, so it never installs. Code
-enters only through the compiler (which signs), preserving both receiver
-adaptation and the trust model.
+A seed is a directory — the genotype, not a parts-list:
+
+- **`intent.md`** — the prose intent: what the surface is for, the core
+  intuitions, the feel, the anti-goals, and the public surface (the routes and
+  command names that are part of how it should feel). No declarations, no code.
+- **`invariants.jsonl`** — the fitness function: must-holds in the receiver's own
+  vocabulary, one per line (`{name, capability, kind, args|events,
+  expect_contains|expect_order}`). Machine-checkable ones run against the grown
+  binary; a `brain: true` invariant depends on the brain and is checked live, not
+  by static replay (a capability that *thinks* can't be replayed offline).
+- **`seed.jsonl`** (optional) — the *maternal deposit*: initial content events
+  (e.g. a `self.identity`) the grow lays down once after the decomposition, so the
+  surface has something to render from the first moment.
+
+Growing it (`self grow <seed>`): the kernel records the genotype as an
+`intent.declared`, the orchestrator explores the garden and declares the
+decomposition, each piece is compiled **with the whole intent woven in**, the
+maternal deposit is laid, and the phenotype is checked against the invariants —
+**re-growing with the failures fed back if it doesn't survive** (development under
+selection). Because the invariants are written in the author's vocabulary, a
+receiver that grows the seed to a *different* decomposition must still satisfy
+them — which turns "the orchestrator realized the intent correctly" into a
+property anyone can check. The conformance receipt (`script.verified`) is an
+**ed25519-signed attestation** bound to the sha256 of the exact script and
+checks, so a *third* node can verify the claim from a public key alone, with no
+shared secret and without re-running (`self identity`, `self verify-attestation`;
+see `poc/crossnode`).
+
+Growing needs a brain (the orchestrator). The no-LLM authoring path is still
+`self teach` — hand-write a script and the kernel signs + installs it (the human
+as compiler). Code enters only through that signed install, never the event
+stream, preserving both receiver adaptation and the trust model.
 
 ## environment
 
@@ -313,16 +329,14 @@ Brain resolution (highest first):
 
 - `main.go`, `internal/` — the kernel: event store, LLM compiler, pipe
   orchestrator, web server.
-- `seeds/` — starter capabilities you can grow: `chat` (talk to it and it grows
-  the rest — three-layer memory: a `self.identity` system turn, turn-based history
-  replayed from the log into real `{role,content}` turns for the brain, and a
-  `compact` command that folds old turns into a summary while the raw turns stay
-  in the log), the `home` board, the `kitchen` planner, `plant` (a browser page to
-  grow capabilities from a pasted spec — the strange loop, with a UI), plus
-  `artifact` and `restore`. `onboarding` is the bootstrap surface (setup,
-  configure, interview, welcome): a plain seed embedded in the binary that `self
-  init` plants verbatim — the pages that must work before any LLM is wired, kept
-  a seed rather than baked into the kernel as code.
+- `seeds/` — intent seeds you grow, each an `intent.md` + `invariants.jsonl` (the
+  genotype): `chat` (talk to it and it grows the rest — three-layer memory:
+  identity prism, turn-based history, compaction), the `home` board, the `kitchen`
+  planner, `plant` (grow capabilities from the browser), plus `artifact` and
+  `restore`. Open any `intent.md` to read, in prose, how that surface is meant to
+  work. `onboarding` is the one exception — still a verbatim embedded bundle (the
+  bootstrap surface: setup, configure, interview, welcome), because it has to work
+  *before* a brain is wired, and growing from intent needs the orchestrator.
 - `home/` — the demo body a cold `self` brings up (a task board + meal planner),
   stored as just its event log.
 - `garden/` — a second example body: one organism's state after a few
