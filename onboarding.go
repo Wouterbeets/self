@@ -12,6 +12,7 @@ import (
 
 	"self/internal/event"
 	"self/internal/kernel"
+	"self/internal/seed"
 	"self/internal/store"
 )
 
@@ -95,6 +96,11 @@ func installOnboarding(home string) error {
 // carries no secret — only which provider, where, and whether a key is set.
 const event_BrainConfigured = "brain.configured"
 
+const (
+	opencodeLLMURL   = seed.OpencodeLLMURL
+	opencodeLLMModel = seed.OpencodeLLMModel
+)
+
 // The human-in-the-loop brain's two events. A brain.asked is a parked question
 // (the prompt self could not answer itself, because the chosen brain is a human);
 // a brain.answered marks it resolved. The interview projector renders the open
@@ -144,19 +150,36 @@ func loadBrainConfig(home string) string {
 			os.Setenv(k, v)
 		}
 	}
-	// human/opencode are resolved elsewhere (the bridge / opencode auth); for the
-	// OpenAI-compatible providers we fill the SELF_LLM_* the compiler already reads.
+	readKey := func() string {
+		key, err := os.ReadFile(brainKeyFile(home))
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(key))
+	}
+
+	// human is resolved by the brain process. The other providers are all exposed
+	// to the compiler through the OpenAI-compatible SELF_LLM_* environment.
 	switch provider {
 	case "llamacpp", "ollama", "openai", "custom":
 		setIfUnset("SELF_LLM_URL", baseURL)
 		setIfUnset("SELF_LLM_MODEL", model)
-		if key, err := os.ReadFile(brainKeyFile(home)); err == nil {
-			if k := strings.TrimSpace(string(key)); k != "" {
-				setIfUnset("SELF_LLM_API_KEY", k)
-			}
-		}
+		setIfUnset("SELF_LLM_API_KEY", readKey())
+	case "opencode":
+		setIfUnset("SELF_LLM_URL", firstNonEmpty(baseURL, opencodeLLMURL))
+		setIfUnset("SELF_LLM_MODEL", firstNonEmpty(model, opencodeLLMModel))
+		setIfUnset("SELF_LLM_API_KEY", readKey())
 	}
 	return provider
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // brainConfigured reports whether a real brain has been chosen yet (a

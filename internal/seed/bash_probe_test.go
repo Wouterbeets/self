@@ -50,7 +50,7 @@ func TestBashAllowsReadOnlySortUniqFind(t *testing.T) {
 		"sort data.txt | uniq -c",
 		"uniq -c data.txt",
 		"uniq -f 1 data.txt",
-		"find . -maxdepth 1 -name '*.txt' -printf '%p\\n'",
+		"find . -maxdepth 1 -name '*.txt' -print",
 	}
 	for _, cmd := range ok {
 		if _, err := runBash(dir, cmd); err != nil {

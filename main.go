@@ -554,6 +554,8 @@ func checkInvariants(capDir string, invs []seed.Invariant) []string {
 }
 
 func cmdGrow(home string, seedDir string) error {
+	loadBrainConfig(home)
+
 	// An intent seed (a genotype) grows developmentally: the orchestrator designs
 	// the decomposition from the intent against this garden. A legacy seed (a
 	// pre-decomposed parts list) compiles its declarations directly.
@@ -1781,6 +1783,8 @@ func cmdVerifyAttestation(home string) error {
 // it produces are applied through the strange loop, so the cycle can leave self
 // with a genuinely new capability.
 func cmdHeartbeat(home string) error {
+	loadBrainConfig(home)
+
 	compiler := seed.NewCompiler(home)
 	if !compiler.Available() {
 		return fmt.Errorf("heartbeat needs the brain (an LLM) — set SELF_LLM_* or run a local llama-server")
@@ -1921,6 +1925,8 @@ const watchPrompt = `You are watching the garden as a quiet resident. New activi
 // that fires "when idle." It guards against reacting to its own output by
 // advancing its watermark past everything that exists after each reaction.
 func cmdWatch(home string, args []string) error {
+	loadBrainConfig(home)
+
 	interval := 5 * time.Second
 	if len(args) > 0 {
 		if n, err := strconv.Atoi(args[0]); err == nil && n > 0 {

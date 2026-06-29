@@ -346,11 +346,16 @@ func loadOpencodeGoConfig(authPath string) (llmConfig, bool) {
 		return llmConfig{}, false
 	}
 	return llmConfig{
-		URL:   "https://opencode.ai/zen/go",
+		URL:   OpencodeLLMURL,
 		Key:   entry.Key,
-		Model: "glm-5.2",
+		Model: OpencodeLLMModel,
 	}, true
 }
+
+const (
+	OpencodeLLMURL   = "https://opencode.ai/zen/go"
+	OpencodeLLMModel = "glm-5.2"
+)
 
 func opencodeAuthPath() string {
 	if v := os.Getenv("XDG_DATA_HOME"); v != "" {

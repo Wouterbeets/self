@@ -32,6 +32,34 @@ func runSelf(t *testing.T, home string, args ...string) string {
 	return out.String()
 }
 
+func TestLoadBrainConfigOpencodeUsesUIKey(t *testing.T) {
+	home := t.TempDir()
+	for _, k := range []string{"SELF_LLM_URL", "SELF_LLM_API_KEY", "SELF_LLM_MODEL"} {
+		t.Setenv(k, "")
+	}
+
+	if err := os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(`{"name":"brain.configured","payload":{"provider":"opencode","base_url":"","model":"","key_set":true}}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brainKeyFile(home), []byte("sk-ui-opencode"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := loadBrainConfig(home); got != "opencode" {
+		t.Fatalf("provider = %q, want opencode", got)
+	}
+	if got := os.Getenv("SELF_LLM_URL"); got != opencodeLLMURL {
+		t.Errorf("SELF_LLM_URL = %q, want %q", got, opencodeLLMURL)
+	}
+	if got := os.Getenv("SELF_LLM_MODEL"); got != opencodeLLMModel {
+		t.Errorf("SELF_LLM_MODEL = %q, want %q", got, opencodeLLMModel)
+	}
+	if got := os.Getenv("SELF_LLM_API_KEY"); got != "sk-ui-opencode" {
+		t.Errorf("SELF_LLM_API_KEY = %q, want UI key", got)
+	}
+}
+
 // writeFixtureSeed writes a minimal legacy (parts-list) seed with NO examples, so
 // it grows in stub mode without a brain — the no-LLM path the kernel-plumbing
 // tests need now that real seeds are intent seeds (which require the orchestrator).
