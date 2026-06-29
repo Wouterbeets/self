@@ -66,6 +66,23 @@ func TestReferenceImplementationReachesPrompt(t *testing.T) {
 	}
 }
 
+func TestConversationTurns(t *testing.T) {
+	// A plain prompt → one user turn (the unchanged `self think "..."` path).
+	if ts := conversationTurns("hello"); len(ts) != 1 || ts[0]["role"] != "user" || ts[0]["content"] != "hello" {
+		t.Errorf("plain prompt: got %v", ts)
+	}
+	// A JSON turns array → expanded turns, in order.
+	j := `[{"role":"system","content":"you are self"},{"role":"user","content":"hi"}]`
+	ts := conversationTurns(j)
+	if len(ts) != 2 || ts[0]["role"] != "system" || ts[1]["content"] != "hi" {
+		t.Errorf("turns: got %v", ts)
+	}
+	// A JSON array without roles is NOT a conversation — treat as a single prompt.
+	if ts := conversationTurns(`[1,2,3]`); len(ts) != 1 || ts[0]["role"] != "user" {
+		t.Errorf("non-turns array should be one user message: got %v", ts)
+	}
+}
+
 func TestWriteCommandScript(t *testing.T) {
 	dir := t.TempDir()
 	if err := WriteCommandScript(dir, "test-cmd", "#!/usr/bin/env python3\nprint(1)\n"); err != nil {

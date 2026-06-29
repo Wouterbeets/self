@@ -314,7 +314,10 @@ Brain resolution (highest first):
 - `main.go`, `internal/` — the kernel: event store, LLM compiler, pipe
   orchestrator, web server.
 - `seeds/` — starter capabilities you can grow: `chat` (talk to it and it grows
-  the rest), the `home` board, the `kitchen` planner, `plant` (a browser page to
+  the rest — three-layer memory: a `self.identity` system turn, turn-based history
+  replayed from the log into real `{role,content}` turns for the brain, and a
+  `compact` command that folds old turns into a summary while the raw turns stay
+  in the log), the `home` board, the `kitchen` planner, `plant` (a browser page to
   grow capabilities from a pasted spec — the strange loop, with a UI), plus
   `artifact` and `restore`. `onboarding` is the bootstrap surface (setup,
   configure, interview, welcome): a plain seed embedded in the binary that `self
