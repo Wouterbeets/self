@@ -397,6 +397,12 @@ const interviewScript = `#!/usr/bin/env python3
 import sys, json
 from html import escape
 
+# The minimal command, prefilled in the "write the code yourself" form below so
+# the human-as-compiler starts from a working example, not a blank box: a command
+# is just "read argv, emit one event" — the projector does all the rendering work.
+# Rename the event and it's a real capability.
+STUB = "#!/usr/bin/env python3\n# A command is tiny: read argv, print ONE event as JSON on stdout.\n# The kernel assigns id, seq, occurred_at; a projector turns these into a view.\nimport sys, json\n\nevent = {\n    \"name\": \"thing.happened\",\n    \"payload\": {\"title\": \" \".join(sys.argv[1:]) or \"(untitled)\"},\n}\nprint(json.dumps(event))\n"
+
 asked = {}
 answered = set()
 order = []
@@ -437,7 +443,7 @@ for i, prompt in pending:
     # The human IS the compiler: write the capability's script by hand and the
     # kernel signs + installs it (no LLM). Posts to the privileged /teach route.
     print("<hr><h3>or write the code yourself</h3>")
-    print("<p class=\"muted\">Author the script directly — the kernel signs and installs it as a real capability (operator-authored, no LLM).</p>")
+    print("<p class=\"muted\">Author the script directly — the kernel signs and installs it as a real capability (operator-authored, no LLM). It starts from the minimal stub: a command just emits one event; the projector does the work.</p>")
     print("<form method=\"post\" action=\"/teach\">")
     print("<input type=\"hidden\" name=\"id\" value=\"%s\">" % escape(i))
     print("<label>kind</label>")
@@ -446,8 +452,8 @@ for i, prompt in pending:
     print("<input name=\"name\" placeholder=\"capability name, e.g. timer\">")
     print("<label>consumes — for projectors, comma-separated event names</label>")
     print("<input name=\"consumes\" placeholder=\"e.g. workout.logged\">")
-    print("<label>script</label>")
-    print("<textarea name=\"script\" rows=\"10\" placeholder=\"#!/usr/bin/env python3&#10;import sys, json&#10;...emit JSONL events on stdout (command) or HTML (projector)...\"></textarea>")
+    print("<label>script — prefilled with the minimal command stub; rename the event and it's yours (for a projector, emit HTML instead)</label>")
+    print("<textarea name=\"script\" rows=\"12\">%s</textarea>" % escape(STUB))
     print("<label>examples — optional JSON array; if given, the script must pass before it installs</label>")
     print("<textarea name=\"examples\" rows=\"4\" placeholder='[{\"note\":\"...\",\"args\":[\"...\"],\"expect_contains\":[\"...\"]}]'></textarea>")
     print("<button>teach (install this code)</button>")
