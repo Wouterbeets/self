@@ -72,6 +72,73 @@ type ProjectorDecl struct {
 	Examples []Example `json:"examples,omitempty"`
 }
 
+// IntentSeed is the genotype: the prose intent for a product surface plus its
+// invariants (the fitness function). It carries no decomposition — the
+// orchestrator grows commands/projectors from the intent against the garden.
+type IntentSeed struct {
+	Name       string
+	Intent     string
+	Invariants []Invariant
+}
+
+// Invariant is one must-hold for a grown surface, written in the receiver's
+// vocabulary. Machine-checkable ones run like Examples against the grown binary;
+// Brain ones depend on the brain (non-deterministic output) and are checked live
+// during growth rather than by static replay, with Asserts stating the contract.
+type Invariant struct {
+	Name           string            `json:"name,omitempty"`
+	Capability     string            `json:"capability,omitempty"` // the surface name it falls on
+	Kind           string            `json:"kind,omitempty"`       // command | projector
+	Args           []string          `json:"args,omitempty"`
+	Events         []json.RawMessage `json:"events,omitempty"`
+	ExpectContains []string          `json:"expect_contains,omitempty"`
+	ExpectOrder    []string          `json:"expect_order,omitempty"`
+	Brain          bool              `json:"brain,omitempty"`
+	Asserts        string            `json:"asserts,omitempty"`
+	Note           string            `json:"note,omitempty"`
+}
+
+// Example returns the machine-checkable form of an invariant, or nil if it is
+// brain-dependent (checked live, not by static replay).
+func (iv Invariant) Example() *Example {
+	if iv.Brain {
+		return nil
+	}
+	return &Example{Note: iv.Note, Args: iv.Args, Events: iv.Events,
+		ExpectContains: iv.ExpectContains, ExpectOrder: iv.ExpectOrder}
+}
+
+// HasIntent reports whether dir is an intent seed (a genotype) rather than a
+// legacy events.jsonl seed (a pre-decomposed parts list).
+func HasIntent(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, "intent.md"))
+	return err == nil
+}
+
+// LoadIntent reads an intent seed: intent.md (the genotype) + optional
+// invariants.jsonl (the fitness function).
+func LoadIntent(dir string) (*IntentSeed, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "intent.md"))
+	if err != nil {
+		return nil, fmt.Errorf("read intent.md: %w", err)
+	}
+	s := &IntentSeed{Name: filepath.Base(dir), Intent: strings.TrimSpace(string(data))}
+	if raw, err := os.ReadFile(filepath.Join(dir, "invariants.jsonl")); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var iv Invariant
+			if err := json.Unmarshal([]byte(line), &iv); err != nil {
+				return nil, fmt.Errorf("parse invariant: %w", err)
+			}
+			s.Invariants = append(s.Invariants, iv)
+		}
+	}
+	return s, nil
+}
+
 func Load(dir string) (*Manifest, error) {
 	path := filepath.Join(dir, "events.jsonl")
 	data, err := os.ReadFile(path)

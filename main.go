@@ -378,7 +378,156 @@ func cmdInit(home string) error {
 	return nil
 }
 
+// cmdGrowIntent grows an intent seed (a genotype) into a phenotype: it persists
+// the intent, asks the orchestrator to design a decomposition from the intent +
+// the garden, compiles each declared capability with the whole intent woven in,
+// then checks the grown surface against the seed's invariants (the fitness
+// function). The intent stays on the log, so the surface can be re-grown later.
+func cmdGrowIntent(home string, seedDir string) error {
+	s, err := seed.LoadIntent(seedDir)
+	if err != nil {
+		return err
+	}
+	st := store.Open(home)
+
+	// 1. Persist the genotype.
+	invJSON, _ := json.Marshal(s.Invariants)
+	intentPayload, _ := json.Marshal(map[string]any{
+		"name": s.Name, "intent": s.Intent, "invariants": json.RawMessage(invJSON),
+	})
+	ie := event.New(event.IntentDeclared, intentPayload)
+	if err := st.Append(&ie); err != nil {
+		return err
+	}
+
+	// 2. Develop: the orchestrator designs the decomposition from intent + garden.
+	compiler := seed.NewCompiler(home)
+	compiler.Intent = s.Intent
+	fmt.Printf("orchestrating %q from intent...\n", s.Name)
+	res, err := compiler.Orchestrate(s.Intent, s.Invariants)
+	if err != nil {
+		return fmt.Errorf("orchestrate %q: %w", s.Name, err)
+	}
+	if len(res.Declarations) == 0 {
+		return fmt.Errorf("the orchestrator declared nothing for %q", s.Name)
+	}
+
+	// 3. Compile each declared capability (intent woven into every compile),
+	//    install it, and log a signed receipt.
+	capDir := filepath.Join(home, "capabilities")
+	type compiled struct{ Type, Name, Script string }
+	var compiledScripts []compiled
+	for _, d := range res.Declarations {
+		name, _ := d["name"].(string)
+		payload, _ := json.Marshal(d["payload"])
+		switch name {
+		case event.CommandDeclared:
+			var cmd seed.Command
+			if err := json.Unmarshal(payload, &cmd); err != nil || cmd.Name == "" {
+				fmt.Fprintf(os.Stderr, "self: skipping malformed command declaration\n")
+				continue
+			}
+			de := event.New(event.CommandDeclared, payload)
+			if err := st.Append(&de); err != nil {
+				return err
+			}
+			fmt.Printf("compiling command %q...", cmd.Name)
+			script, cErr := compiler.CompileCommand(cmd)
+			if cErr != nil {
+				fmt.Printf(" failed\n")
+				return fmt.Errorf("command %q: %w", cmd.Name, cErr)
+			}
+			if err := seed.WriteCommandScript(capDir, cmd.Name, script); err != nil {
+				return err
+			}
+			fmt.Printf(" compiled\n")
+			compiledScripts = append(compiledScripts, compiled{"command", cmd.Name, script})
+		case event.ProjectorDeclared:
+			var proj seed.ProjectorDecl
+			if err := json.Unmarshal(payload, &proj); err != nil || proj.Name == "" {
+				fmt.Fprintf(os.Stderr, "self: skipping malformed projector declaration\n")
+				continue
+			}
+			de := event.New(event.ProjectorDeclared, payload)
+			if err := st.Append(&de); err != nil {
+				return err
+			}
+			fmt.Printf("compiling projector %q...", proj.Name)
+			script, cErr := compiler.CompileProjector(proj)
+			if cErr != nil {
+				fmt.Printf(" failed\n")
+				return fmt.Errorf("projector %q: %w", proj.Name, cErr)
+			}
+			if err := seed.WriteProjectorScript(capDir, proj.Name, script); err != nil {
+				return err
+			}
+			fmt.Printf(" compiled\n")
+			compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
+		}
+	}
+
+	for _, cs := range compiledScripts {
+		payload, sErr := kernel.SignedReceipt(home, cs.Type, cs.Name, cs.Script)
+		if sErr != nil {
+			return sErr
+		}
+		e := event.New(event.ScriptCompiled, payload)
+		if err := st.Append(&e); err != nil {
+			return err
+		}
+	}
+
+	// Refresh kernel wiring + render the grown projections.
+	_ = kernel.RenderHTML(home)
+	for _, cs := range compiledScripts {
+		if cs.Type == "projector" {
+			_ = runProjectorToSite(home, cs.Name)
+		}
+	}
+	fmt.Printf("grew %q: %d capabilit(ies) from intent\n", s.Name, len(compiledScripts))
+
+	// 4. Selection: check the grown phenotype against the invariants (the fitness
+	//    function). Brain-dependent invariants are noted, not statically replayed.
+	failed := 0
+	fmt.Println("invariants:")
+	for _, iv := range s.Invariants {
+		ex := iv.Example()
+		if ex == nil {
+			fmt.Printf("  ~  %s (brain-dependent — checked live)\n", iv.Name)
+			continue
+		}
+		sub := "commands"
+		if iv.Kind == "projector" {
+			sub = "projectors"
+		}
+		data, rErr := os.ReadFile(filepath.Join(capDir, sub, iv.Capability))
+		if rErr != nil {
+			fmt.Printf("  ✗  %s — no %s %q was grown\n", iv.Name, iv.Kind, iv.Capability)
+			failed++
+			continue
+		}
+		vr, _ := seed.VerifyScript(string(data), iv.Kind, []seed.Example{*ex})
+		if vr.OK() {
+			fmt.Printf("  ✓  %s\n", iv.Name)
+		} else {
+			fmt.Printf("  ✗  %s — %s\n", iv.Name, strings.Join(vr.Failures, "; "))
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d invariant(s) unmet — the grown phenotype does not satisfy the intent", failed)
+	}
+	return nil
+}
+
 func cmdGrow(home string, seedDir string) error {
+	// An intent seed (a genotype) grows developmentally: the orchestrator designs
+	// the decomposition from the intent against this garden. A legacy seed (a
+	// pre-decomposed parts list) compiles its declarations directly.
+	if seed.HasIntent(seedDir) {
+		return cmdGrowIntent(home, seedDir)
+	}
+
 	manifest, err := seed.Load(seedDir)
 	if err != nil {
 		return err

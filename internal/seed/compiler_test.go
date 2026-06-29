@@ -54,15 +54,19 @@ func TestReferenceImplementationReachesPrompt(t *testing.T) {
 	marker := "MARKER_ref_impl_42"
 	cmd := Command{Name: "post", Description: "post", Event: EventDecl{Name: "wall.posted"},
 		Implementation: "#!/usr/bin/env python3\n# " + marker + "\n"}
-	if got := buildCommandPrompt(cmd); !strings.Contains(got, marker) || !strings.Contains(got, "REFERENCE IMPLEMENTATION") {
+	if got := buildCommandPrompt(cmd, ""); !strings.Contains(got, marker) || !strings.Contains(got, "REFERENCE IMPLEMENTATION") {
 		t.Errorf("command prompt missing reference implementation:\n%s", got)
 	}
-	if got := buildCommandPrompt(Command{Name: "x", Event: EventDecl{Name: "x.done"}}); strings.Contains(got, "REFERENCE IMPLEMENTATION") {
+	if got := buildCommandPrompt(Command{Name: "x", Event: EventDecl{Name: "x.done"}}, ""); strings.Contains(got, "REFERENCE IMPLEMENTATION") {
 		t.Error("no implementation should mean no reference block")
 	}
 	proj := ProjectorDecl{Name: "wall", Consumes: []string{"wall.posted"}, Implementation: "# " + marker}
-	if got := buildProjectorPrompt(proj); !strings.Contains(got, marker) {
+	if got := buildProjectorPrompt(proj, ""); !strings.Contains(got, marker) {
 		t.Errorf("projector prompt missing reference implementation:\n%s", got)
+	}
+	// The whole-seed intent is woven into the per-trio compile prompt when present.
+	if got := buildCommandPrompt(Command{Name: "x", Event: EventDecl{Name: "x.done"}}, "INTENT_MARKER_99"); !strings.Contains(got, "INTENT_MARKER_99") || !strings.Contains(got, "--- INTENT ---") {
+		t.Errorf("intent not woven into command prompt:\n%s", got)
 	}
 }
 

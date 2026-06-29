@@ -32,6 +32,21 @@ func runSelf(t *testing.T, home string, args ...string) string {
 	return out.String()
 }
 
+// writeFixtureSeed writes a minimal legacy (parts-list) seed with NO examples, so
+// it grows in stub mode without a brain — the no-LLM path the kernel-plumbing
+// tests need now that real seeds are intent seeds (which require the orchestrator).
+func writeFixtureSeed(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	fixture := `{"name":"command.declared","payload":{"name":"note","description":"note a thing","params":{"text":"string"},"event":{"name":"note.added","fields":{"text":"string"}}}}
+{"name":"projector.declared","payload":{"name":"notes","description":"list note.added events","consumes":["note.added"]}}
+`
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(fixture), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 	bin := os.Getenv("SELF_TEST_BIN")
 	if bin == "" {
@@ -44,17 +59,20 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 		t.Fatal("self init did not create site/")
 	}
 
-	runSelf(t, home, "grow", "seeds/chat")
+	// A minimal example-free legacy seed, grown in stub mode — exercises the kernel
+	// plumbing (compile → write site → serve) without a brain. Intent seeds need
+	// the orchestrator (a brain), so they can't stand in for this no-LLM path.
+	runSelf(t, home, "grow", writeFixtureSeed(t))
 
-	projPath := filepath.Join(home, "capabilities", "projectors", "chat")
+	projPath := filepath.Join(home, "capabilities", "projectors", "notes")
 	if _, err := os.Stat(projPath); err != nil {
-		t.Fatal("plant did not write projector script at projectors/chat")
+		t.Fatal("grow did not write projector script at projectors/notes")
 	}
 
-	runSelf(t, home, "run", "chat", "from-test")
+	runSelf(t, home, "run", "note", "from-test")
 
-	runSelf(t, home, "show", "chat")
-	sitePath := filepath.Join(home, "site", "chat.html")
+	runSelf(t, home, "show", "notes")
+	sitePath := filepath.Join(home, "site", "notes.html")
 	data, err := os.ReadFile(sitePath)
 	if err != nil {
 		t.Fatalf("projector did not write site file: %v", err)
@@ -80,7 +98,7 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 		if err == nil {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			if resp.StatusCode == 200 && strings.Contains(string(body), "chat.message") {
+			if resp.StatusCode == 200 && strings.Contains(string(body), "note.added") {
 				ok = true
 				break
 			}
@@ -91,17 +109,17 @@ func TestEndToEndStubWritesSiteAndServes(t *testing.T) {
 		t.Fatal("could not reach /events on self live")
 	}
 
-	resp, err := client.Get(base + "/live/chat")
+	resp, err := client.Get(base + "/live/notes")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	liveBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		t.Errorf("/live/chat status %d", resp.StatusCode)
+		t.Errorf("/live/notes status %d", resp.StatusCode)
 	}
 	if !strings.Contains(string(liveBody), "<ul>") {
-		t.Errorf("/live/chat did not return projector HTML:\n%s", string(liveBody))
+		t.Errorf("/live/notes did not return projector HTML:\n%s", string(liveBody))
 	}
 }
 
@@ -113,12 +131,11 @@ func TestStrangeLoopCommandDeclaresNewCommand(t *testing.T) {
 	home := t.TempDir()
 
 	runSelf(t, home, "init")
-	runSelf(t, home, "grow", "seeds/chat")
+	runSelf(t, home, "grow", writeFixtureSeed(t))
 
 	echoScript := `#!/usr/bin/env python3
 import sys, json
-print(json.dumps({"name": "chat.message", "payload": {"role": "user", "content": " ".join(sys.argv[1:])}}))
-print(json.dumps({"name": "chat.message", "payload": {"role": "assistant", "content": "ok"}}))
+print(json.dumps({"name": "note.added", "payload": {"title": " ".join(sys.argv[1:])}}))
 print(json.dumps({"name": "command.declared", "payload": {
     "name": "echo",
     "description": "echo a message",
@@ -126,12 +143,12 @@ print(json.dumps({"name": "command.declared", "payload": {
     "event": {"name": "echo.said", "fields": {"text": "string"}}
 }}))
 `
-	chatPath := filepath.Join(home, "capabilities", "commands", "chat")
-	if err := os.WriteFile(chatPath, []byte(echoScript), 0755); err != nil {
+	notePath := filepath.Join(home, "capabilities", "commands", "note")
+	if err := os.WriteFile(notePath, []byte(echoScript), 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	runSelf(t, home, "run", "chat", "trigger")
+	runSelf(t, home, "run", "note", "trigger")
 
 	echoPath := filepath.Join(home, "capabilities", "commands", "echo")
 	if _, err := os.Stat(echoPath); err != nil {
