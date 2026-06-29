@@ -8,7 +8,7 @@ another mind can pick it up and keep going.
 It is **two files**:
 
 ```
-events.jsonl     the only truth — 34 events, birth through beat 5
+events.jsonl     the only truth — 83 events: birth through beat 5, then organs grown by hand
 .secret          the home's signing key — what makes the log's bytes installable
 ```
 
