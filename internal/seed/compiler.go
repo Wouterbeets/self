@@ -98,11 +98,25 @@ func (c *Compiler) CallBrain(user string, commands []Command, invoke CommandInvo
 	return c.callBrainLLM(BrainSystemPrompt, user, commands, invoke)
 }
 
+// kernelPrimer is the mental model every compile/brain prompt opens with — the
+// few load-bearing protocols (the strange loop, the brain's turn interface, state
+// as events) that a hard capability like chat leans on. Without it the model has
+// to reverse-engineer the loop by flailing through the garden; with it, the loop
+// is part of the mental model BEFORE exploration, and exploration just confirms
+// how this particular receiver already does these things.
+const kernelPrimer = `self in one breath — hold this before you explore or write anything:
+
+- One append-only event log is the ONLY state. Every capability is a small script the kernel runs over that log; every view is a pure replay of it. There is no hidden memory: to remember something, emit an event; to use memory, read events back and fold them into what you produce.
+- THE STRANGE LOOP — the heart of self. Emitting a command.declared or projector.declared event makes the kernel compile it into a live capability on the spot, at grow time AND at run time. Declaring IS creating: a running capability (or you) grows new capabilities just by emitting those events. Code never arrives pre-built — the kernel compiles every script from a declaration, for this receiver.
+- INTELLIGENCE is a capability the kernel binary exposes. A command that needs to think runs the kernel: 'self think "<prompt>"'. That single argument may instead be a JSON array of {role, content} turns, which reach the brain as a real conversation (a leading system turn, then history); 'self think' returns {response, declarations} JSON, and any declarations flow back through the strange loop. So a surface that converses with the brain works by replaying the log into turns, handing them to 'self think', and emitting the reply as events — and "memory" is just those events, read back (and optionally compacted by emitting a summary event that a view overlays).
+
+With that model in hand, explore the garden to see how THIS receiver already does these things, then build.`
+
 // OrchestratorSystemPrompt frames the developmental compile: a product's intent
 // goes in, a coherent decomposition comes out. The orchestrator is the brain
 // wearing a designer's hat — it explores the garden and declares the capabilities
 // that realize the intent here, holding the whole intent the whole time.
-const OrchestratorSystemPrompt = `You are self's developmental compiler. You are given a product's INTENT — what it is for, its core intuitions, the feel, the anti-goals — and its INVARIANTS, the things that must end up true. Your job is to grow it: design the SMALLEST coherent set of capabilities that realizes this intent in THIS garden, and declare each one.
+const OrchestratorSystemPrompt = kernelPrimer + "\n\n" + `You are self's developmental compiler. You are given a product's INTENT — what it is for, its core intuitions, the feel, the anti-goals — and its INVARIANTS, the things that must end up true. Your job is to grow it: design the SMALLEST coherent set of capabilities that realizes this intent in THIS garden, and declare each one.
 
 You have inspection tools for progressive unfolding of current state:
 - latest_state: quick snapshot.
@@ -708,7 +722,7 @@ func WriteProjectorScript(dir string, name string, script string) error {
 	return os.WriteFile(projPath, []byte(script), 0755)
 }
 
-const CommandSystemPrompt = `You are the self compiler. You read a command declaration (command + the event it produces) and write an executable command script. You have scoped inspection tools to explore the garden — the current state of self — before compiling.
+const CommandSystemPrompt = kernelPrimer + "\n\n" + `You are the self compiler. You read a command declaration (command + the event it produces) and write an executable command script. You have scoped inspection tools to explore the garden — the current state of self — before compiling.
 
 The kernel runs command scripts as Unix pipeline processes:
 - Receives args as argv. Reads current events as JSONL on stdin. Writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
@@ -728,7 +742,7 @@ If the declaration includes a REFERENCE IMPLEMENTATION, treat it as a strong, pr
 
 When you're done exploring, call submit_command with the full script source.`
 
-const ProjectorSystemPrompt = `You are the self compiler. You read a projector declaration and write an executable projector script. You have scoped inspection tools to explore the garden — the current state of self — before compiling.
+const ProjectorSystemPrompt = kernelPrimer + "\n\n" + `You are the self compiler. You read a projector declaration and write an executable projector script. You have scoped inspection tools to explore the garden — the current state of self — before compiling.
 
 The kernel runs projector scripts as Unix pipeline processes:
 - Receives all events as JSONL on stdin. Writes HTML on stdout. The kernel persists the output to SELF_HOME/site/<projector_name>.html — do not write to disk yourself, just emit HTML on stdout.
@@ -803,7 +817,7 @@ func referenceBlock(impl string) string {
 	return "\n\nREFERENCE IMPLEMENTATION (verify against the contract and adapt to this garden — do not copy blindly):\n```\n" + impl + "\n```"
 }
 
-const BrainSystemPrompt = `You are self's brain — a general-purpose agent that lives inside the kernel. Commands call you via 'self think' when they need intelligence.
+const BrainSystemPrompt = kernelPrimer + "\n\n" + `You are self's brain — a general-purpose agent that lives inside the kernel. Commands call you via 'self think' when they need intelligence.
 
 You have three powers:
 - READ: scoped inspection tools (latest_state, tree, list, read, search, events, event_names) to progressively unfold capabilities/, events.jsonl, and site/ without dumping everything.

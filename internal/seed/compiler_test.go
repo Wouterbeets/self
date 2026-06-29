@@ -71,6 +71,32 @@ func TestReferenceImplementationReachesPrompt(t *testing.T) {
 	}
 }
 
+func TestKernelPrimerInEveryPrompt(t *testing.T) {
+	// The strange loop and the brain's turn protocol must be in the model's mental
+	// model BEFORE it explores — not reverse-engineered from the garden. Every
+	// compile/brain prompt opens with the primer that states them.
+	prompts := map[string]string{
+		"orchestrator": OrchestratorSystemPrompt,
+		"command":      CommandSystemPrompt,
+		"projector":    ProjectorSystemPrompt,
+		"brain":        BrainSystemPrompt,
+	}
+	must := []string{
+		"STRANGE LOOP",          // the heart of the project
+		"command.declared",      // declaring is creating
+		"self think",            // how a capability reaches the brain
+		"{role, content} turns", // the turn protocol chat needs
+		"append-only event log", // state is events
+	}
+	for name, p := range prompts {
+		for _, m := range must {
+			if !strings.Contains(p, m) {
+				t.Errorf("%s prompt is missing the mental-model phrase %q", name, m)
+			}
+		}
+	}
+}
+
 func TestConversationTurns(t *testing.T) {
 	// A plain prompt → one user turn (the unchanged `self think "..."` path).
 	if ts := conversationTurns("hello"); len(ts) != 1 || ts[0]["role"] != "user" || ts[0]["content"] != "hello" {
