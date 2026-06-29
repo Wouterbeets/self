@@ -499,11 +499,14 @@ func InstallBuiltin(home, kind, name, script string) error {
 // drew: a seed or a remote node still cannot inject code (their bytes have no
 // valid signature for this home), only the person at the keyboard can. The result
 // is a normal signed script.compiled receipt, so it rehydrates and audits exactly
-// like a compiled capability; a capability.taught event records the human
-// provenance. A minimal declaration is appended for wiring (kernel.html,
-// projector auto-run); it is NOT run through the strange loop, so the human's
-// bytes are installed verbatim rather than recompiled.
-func Teach(home, kind, name string, consumes []string, script string, examples []seed.Example) error {
+// like a compiled capability; a capability.taught event records the author
+// provenance (the `author` arg, default "human"), and the declaration's
+// `description` is recorded as given — so a mind that is NOT the local operator
+// (an autonomous agent authoring an organ by hand) can say so honestly instead
+// of being mislabeled. A minimal declaration is appended for wiring
+// (kernel.html, projector auto-run); it is NOT run through the strange loop, so
+// the author's bytes are installed verbatim rather than recompiled.
+func Teach(home, kind, name string, consumes []string, script, description, author string, examples []seed.Example) error {
 	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
 		return fmt.Errorf("teach: unsafe or empty name %q", name)
 	}
@@ -512,6 +515,17 @@ func Teach(home, kind, name string, consumes []string, script string, examples [
 	}
 	if kind != "command" && kind != "projector" {
 		return fmt.Errorf("teach: kind must be command or projector, got %q", kind)
+	}
+
+	// Honest provenance: the description and author are recorded as given so a
+	// capability authored by hand says who actually authored it. The historical
+	// default — the local operator at the keyboard — applies only when the caller
+	// supplies nothing, preserving the original behavior of the /interview route.
+	if strings.TrimSpace(description) == "" {
+		description = "taught directly by the human brain (operator-authored)"
+	}
+	if strings.TrimSpace(author) == "" {
+		author = "human"
 	}
 
 	// Same conformance gate as the compiler (Slice 9): if the human ships
@@ -530,7 +544,7 @@ func Teach(home, kind, name string, consumes []string, script string, examples [
 	case "command":
 		decl, _ := json.Marshal(map[string]any{
 			"name":        name,
-			"description": "taught directly by the human brain (operator-authored)",
+			"description": description,
 			"params":      map[string]string{},
 			"event":       map[string]any{"name": name + ".event", "fields": map[string]string{}},
 			"examples":    examples,
@@ -545,7 +559,7 @@ func Teach(home, kind, name string, consumes []string, script string, examples [
 		}
 		decl, _ := json.Marshal(map[string]any{
 			"name":        name,
-			"description": "taught directly by the human brain (operator-authored)",
+			"description": description,
 			"consumes":    consumes,
 			"examples":    examples,
 		})
@@ -558,7 +572,7 @@ func Teach(home, kind, name string, consumes []string, script string, examples [
 	if err := InstallBuiltin(home, kind, name, script); err != nil {
 		return err
 	}
-	prov, _ := json.Marshal(map[string]any{"name": name, "kind": kind, "by": "human"})
+	prov, _ := json.Marshal(map[string]any{"name": name, "kind": kind, "by": author})
 	pe := event.New("capability.taught", prov)
 	if err := st.Append(&pe); err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -107,9 +108,9 @@ func main() {
 		}
 	case "show":
 		if len(args) < 1 {
-			err = fmt.Errorf("usage: self show <projection>")
+			err = fmt.Errorf("usage: self show <projection> [--text]")
 		} else {
-			err = cmdShow(home, args[0])
+			err = cmdShow(home, args)
 		}
 	case "live":
 		port := ""
@@ -168,12 +169,14 @@ usage: self [command] [args]
   self verify-attestation check a script.verified attestation piped on stdin (no secret needed)
   self grow <seed>        grow a new capability from a seed
   self run <command> ...  run a capability — append events, refresh projections
+                          (--dry-run previews the event without writing it; --help shows its args)
+  self teach <kind> <name> ...  install a capability you wrote by hand (script on stdin; --help for the schema)
   self think "..."        ask the brain — pipe the prompt to the brain process, ingest the events it emits
   self brain "..."        the default brain process itself (prompt in, event JSONL out); swap via $SELF_BRAIN
   self heartbeat          run one self-improvement cycle (brain reflects & grows)
   self watch [secs]       resident loop: react to new activity (or report it, no brain). Ctrl-C to stop
   self restore <name> [seq]   roll a capability back to an earlier compiled version
-  self show <name>        render a projection (piped: HTML to stdout; else open in browser)
+  self show <name> [--text]   render a projection (--text: plain text; piped: HTML to stdout; else open in browser)
   self live [port]        start the live garden explicitly (default port 7777)
   self history [-n N] [--raw]   recent events, newest last
   self ls [commands|projectors|seeds]   list what exists (with paths)
@@ -192,6 +195,11 @@ on disk (all open and inspectable — see 'self where'):
   SELF_HOME/capabilities/commands/    compiled command scripts
   SELF_HOME/capabilities/projectors/  compiled projector scripts
   SELF_HOME/site/                     materialized HTML projections
+
+build & home:
+  go build -o self .   build from the module root (this directory), NOT from a home dir
+  SELF_HOME=<dir>      run against a specific body — the dir holding events.jsonl + .secret
+                       (e.g. SELF_HOME=./garden self map). Defaults to ~/.self.
 
 environment:
   SELF_HOME        my home directory (default ~/.self)
@@ -809,10 +817,46 @@ func ingestEvents(home string, newEvents []event.Event) error {
 	return nil
 }
 
-// cmdRun is the CLI wrapper around runCommand: it prints each appended
-// event to stdout.
+// cmdRun is the CLI wrapper around runCommand: it prints each appended event to
+// stdout. Two flags make acting safer on an append-only log: --help shows a
+// command's args before you run it, and --dry-run renders the event(s) a command
+// WOULD append without writing them — preview before a mistake becomes permanent
+// memory.
 func cmdRun(home string, command string, args []string) error {
-	newEvents, err := runCommand(home, command, args)
+	dryRun := false
+	var rest []string
+	for _, a := range args {
+		switch a {
+		case "--dry-run", "--dry":
+			dryRun = true
+		case "--help", "-h":
+			return runHelp(home, command)
+		default:
+			rest = append(rest, a)
+		}
+	}
+
+	if dryRun {
+		scriptPath := filepath.Join(home, "capabilities", "commands", command)
+		if _, err := os.Stat(scriptPath); err != nil {
+			return fmt.Errorf("command %q not found (grow a seed that declares it)", command)
+		}
+		evs, err := pipeProcess(home, scriptPath, rest) // run the command, but do NOT ingest/append
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "dry-run: %q would append %d event(s); nothing was written\n", command, len(evs))
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		for _, e := range evs {
+			if err := enc.Encode(map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	newEvents, err := runCommand(home, command, rest)
 	if err != nil {
 		return err
 	}
@@ -820,6 +864,32 @@ func cmdRun(home string, command string, args []string) error {
 		fmt.Printf("%s appended seq %d %s\n", e.ID, e.Seq, e.Name)
 	}
 	return nil
+}
+
+// runHelp prints what a command does and the arguments it expects, read from its
+// declaration in the log — so the shape of an action is discoverable through the
+// system, not only by reading the command's source.
+func runHelp(home, command string) error {
+	for _, c := range plantedCommands(home) {
+		if c.Name != command {
+			continue
+		}
+		fmt.Printf("self run %s — %s\n", c.Name, c.Description)
+		if len(c.Params) == 0 {
+			fmt.Println("  args:  all arguments are joined into one text field")
+		} else {
+			fmt.Println("  params (positional, in order):")
+			for _, k := range sortedByName(c.Params) {
+				fmt.Printf("    %-14s %s\n", k, c.Params[k])
+			}
+		}
+		if c.Event.Name != "" {
+			fmt.Printf("  emits: %s\n", c.Event.Name)
+		}
+		fmt.Println("  tip:   add --dry-run to preview the event without appending it")
+		return nil
+	}
+	return fmt.Errorf("command %q not found — try 'self ls commands'", command)
 }
 
 // cmdRestore is the always-on, built-in trigger for a rollback — a thin
@@ -849,7 +919,23 @@ func cmdRestore(home string, args []string) error {
 // terminal it writes a styled, self-contained copy and opens it in a browser.
 // Either way it refreshes the canonical bare projection in site/ that agents
 // read directly.
-func cmdShow(home string, name string) error {
+func cmdShow(home string, args []string) error {
+	asText := false
+	name := ""
+	for _, a := range args {
+		switch a {
+		case "--text", "--plain":
+			asText = true
+		default:
+			if name == "" {
+				name = a
+			}
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("usage: self show <projection> [--text]")
+	}
+
 	scriptPath := filepath.Join(home, "capabilities", "projectors", name)
 	if _, err := os.Stat(scriptPath); err != nil {
 		return fmt.Errorf("projection %q not found — try 'self ls projectors'", name)
@@ -862,6 +948,13 @@ func cmdShow(home string, name string) error {
 	siteDir := filepath.Join(home, "site")
 	os.MkdirAll(siteDir, 0755)
 	if err := os.WriteFile(filepath.Join(siteDir, name+".html"), html, 0644); err != nil {
+		return err
+	}
+
+	// --text renders the projection as readable plain text — for an agent or a
+	// terminal reading the body, so it need not pipe HTML through a tag stripper.
+	if asText {
+		_, err := io.WriteString(os.Stdout, htmlToText(html))
 		return err
 	}
 
@@ -883,6 +976,41 @@ func cmdShow(home string, name string) error {
 		fmt.Fprintf(os.Stderr, "self: the page is at %s — or run 'self live' and visit http://localhost:7777/%s\n", tmp, name)
 	}
 	return nil
+}
+
+var (
+	reDropBlocks = regexp.MustCompile(`(?is)<(script|style|head)[^>]*>.*?</\s*(script|style|head)\s*>`)
+	reBlockClose = regexp.MustCompile(`(?i)</(p|div|h[1-6]|li|tr|hr|section|article|header|footer|form|ul|ol|table)\s*>`)
+	reBr         = regexp.MustCompile(`(?i)<br\s*/?>`)
+	reAnyTag     = regexp.MustCompile(`<[^>]+>`)
+)
+
+// htmlToText flattens a projection's bare semantic HTML into readable plain
+// text: it drops head/script/style, turns block-level closers into line breaks,
+// strips remaining tags, decodes entities, and collapses runs of blank lines.
+func htmlToText(in []byte) string {
+	s := string(in)
+	s = reDropBlocks.ReplaceAllString(s, "")
+	s = reBr.ReplaceAllString(s, "\n")
+	s = reBlockClose.ReplaceAllString(s, "\n")
+	s = reAnyTag.ReplaceAllString(s, "")
+	s = htmlesc.UnescapeString(s)
+
+	var out []string
+	blank := 0
+	for _, ln := range strings.Split(s, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			if blank > 0 {
+				continue
+			}
+			blank++
+		} else {
+			blank = 0
+		}
+		out = append(out, ln)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
 }
 
 // isTerminal reports whether f is a terminal (character device) rather than a
@@ -1324,7 +1452,7 @@ func cmdServe(home string, port string) error {
 				return
 			}
 		}
-		if err := kernel.Teach(home, r.FormValue("kind"), r.FormValue("name"), consumes, r.FormValue("script"), examples); err != nil {
+		if err := kernel.Teach(home, r.FormValue("kind"), r.FormValue("name"), consumes, r.FormValue("script"), r.FormValue("description"), r.FormValue("author"), examples); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1675,9 +1803,11 @@ func cmdRehydrate(home string) error {
 	}
 	if len(commands)+len(projectors) == 0 {
 		fmt.Println("rehydrate: nothing signed to reinstall.")
+		fmt.Printf("  I looked in SELF_HOME=%s\n", home)
 		fmt.Println("  Either this home is uninitialized, or its .secret did not sign the log's")
-		fmt.Println("  receipts (a fresh key can't verify another home's bytes). Copy the home's")
-		fmt.Println("  .secret alongside events.jsonl, or re-grow from the log's declarations.")
+		fmt.Println("  receipts (a fresh key can't verify another home's bytes). Point SELF_HOME")
+		fmt.Println("  at a home that holds BOTH events.jsonl and the .secret that signed it:")
+		fmt.Println("    SELF_HOME=/path/to/home self rehydrate")
 		return nil
 	}
 	fmt.Printf("rehydrated from the log: %d command(s), %d projection(s) reinstalled and rendered\n",
@@ -1718,7 +1848,16 @@ func cmdSelfTest(home string) error {
 			}
 		}
 	}
-	fmt.Printf("selftest: %d passed, %d failed, %d untested\n", passed, failed, untested)
+	tested := passed + failed
+	pct := 0
+	if len(results) > 0 {
+		pct = tested * 100 / len(results)
+	}
+	fmt.Printf("selftest: %d passed, %d failed, %d untested  —  %d/%d capabilities gated (%d%% coverage)\n",
+		passed, failed, untested, tested, len(results), pct)
+	if untested > 0 {
+		fmt.Printf("  note: %d capabilit(ies) ship no examples, so 0 failed does NOT mean they all work.\n", untested)
+	}
 	if failed > 0 {
 		return fmt.Errorf("%d capabilit(ies) failed selftest", failed)
 	}
@@ -2028,7 +2167,12 @@ func cmdThink(home string, prompt string) error {
 	bin, argv := brainCommand(prompt)
 	emitted, err := pipeProcess(home, bin, argv) // spawn the brain; parse its events; do NOT append
 	if err != nil {
-		return fmt.Errorf("brain: %w", err)
+		return fmt.Errorf("brain: %w\n"+
+			"  No brain is reachable. You can still read and act on the body without one:\n"+
+			"    self map                    one-glance overview of the garden\n"+
+			"    self show <name> --text     read a projection as plain text\n"+
+			"    self run <cmd> --help       see a command's args; --dry-run to preview\n"+
+			"  Or give it a brain: SELF_LLM_STUB=1 (offline stub), or set SELF_LLM_URL / SELF_LLM_API_KEY", err)
 	}
 
 	// Fold the brain process's event stream back into the legacy {response,
@@ -2164,18 +2308,27 @@ func cmdBrain(home string, prompt string) error {
 //	self teach projector <name> evt.a,evt.b              < script   (consumes for wiring)
 //	self teach command  <name> --examples=ex.json        < script   (verified before install)
 func cmdTeach(home string, args []string) error {
-	// Pull the optional --examples=<file> flag out of the positional args.
-	var examplesFile string
+	// Pull the optional flags out of the positional args.
+	var examplesFile, description, author string
 	var pos []string
 	for _, a := range args {
-		if strings.HasPrefix(a, "--examples=") {
+		switch {
+		case a == "--help" || a == "-h" || a == "help":
+			printTeachHelp()
+			return nil
+		case strings.HasPrefix(a, "--examples="):
 			examplesFile = strings.TrimPrefix(a, "--examples=")
-			continue
+		case strings.HasPrefix(a, "--description="):
+			description = strings.TrimPrefix(a, "--description=")
+		case strings.HasPrefix(a, "--author="):
+			author = strings.TrimPrefix(a, "--author=")
+		default:
+			pos = append(pos, a)
 		}
-		pos = append(pos, a)
 	}
 	if len(pos) < 2 {
-		return fmt.Errorf("usage: self teach <command|projector> <name> [consumes-csv] [--examples=file]  (script on stdin)")
+		printTeachHelp()
+		return fmt.Errorf("teach: need a <command|projector> kind and a <name>")
 	}
 	kind, name := pos[0], pos[1]
 	var consumes []string
@@ -2202,15 +2355,53 @@ func cmdTeach(home string, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := kernel.Teach(home, kind, name, consumes, string(data), examples); err != nil {
+	if err := kernel.Teach(home, kind, name, consumes, string(data), description, author, examples); err != nil {
 		return err
 	}
 	gate := ""
 	if len(examples) > 0 {
 		gate = fmt.Sprintf(" (passed %d example(s))", len(examples))
 	}
-	fmt.Printf("taught %s %q — operator-authored, signed + installed%s\n", kind, name, gate)
+	by := author
+	if by == "" {
+		by = "human (operator)"
+	}
+	fmt.Printf("taught %s %q — by %s, signed + installed%s\n", kind, name, by, gate)
 	return nil
+}
+
+// printTeachHelp documents the teach contract, including the --examples file
+// schema — the one shape a hand-author has to get right and the one thing the
+// usage line alone never showed.
+func printTeachHelp() {
+	fmt.Print(`self teach — install a capability you authored by hand (script on stdin)
+
+usage:
+  self teach command   <name> [--examples=ex.json] [--author=who] [--description=text]  < script
+  self teach projector <name> [consumes-csv] [--examples=ex.json] [--author=who] [--description=text]  < script
+
+flags:
+  --examples=FILE     JSON array of conformance examples; the script MUST pass them before it installs
+  --author=WHO        who authored this (default "human"); recorded in the capability.taught receipt
+  --description=TEXT  the capability's one-line description (default: an operator-authored note)
+
+pipe contract: a command reads the event log as JSONL on stdin and writes new
+events as JSONL on stdout (one {"name","payload"} per line). a projector reads
+the same log on stdin and writes bare semantic HTML to stdout (no CSS/JS).
+
+--examples FILE is a JSON array; each example runs the script and asserts on its stdout:
+  [
+    {
+      "note": "what this example proves",
+      "args": ["argv", "for", "a", "command"],
+      "events": [ {"name": "x", "seq": 1, "occurred_at": "2026-01-01T00:00:00Z", "payload": {}} ],
+      "expect_contains": ["substrings", "that must appear in stdout"],
+      "expect_order":    ["these substrings", "must appear", "in this order"]
+    }
+  ]
+commands use "args" (input argv); projectors use "events" (the input log). Both
+assert with "expect_contains" (presence) and optional "expect_order" (sequence).
+`)
 }
 
 // brainTools returns the capabilities the brain may call as tools and an
