@@ -316,7 +316,10 @@ Brain resolution (highest first):
 - `seeds/` — starter capabilities you can grow: `chat` (talk to it and it grows
   the rest), the `home` board, the `kitchen` planner, `plant` (a browser page to
   grow capabilities from a pasted spec — the strange loop, with a UI), plus
-  `artifact` and `restore`.
+  `artifact` and `restore`. `onboarding` is the bootstrap surface (setup,
+  configure, interview, welcome): a plain seed embedded in the binary that `self
+  init` plants verbatim — the pages that must work before any LLM is wired, kept
+  a seed rather than baked into the kernel as code.
 - `home/` — the demo body a cold `self` brings up (a task board + meal planner),
   stored as just its event log.
 - `garden/` — a second example body: one organism's state after a few

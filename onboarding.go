@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,158 +15,80 @@ import (
 	"self/internal/store"
 )
 
-// The brain-setup surface — a baby-kernel onboarding seed installed by `self
-// init`. It is NOT an LLM-compiled capability: configuring the brain has to work
-// before any LLM is wired, so the kernel ships these two scripts and signs them
-// itself at init (see kernel.InstallBuiltin). A `setup` projector renders an HTML
-// page where the user picks a brain and pastes provider details + token; a
-// `configure` command persists the choice — provider/url/model to the log (an
-// ordinary, portable brain.configured event), the token to a non-log key file so
-// it never leaks when a garden is shared.
-//
-// This keeps the whole "wire in your LLM" flow inside the paradigm: it's just a
-// projection + a command over events, reachable at /setup the moment self starts.
+// The onboarding surface — setup, configure, the human-in-the-loop interview, and
+// the welcome page — lives as a real seed (seeds/onboarding/events.jsonl, embedded
+// below), NOT as scripts baked into the kernel. It must work before any LLM is
+// wired (you pick the brain here), so init installs the seed's reference
+// implementations verbatim under a signed receipt rather than compiling them; see
+// installOnboarding. Everything else stays in the paradigm: plain inspectable
+// files, projections + commands over events, reachable at /setup the moment self
+// starts. The same file is an ordinary seed a real brain could `self grow`.
 
 // brainKeyFile is where the API token lives — beside the log like .secret /
 // .identity, never inside it. 0600, gitignore-worthy, never replayed.
 func brainKeyFile(home string) string { return filepath.Join(home, ".brain-key") }
 
-// installOnboarding wires the brain-setup surface into a fresh home: it declares
-// the configure command + setup projector (so kernel.html records the wiring and
-// the projector auto-runs on brain.configured), installs their shipped scripts
-// with signed receipts, and seeds an initial brain.configured so the page renders
-// an "unconfigured" state. Called once from cmdInit, after the secret is minted.
+//go:embed seeds/onboarding/events.jsonl
+var onboardingSeed []byte
+
+// installOnboarding plants the onboarding seed into a fresh home — the same thing
+// `self grow` would do, except init can't call the compiler (these pages are how
+// you wire one in). So for each declaration the kernel installs the seed's
+// reference implementation VERBATIM under a signed receipt — the bootstrap
+// carve-out, identical in trust to shipping the bytes in Go, only now they live
+// in a plain seed file. The declaration it logs carries just the spec
+// (implementation stripped), so the log stays lean and the wiring (kernel.html,
+// projector auto-run) is byte-for-byte what a grown capability would produce.
+// Content events (the initial brain.configured {provider:"none"}) replay as-is.
+// Called once from cmdInit, after the secret is minted.
 func installOnboarding(home string) error {
 	st := store.Open(home)
+	for _, line := range strings.Split(string(onboardingSeed), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var e event.Event
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			return fmt.Errorf("onboarding seed: %w", err)
+		}
 
-	cmdDecl, _ := json.Marshal(map[string]any{
-		"name":        "configure",
-		"description": "Configure self's brain: which LLM provider drives think/grow. Writes provider/url/model to the log and the token to a non-log key file.",
-		"params": map[string]string{
-			"provider": "string — human | llamacpp | ollama | openai | opencode | custom",
-			"base_url": "string — OpenAI-compatible base URL (e.g. http://localhost:11434/v1)",
-			"model":    "string — model name",
-			"key":      "string — API token (blank keeps the current one); stored outside the log",
-		},
-		"event": map[string]any{
-			"name":   event_BrainConfigured,
-			"fields": map[string]string{"provider": "string", "base_url": "string", "model": "string", "key_set": "bool"},
-		},
-		// Regression oracle (Slice 9/11): blank key → no key-file write, so this is
-		// side-effect-free; asserts the non-secret config reaches the event.
-		"examples": []map[string]any{{
-			"note":            "ollama config emits a brain.configured event carrying provider/url/model",
-			"args":            []string{"ollama", "http://localhost:11434", "llama3.2", ""},
-			"expect_contains": []string{"brain.configured", "ollama", "http://localhost:11434", "llama3.2"},
-		}},
-	})
-	projDecl, _ := json.Marshal(map[string]any{
-		"name":        "setup",
-		"description": "Brain configuration page: pick a provider and enter LLM details + token. Renders the latest brain.configured.",
-		"consumes":    []string{event_BrainConfigured},
-		"examples": []map[string]any{{
-			"note": "renders the configured provider, its endpoint, and the key state",
-			"events": []map[string]any{{
-				"name":    event_BrainConfigured,
-				"payload": map[string]any{"provider": "ollama", "base_url": "http://localhost:11434", "model": "llama3.2", "key_set": true},
-			}},
-			"expect_contains": []string{"configure your brain", "ollama", "key set", "http://localhost:11434"},
-		}},
-	})
-	for _, d := range []struct {
-		name    string
-		payload json.RawMessage
-	}{
-		{event.CommandDeclared, cmdDecl},
-		{event.ProjectorDeclared, projDecl},
-	} {
-		e := event.New(d.name, d.payload)
-		if err := st.Append(&e); err != nil {
+		if e.Name != event.CommandDeclared && e.Name != event.ProjectorDeclared {
+			// Content (e.g. the initial brain.configured) — replay it verbatim.
+			ce := event.New(e.Name, e.Payload)
+			if err := st.Append(&ce); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Split the declaration: the implementation is the kernel-authored script we
+		// install; the rest is the spec we log, exactly like a grown capability's.
+		var p map[string]any
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return fmt.Errorf("onboarding declaration: %w", err)
+		}
+		impl, _ := p["implementation"].(string)
+		name, _ := p["name"].(string)
+		if impl == "" || name == "" {
+			return fmt.Errorf("onboarding declaration %q missing implementation", name)
+		}
+		delete(p, "implementation")
+		spec, _ := json.Marshal(p)
+		decl := event.New(e.Name, spec)
+		if err := st.Append(&decl); err != nil {
+			return err
+		}
+
+		kind := "command"
+		if e.Name == event.ProjectorDeclared {
+			kind = "projector"
+		}
+		if err := kernel.InstallBuiltin(home, kind, name, impl); err != nil {
 			return err
 		}
 	}
-
-	// The human-in-the-loop brain surface: an interview projector (open questions
-	// + an answer form) and an answer command. Shipped as builtins too, so the
-	// zero-dependency "you are the brain" path works with no LLM at all.
-	answerDecl, _ := json.Marshal(map[string]any{
-		"name":        "answer",
-		"description": "Answer a parked brain question (the human-in-the-loop brain). Emits a reply and optionally grows a capability from a declaration.",
-		"params": map[string]string{
-			"id":          "string — the brain.asked id being answered",
-			"reply":       "string — a plain reply, shown in chat",
-			"declaration": "string — optional JSON event ({name,payload}) to grow a capability",
-		},
-		"event": map[string]any{
-			"name":   event_BrainAnswered,
-			"fields": map[string]string{"id": "string"},
-		},
-		"examples": []map[string]any{{
-			"note":            "a plain reply marks the question answered and shows in chat",
-			"args":            []string{"q1", "here is your answer", ""},
-			"expect_contains": []string{"brain.answered", "q1", "chat.message", "here is your answer"},
-		}},
-	})
-	interviewDecl, _ := json.Marshal(map[string]any{
-		"name":        "interview",
-		"description": "The human-in-the-loop brain page: renders open brain.asked questions, each with a form to answer (a reply and/or a capability declaration).",
-		"consumes":    []string{event_BrainAsked, event_BrainAnswered},
-		"examples": []map[string]any{{
-			"note": "an unanswered question renders with an answer form",
-			"events": []map[string]any{{
-				"name":    event_BrainAsked,
-				"payload": map[string]any{"id": "q1", "prompt": "build me a timer"},
-			}},
-			"expect_contains": []string{"brain interview", "build me a timer", "/run/answer", "/teach"},
-		}},
-	})
-	welcomeDecl, _ := json.Marshal(map[string]any{
-		"name":        "welcome",
-		"description": "The landing page: what this home is, the surfaces in it, and how to grow more.",
-		"consumes":    []string{event.ProjectorDeclared},
-		"examples": []map[string]any{{
-			"note": "lists grown surfaces and points to setup",
-			"events": []map[string]any{{
-				"name":    event.ProjectorDeclared,
-				"payload": map[string]any{"name": "board", "description": "a task board"},
-			}},
-			"expect_contains": []string{"self", "board", "/setup"},
-		}},
-	})
-	for _, d := range []struct {
-		name    string
-		payload json.RawMessage
-	}{
-		{event.CommandDeclared, answerDecl},
-		{event.ProjectorDeclared, interviewDecl},
-		{event.ProjectorDeclared, welcomeDecl},
-	} {
-		e := event.New(d.name, d.payload)
-		if err := st.Append(&e); err != nil {
-			return err
-		}
-	}
-
-	if err := kernel.InstallBuiltin(home, "command", "configure", configureScript); err != nil {
-		return err
-	}
-	if err := kernel.InstallBuiltin(home, "projector", "setup", setupScript); err != nil {
-		return err
-	}
-	if err := kernel.InstallBuiltin(home, "command", "answer", answerScript); err != nil {
-		return err
-	}
-	if err := kernel.InstallBuiltin(home, "projector", "interview", interviewScript); err != nil {
-		return err
-	}
-	if err := kernel.InstallBuiltin(home, "projector", "welcome", welcomeScript); err != nil {
-		return err
-	}
-
-	// Seed an initial unconfigured state so the page has something to render.
-	initial, _ := json.Marshal(map[string]any{"provider": "none", "base_url": "", "model": "", "key_set": false})
-	e := event.New(event_BrainConfigured, initial)
-	return st.Append(&e)
+	return nil
 }
 
 // event_BrainConfigured is the data-only brain choice event. It deliberately
@@ -258,260 +181,6 @@ func brainConfigured(home string) bool {
 	}
 	return provider != "none"
 }
-
-// configureScript: the `configure` command. Reads provider/base_url/model/key as
-// positional argv (the order the setup form's inputs appear), writes the token to
-// the key file (blank = keep current), and emits a brain.configured event that
-// records everything EXCEPT the token (only key_set: bool).
-const configureScript = `#!/usr/bin/env python3
-import sys, json, os
-
-provider = sys.argv[1] if len(sys.argv) > 1 else "none"
-base_url = sys.argv[2] if len(sys.argv) > 2 else ""
-model    = sys.argv[3] if len(sys.argv) > 3 else ""
-key      = sys.argv[4] if len(sys.argv) > 4 else ""
-
-home = os.environ.get("SELF_HOME", ".")
-keyfile = os.path.join(home, ".brain-key")
-
-# A token is a secret: it goes to a file beside the log, never into an event.
-# Blank key = keep whatever is already there (so re-saving other fields is safe).
-if key.strip():
-    with open(keyfile, "w") as f:
-        f.write(key.strip())
-    os.chmod(keyfile, 0o600)
-
-key_set = os.path.exists(keyfile) and os.path.getsize(keyfile) > 0
-
-print(json.dumps({"name": "brain.configured", "payload": {
-    "provider": provider, "base_url": base_url, "model": model, "key_set": key_set,
-}}))
-`
-
-// setupScript: the `setup` projector. Renders the latest brain.configured as a
-// configuration page — a provider picker + fields posting to /run/configure.
-// Bare semantic HTML only (the kernel injects the shared stylesheet); no JS. The
-// token is never in the events, so this page physically cannot render it.
-const setupScript = `#!/usr/bin/env python3
-import sys, json
-from html import escape
-
-cfg = {"provider": "none", "base_url": "", "model": "", "key_set": False}
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    e = json.loads(line)
-    if e.get("name") == "brain.configured":
-        cfg = e.get("payload", cfg)
-
-provider = cfg.get("provider", "none")
-base_url = cfg.get("base_url", "") or ""
-model    = cfg.get("model", "") or ""
-key_set  = cfg.get("key_set", False)
-
-PRESETS = [
-    ("human",    "Human-in-the-loop — you write the replies (run brain/bridge.py)"),
-    ("llamacpp", "llama.cpp server — http://localhost:8080"),
-    ("ollama",   "Ollama — http://localhost:11434"),
-    ("openai",   "OpenAI — https://api.openai.com"),
-    ("opencode", "opencode-go — uses your opencode auth"),
-    ("custom",   "Custom OpenAI-compatible endpoint"),
-]
-# base URLs WITHOUT the /v1 suffix — the kernel appends /v1/chat/completions.
-DEFAULT_URL = {"llamacpp":"http://localhost:8080","ollama":"http://localhost:11434","openai":"https://api.openai.com"}
-
-print("<!DOCTYPE html>")
-print("<html><head><title>brain setup</title></head><body>")
-print("<h1>configure your brain</h1>")
-print("<p class=\"muted\">self's brain is the LLM that powers <code>think</code>, <code>chat</code> and growing new capabilities. Pick a provider and save. The token is stored outside the event log, so it is never shared when you share your garden.</p>")
-
-if provider == "none":
-    print("<p class=\"tag\">not configured yet</p>")
-else:
-    keymsg = "key set ✓" if key_set else "no key"
-    print("<div class=\"card\"><h3>current</h3>")
-    print("<p>provider <strong>%s</strong> &middot; %s</p>" % (escape(provider), keymsg))
-    if base_url: print("<p class=\"muted\">%s &middot; %s</p>" % (escape(base_url), escape(model or "(no model)")))
-    print("</div>")
-
-print("<form method=\"post\" action=\"/run/configure\">")
-print("<label>provider</label>")
-print("<select name=\"provider\">")
-for val, label in PRESETS:
-    sel = " selected" if val == provider else ""
-    print("  <option value=\"%s\"%s>%s</option>" % (val, sel, escape(label)))
-print("</select>")
-print("<label>base URL</label>")
-print("<input name=\"base_url\" value=\"%s\" placeholder=\"http://localhost:11434 (no /v1 suffix)\">" % escape(base_url))
-print("<label>model</label>")
-print("<input name=\"model\" value=\"%s\" placeholder=\"e.g. llama3.2 / gpt-4o-mini\">" % escape(model))
-print("<label>API token</label>")
-print("<input name=\"key\" type=\"password\" placeholder=\"%s\">" % ("leave blank to keep current key" if key_set else "paste token (local providers need none)"))
-print("<button>save brain</button>")
-print("</form>")
-
-print("<hr><h3>preset endpoints</h3><table><tr><th>provider</th><th>base URL</th></tr>")
-for k, u in DEFAULT_URL.items():
-    print("<tr><td>%s</td><td><code>%s</code></td></tr>" % (k, u))
-print("</table>")
-print("<p class=\"muted\">Providers that speak the OpenAI-compatible API (OpenAI, llama.cpp, Ollama, vLLM, …) work as-is. OpenAI is the market standard. For anything else, point a custom OpenAI-compatible endpoint at it.</p>")
-print("</body></html>")
-`
-
-// answerScript: the `answer` command — the human brain's reply. argv is
-// id, reply, declaration (the interview form's field order). It marks the
-// question answered, emits the reply as a chat.message, and — if the human wrote
-// a declaration — emits that event so the strange loop grows the capability. The
-// human IS the compiler here.
-const answerScript = `#!/usr/bin/env python3
-import sys, json
-
-id_   = sys.argv[1] if len(sys.argv) > 1 else ""
-reply = sys.argv[2] if len(sys.argv) > 2 else ""
-decl  = sys.argv[3] if len(sys.argv) > 3 else ""
-
-print(json.dumps({"name": "brain.answered", "payload": {"id": id_}}))
-
-if reply.strip():
-    print(json.dumps({"name": "chat.message", "payload": {"role": "assistant", "content": reply}}))
-
-if decl.strip():
-    try:
-        ev = json.loads(decl)
-        if isinstance(ev, dict) and ev.get("name") and ev.get("payload") is not None:
-            print(json.dumps(ev))
-        else:
-            print(json.dumps({"name": "chat.message", "payload": {"role": "assistant",
-                "content": "(declaration ignored: expected a JSON object with name + payload)"}}))
-    except Exception as e:
-        print(json.dumps({"name": "chat.message", "payload": {"role": "assistant",
-            "content": "(declaration parse error: %s)" % e}}))
-`
-
-// interviewScript: the `interview` projector — the human-in-the-loop brain page.
-// It folds brain.asked / brain.answered into the set of OPEN questions and renders
-// each with a form: a free-text reply and an optional capability declaration. This
-// is the "coding interview" — self asks, the human answers (or writes the spec).
-const interviewScript = `#!/usr/bin/env python3
-import sys, json
-from html import escape
-
-# The minimal command, prefilled in the "write the code yourself" form below so
-# the human-as-compiler starts from a working example, not a blank box: a command
-# is just "read argv, emit one event" — the projector does all the rendering work.
-# Rename the event and it's a real capability.
-STUB = "#!/usr/bin/env python3\n# A command is tiny: read argv, print ONE event as JSON on stdout.\n# The kernel assigns id, seq, occurred_at; a projector turns these into a view.\nimport sys, json\n\nevent = {\n    \"name\": \"thing.happened\",\n    \"payload\": {\"title\": \" \".join(sys.argv[1:]) or \"(untitled)\"},\n}\nprint(json.dumps(event))\n"
-
-asked = {}
-answered = set()
-order = []
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    e = json.loads(line)
-    n = e.get("name"); p = e.get("payload", {}) or {}
-    if n == "brain.asked":
-        i = p.get("id", "")
-        if i not in asked:
-            order.append(i)
-        asked[i] = p.get("prompt", "")
-    elif n == "brain.answered":
-        answered.add(p.get("id", ""))
-
-pending = [(i, asked[i]) for i in order if i not in answered]
-
-print("<!DOCTYPE html><html><head><title>interview</title></head><body>")
-print("<h1>brain interview</h1>")
-print("<p class=\"muted\">You are self's brain. It parks questions here; you answer them — a plain reply, or a capability spec to grow. No LLM: you do the thinking.</p>")
-if not pending:
-    print("<p class=\"tag\">no open questions</p>")
-for i, prompt in pending:
-    print("<div class=\"card\">")
-    print("<h3>question</h3>")
-    print("<p>%s</p>" % escape(prompt))
-    print("<form method=\"post\" action=\"/run/answer\">")
-    print("<input type=\"hidden\" name=\"id\" value=\"%s\">" % escape(i))
-    print("<label>reply</label>")
-    print("<textarea name=\"reply\" rows=\"3\" placeholder=\"a plain answer, shown in chat\"></textarea>")
-    print("<label>declaration — optional JSON, grows a capability (needs a compiler)</label>")
-    print("<textarea name=\"declaration\" rows=\"6\" placeholder='{\"name\": \"command.declared\", \"payload\": {\"name\": \"...\", \"description\": \"...\", \"params\": {}, \"event\": {\"name\": \"...\", \"fields\": {}}}}'></textarea>")
-    print("<button>answer</button>")
-    print("</form>")
-
-    # The human IS the compiler: write the capability's script by hand and the
-    # kernel signs + installs it (no LLM). Posts to the privileged /teach route.
-    print("<hr><h3>or write the code yourself</h3>")
-    print("<p class=\"muted\">Author the script directly — the kernel signs and installs it as a real capability (operator-authored, no LLM). It starts from the minimal stub: a command just emits one event; the projector does the work.</p>")
-    print("<form method=\"post\" action=\"/teach\">")
-    print("<input type=\"hidden\" name=\"id\" value=\"%s\">" % escape(i))
-    print("<label>kind</label>")
-    print("<select name=\"kind\"><option value=\"command\">command</option><option value=\"projector\">projector</option></select>")
-    print("<label>name</label>")
-    print("<input name=\"name\" placeholder=\"capability name, e.g. timer\">")
-    print("<label>consumes — for projectors, comma-separated event names</label>")
-    print("<input name=\"consumes\" placeholder=\"e.g. workout.logged\">")
-    print("<label>script — prefilled with the minimal command stub; rename the event and it's yours (for a projector, emit HTML instead)</label>")
-    print("<textarea name=\"script\" rows=\"12\">%s</textarea>" % escape(STUB))
-    print("<label>examples — optional JSON array; if given, the script must pass before it installs</label>")
-    print("<textarea name=\"examples\" rows=\"4\" placeholder='[{\"note\":\"...\",\"args\":[\"...\"],\"expect_contains\":[\"...\"]}]'></textarea>")
-    print("<button>teach (install this code)</button>")
-    print("</form>")
-    print("</div>")
-print("</body></html>")
-`
-
-// welcomeScript: the landing page. It lists the surfaces grown in this garden
-// (from projector.declared, skipping the system pages) and frames self as a
-// shared home for a person and their intelligence — same state, same surfaces,
-// growing to fit what you need.
-const welcomeScript = `#!/usr/bin/env python3
-import sys, json
-from html import escape
-
-SYSTEM = {"welcome", "setup", "interview", "kernel"}
-surfaces = {}
-order = []
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    e = json.loads(line)
-    if e.get("name") == "projector.declared":
-        p = e.get("payload", {}) or {}
-        n = p.get("name", "")
-        if not n or n in SYSTEM:
-            continue
-        if n not in surfaces:
-            order.append(n)
-        surfaces[n] = p.get("description", "")
-
-print("<!DOCTYPE html><html><head><title>self</title></head><body>")
-print("<h1>self</h1>")
-print("<p>A home you and your agent share. You say what you need; the intelligence living here turns it into a working surface — and you both use the same one, looking at the same state.</p>")
-
-print("<h3>what's here</h3>")
-if order:
-    print("<p class=\"muted\">Surfaces grown in this garden — open any of them:</p>")
-    print("<ul>")
-    for n in order:
-        d = (surfaces[n] or "").strip()
-        d = (" &mdash; " + escape(d[:80])) if d else ""
-        print("  <li><a href=\"/%s\">%s</a>%s</li>" % (escape(n), escape(n), d))
-    print("</ul>")
-else:
-    print("<p class=\"muted\">No surfaces yet — grow the first one below.</p>")
-
-print("<h3>grow it</h3>")
-print("<p>Tell it what you need and the capability appears here, wired into the same garden. It reads what already exists and adapts, so new surfaces fit the ones you already have.</p>")
-print("<p><code>self run chat \"add a habit tracker\"</code></p>")
-print("<p class=\"muted\">Connect your intelligence on <a href=\"/setup\">/setup</a> — a model, or yourself via <a href=\"/interview\">/interview</a>.</p>")
-
-print("<hr>")
-print("<p class=\"muted\">Plain, inspectable state throughout: <a href=\"/events\">the event log</a> is the only truth, and <a href=\"/kernel\">the wiring</a> shows how every surface is built.</p>")
-print("</body></html>")
-`
 
 // onboardingURLHint is printed after init so the user knows where to go.
 func onboardingURLHint(home string) string {
