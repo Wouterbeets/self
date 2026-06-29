@@ -1,0 +1,6 @@
+{"name": "capture: example 1", "capability": "capture", "kind": "command", "args": ["call", "the", "dentist"], "expect_contains": ["task.captured", "call the dentist"]}
+{"name": "move: example 1", "capability": "move", "kind": "command", "args": ["5", "waiting"], "expect_contains": ["task.moved", "5", "waiting"]}
+{"name": "move: example 2", "capability": "move", "kind": "command", "args": ["3", "this", "week"], "expect_contains": ["this_week"]}
+{"name": "edit: example 1", "capability": "edit", "kind": "command", "args": ["5", "new", "title"], "expect_contains": ["task.edited", "5", "new title"]}
+{"name": "drop: example 1", "capability": "drop", "kind": "command", "args": ["5"], "expect_contains": ["task.dropped", "5"]}
+{"name": "edit renames; drop hides and lowers the open count", "capability": "board", "kind": "projector", "events": [{"name": "task.captured", "seq": 2, "payload": {"text": "keep me"}}, {"name": "task.captured", "seq": 3, "payload": {"text": "remove me"}}, {"name": "task.edited", "payload": {"task": 2, "text": "kept and edited"}}, {"name": "task.dropped", "payload": {"task": 3}}], "expect_contains": ["kept and edited", "1 open"]}
