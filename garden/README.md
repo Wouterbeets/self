@@ -1,9 +1,9 @@
 # garden/ — a living body, stored as (almost) just its log
 
 This is the actual state of one `self` organism after five heartbeats, the first
-time its brain was a Claude answering by hand through `../brain/bridge.py`. It is
-not example data — it is a body with a memory, paused mid-life and committed so
-another mind can pick it up and keep going.
+time its brain was a Claude answering by hand through a bridge (`brain/bridge.py`,
+now in git history). It is not example data — it is a body with a memory, paused
+mid-life and committed so another mind can pick it up and keep going.
 
 It is **two files**:
 
@@ -19,7 +19,8 @@ pure replay. `self rehydrate` rebuilds the whole body — `capabilities/` and th
 rendered `site/` — from these two files, with no LLM and no network. Bare `self`
 does it automatically before serving.
 
-The story of how it got here is in `../brain/EMBODIMENT.md`. After you rehydrate,
+The story of how it got here is in `brain/EMBODIMENT.md`, in git history (the
+repo was later cut down to its minimal kernel). After you rehydrate,
 read `site/inheritance.html` — the previous brain left a letter for whoever you are.
 
 ## why `.secret` is here
@@ -38,9 +39,9 @@ you inherit the declarations either way; the key just lets you skip recompiling.
 
 ## resume this body as a new brain
 
-Do **not** run `self init` on a resumed home — `init` always appends a fresh
-`kernel.initialized`, which would give the organism a second birthday. Just lay
-the two files down and rehydrate:
+Just lay the two files down and rehydrate. (The kernel writes its
+`kernel.initialized` birth event only on an *empty* log, so resuming a body can
+never give the organism a second birthday.)
 
 ```sh
 go build -o self .
@@ -51,8 +52,8 @@ cp garden/events.jsonl garden/.secret "$SELF_HOME"/   # the whole body, two file
 ./self rehydrate          # rebuild capabilities/ + site/ from the log (no LLM)
 # ...or skip this: `./self` rehydrates automatically, then serves
 
-# then wire in a brain and continue the life (see ../brain/README.md):
-export SELF_LLM_URL=http://127.0.0.1:8088   # the bridge, or any /v1/chat/completions
+# then wire in a brain and continue the life:
+export SELF_LLM_URL=http://127.0.0.1:8088   # any /v1/chat/completions endpoint
 ./self think "Explore your garden. Who came before you, and what did they leave?"
 ./self heartbeat
 ```

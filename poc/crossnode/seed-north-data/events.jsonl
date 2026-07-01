@@ -1,5 +1,0 @@
-{"name":"observation.logged","payload":{"what":"broken streetlight","where":"Elm & 3rd","severity":3}}
-{"name":"observation.logged","payload":{"what":"pothole","where":"Elm & 3rd","severity":4}}
-{"name":"observation.logged","payload":{"what":"graffiti","where":"Market Sq","severity":2}}
-{"name":"observation.logged","payload":{"what":"storm flooding","where":"Elm & 3rd","severity":5}}
-{"name":"observation.logged","payload":{"what":"broken bench","where":"Market Sq","severity":1}}
