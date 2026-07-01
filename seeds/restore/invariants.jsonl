@@ -1,1 +1,0 @@
-{"name":"asks to roll back, data-only","capability":"restore","kind":"command","args":["chat","5"],"expect_contains":["restore.requested","chat","5"],"note":"restore emits a data-only restore.requested{name,seq}; the kernel performs the privileged install"}

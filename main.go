@@ -1,718 +1,268 @@
+// self — a local-first, self-growing capability system, cut to its spirit.
+//
+// One append-only event log (events.jsonl) is the only truth. Every view is a
+// pure replay of it, rendered as HTML that you and your agent read identically.
+// Capabilities are standalone scripts the kernel pipes events through, and code
+// is never shipped — an LLM compiler authors every script from a declaration,
+// for this receiver. A running capability can declare new capabilities and the
+// kernel compiles them on the spot (the strange loop). Every compile is logged
+// as a script.compiled receipt signed with a per-home secret; only kernel-signed
+// receipts ever install, so `self rehydrate` rebuilds the whole body from the
+// log alone — a home is just events.jsonl + .secret.
+//
+// This file is the whole kernel.
 package main
 
 import (
 	"bufio"
-	_ "embed"
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	htmlesc "html"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
-
-	"self/internal/event"
-	"self/internal/kernel"
-	"self/internal/seed"
-	"self/internal/store"
 )
 
-// demoEventsLog is the shipped demo body (a task board + meal planner), embedded
-// so a cold `self` can bring a living garden up with no setup. It is imported
-// into a fresh, sovereign home (re-signed under that home's own key — never the
-// committed demo key), then populated with a little example content.
-//
-//go:embed home/events.jsonl
-var demoEventsLog []byte
+// ───────────────────────────── events & the log ─────────────────────────────
 
-func main() {
-	home := homeDir()
+type Event struct {
+	ID         string          `json:"id"`
+	Seq        int             `json:"seq"`
+	Name       string          `json:"name"`
+	OccurredAt time.Time       `json:"occurred_at"`
+	Payload    json.RawMessage `json:"payload"`
+}
 
-	// Bare `self` is the most common action: heal the body from the log, then
-	// start the live garden. Rehydrating first means the working tree always
-	// matches the one truth — clone a home that is just events.jsonl + .secret
-	// and `self` brings the whole body back before serving it.
-	if len(os.Args) < 2 {
-		if !homeInitialized(home) {
-			// First run: bring up a living garden so the cold open is something to
-			// explore, not an empty page.
-			fmt.Fprintf(os.Stderr, "self: new home %s — bringing up the demo garden…\n", home)
-			if err := loadDemo(home); err != nil {
-				fmt.Fprintf(os.Stderr, "self: demo: %s\n", err)
-			}
-		} else if _, _, err := rehydrateFromLog(home); err != nil {
-			fmt.Fprintf(os.Stderr, "self: rehydrate: %s\n", err)
-		}
-		if err := cmdServe(home, ""); err != nil {
-			fmt.Fprintf(os.Stderr, "self: %s\n", err)
-			os.Exit(1)
-		}
-		return
-	}
+func newEvent(name string, payload json.RawMessage) Event {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return Event{ID: hex.EncodeToString(b), Name: name, OccurredAt: time.Now().UTC(), Payload: payload}
+}
 
-	cmd := os.Args[1]
-	args := os.Args[2:]
+func logPath(home string) string { return filepath.Join(home, "events.jsonl") }
 
-	var err error
-	switch cmd {
-	case "init":
-		err = cmdInit(home)
-	case "grow":
-		if len(args) < 1 {
-			err = fmt.Errorf("usage: self grow <seed-dir>")
-		} else {
-			err = cmdGrow(home, args[0])
-		}
-	case "run":
-		if len(args) < 1 {
-			err = fmt.Errorf("usage: self run <command> [args...]")
-		} else {
-			err = cmdRun(home, args[0], args[1:])
-		}
-	case "think":
-		prompt := strings.Join(args, " ")
-		err = cmdThink(home, prompt)
-	case "brain":
-		prompt := strings.Join(args, " ")
-		err = cmdBrain(home, prompt)
-	case "teach":
-		err = cmdTeach(home, args)
-	case "demo":
-		err = cmdDemo(home)
-	case "heartbeat":
-		err = cmdHeartbeat(home)
-	case "watch":
-		err = cmdWatch(home, args)
-	case "rehydrate":
-		err = cmdRehydrate(home)
-	case "selftest":
-		err = cmdSelfTest(home)
-	case "map":
-		err = cmdMap(home)
-	case "identity":
-		err = cmdIdentity(home)
-	case "verify-attestation":
-		err = cmdVerifyAttestation(home)
-	case "restore":
-		if len(args) < 1 {
-			err = fmt.Errorf("usage: self restore <name> [seq]")
-		} else {
-			err = cmdRestore(home, args)
-		}
-	case "show":
-		if len(args) < 1 {
-			err = fmt.Errorf("usage: self show <projection> [--text]")
-		} else {
-			err = cmdShow(home, args)
-		}
-	case "live":
-		port := ""
-		if len(args) >= 1 {
-			port = args[0]
-		}
-		err = cmdServe(home, port)
-	case "history":
-		err = cmdHistory(home, args)
-	case "ls":
-		err = cmdLs(home, args)
-	case "where":
-		err = cmdWhere(home)
-	case "which":
-		if len(args) < 1 {
-			err = fmt.Errorf("usage: self which <name>")
-		} else {
-			err = cmdWhich(home, args[0])
-		}
-	case "help", "--help", "-h":
-		usage()
-	default:
-		fmt.Fprintf(os.Stderr, "self: unknown command %q\n", cmd)
-		usage()
-		os.Exit(1)
-	}
-
+func readEvents(home string) ([]Event, error) {
+	f, err := os.Open(logPath(home))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "self: %s\n", err)
-		os.Exit(1)
-	}
-}
-
-func homeDir() string {
-	if v := os.Getenv("SELF_HOME"); v != "" {
-		return v
-	}
-	return filepath.Join(os.Getenv("HOME"), ".self")
-}
-
-func usage() {
-	fmt.Fprint(os.Stderr, `self — a sovereign, self-improving capability system
-
-One append-only event log + shared projections that you and your agent see
-identically. A minimal kernel; everything else grows as seeds through the
-strange loop.
-
-usage: self [command] [args]
-
-  self                    rehydrate the body from the log, then start the live garden (the default)
-  self init               initialize the baby kernel
-  self rehydrate          rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
-  self map                one-glance overview of the garden — commands, projections, recent activity
-  self selftest           re-run every installed capability's examples against its binary (regression gate)
-  self identity           print this home's public verification key (shareable)
-  self verify-attestation check a script.verified attestation piped on stdin (no secret needed)
-  self grow <seed>        grow a new capability from a seed
-  self run <command> ...  run a capability — append events, refresh projections
-                          (--dry-run previews the event without writing it; --help shows its args)
-  self teach <kind> <name> ...  install a capability you wrote by hand (script on stdin; --help for the schema)
-  self think "..."        ask the brain — pipe the prompt to the brain process, ingest the events it emits
-  self brain "..."        the default brain process itself (prompt in, event JSONL out); swap via $SELF_BRAIN
-  self heartbeat          run one self-improvement cycle (brain reflects & grows)
-  self watch [secs]       resident loop: react to new activity (or report it, no brain). Ctrl-C to stop
-  self restore <name> [seq]   roll a capability back to an earlier compiled version
-  self show <name> [--text]   render a projection (--text: plain text; piped: HTML to stdout; else open in browser)
-  self live [port]        start the live garden explicitly (default port 7777)
-  self history [-n N] [--raw]   recent events, newest last
-  self ls [commands|projectors|seeds]   list what exists (with paths)
-  self where              show SELF_HOME and every important path
-  self which <name>       show the full path to a command or projector
-
-live garden routes (self live, default port 7777):
-  /                       my identity page — capabilities, paths, wiring
-  /<projection>           a projection, re-rendered live
-  /live/<projection>      re-run a projection against current events
-  /run/<command>          run a capability from the browser (plain HTML forms)
-  /events                 the raw event log (events.jsonl)
-
-on disk (all open and inspectable — see 'self where'):
-  SELF_HOME/events.jsonl              the only source of truth (append-only)
-  SELF_HOME/capabilities/commands/    compiled command scripts
-  SELF_HOME/capabilities/projectors/  compiled projector scripts
-  SELF_HOME/site/                     materialized HTML projections
-
-build & home:
-  go build -o self .   build from the module root (this directory), NOT from a home dir
-  SELF_HOME=<dir>      run against a specific body — the dir holding events.jsonl + .secret
-                       (e.g. SELF_HOME=./garden self map). Defaults to ~/.self.
-
-environment:
-  SELF_HOME        my home directory (default ~/.self)
-  SELF_LLM_URL     llm api base url (overrides the opencode-go default)
-  SELF_LLM_API_KEY llm api key (not needed for local llama-server)
-  SELF_LLM_MODEL   llm model name (overrides the opencode-go default)
-  SELF_LLM_STUB    set to "1" to force stub scripts (no LLM)
-
-By default, self uses the opencode-go subscription (read from
-~/.local/share/opencode/auth.json, endpoint https://opencode.ai/zen/go,
-model glm-5.2). On a quota / rate-limit error it falls back to a local
-llama-server on port 8080 for that call. Override with SELF_LLM_* env vars.
-Set SELF_LLM_STUB=1 to force stub scripts without calling the LLM.
-
-events the kernel acts on:
-  kernel.initialized   written by 'self init'
-  command.declared     compiled into a command by 'self grow' AND 'self run'
-  projector.declared   compiled into a projection by 'self grow' AND 'self run'
-  restore.requested    DATA-ONLY rollback intent {name, seq} — any seed,
-                       command, or the CLI may emit it; the kernel reinstalls an
-                       earlier receipt. Carries no code, so it adds no surface.
-  script.compiled      a compile receipt, SIGNED with the home's secret
-                       (SELF_HOME/.secret). Anyone may append one, but only a
-                       kernel-signed receipt ever installs — provenance is in the
-                       signature, not in who wrote it. restore reads these.
-  seed.planted         written by 'self grow' as a receipt
-  everything else      comes from seeds, or commands that emit declarations
-
-The loop carries SPECS, not code: the LLM is always the compiler, so every
-binary is authored for this receiver and adaptation is never skipped. Each
-compile is logged as a script.compiled receipt signed with the home's secret;
-install verifies the signature, so only kernel-authored code reaches
-capabilities/. A seed may carry a reference implementation (an "implementation"
-field on a declaration) — the compiler verifies it against the pipe contract and
-adapts it; it is never installed as-is. At compile time and via 'self think', the brain gets a
-read-only bash tool (cwd=SELF_HOME) to explore the garden and adapt to my
-current state. The kernel is the sole steward of LLM credentials.
-`)
-}
-
-// homeInitialized reports whether a home has been minted (its signing key
-// exists). A bare `self` on an uninitialized home brings up the demo.
-func homeInitialized(home string) bool {
-	_, err := os.Stat(filepath.Join(home, ".secret"))
-	return err == nil
-}
-
-// loadDemo brings up a living garden in a fresh home with no LLM: it initializes
-// the home (keys + onboarding), imports the shipped demo's capabilities
-// (re-signing their scripts under THIS home's key, so the result is sovereign —
-// not a copy of the committed demo key), wires their declarations, then runs a
-// few real commands so the board and kitchen open with content to click.
-func loadDemo(home string) error {
-	if !homeInitialized(home) {
-		if err := cmdInit(home); err != nil {
-			return err
+		if os.IsNotExist(err) {
+			return nil, nil
 		}
+		return nil, err
 	}
-	st := store.Open(home)
-
-	type script struct{ kind, body string }
-	latest := map[string]script{}
-	var order []string
-	for _, line := range strings.Split(string(demoEventsLog), "\n") {
-		line = strings.TrimSpace(line)
+	defer f.Close()
+	var events []Event
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
 		}
-		var e struct {
-			Name    string          `json:"name"`
-			Payload json.RawMessage `json:"payload"`
+		var e Event
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			return nil, fmt.Errorf("parse event: %w", err)
 		}
-		if json.Unmarshal([]byte(line), &e) != nil {
+		events = append(events, e)
+	}
+	return events, sc.Err()
+}
+
+func appendEvent(home string, e *Event) error {
+	prior, err := readEvents(home)
+	if err != nil {
+		return err
+	}
+	e.Seq = 1
+	if len(prior) > 0 {
+		e.Seq = prior[len(prior)-1].Seq + 1
+	}
+	line, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(home, 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(logPath(home), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintln(f, string(line))
+	return err
+}
+
+// ─────────────────────── provenance: the signed install ─────────────────────
+//
+// The loop carries specs, never code: anything may append a script.compiled to
+// the log, but only a receipt signed with this home's secret ever installs —
+// provenance is intrinsic to the receipt, not enforced by who may write it. A
+// forged receipt is inert. The secret lives in SELF_HOME/.secret (0600, never
+// in the log), like an ssh host key: per-home, so you can inherit another
+// node's declarations but never its binaries.
+
+func loadSecret(home string) ([]byte, error) {
+	p := filepath.Join(home, ".secret")
+	if data, err := os.ReadFile(p); err == nil {
+		if key, err := hex.DecodeString(strings.TrimSpace(string(data))); err == nil && len(key) > 0 {
+			return key, nil
+		}
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(home, 0755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(p, []byte(hex.EncodeToString(key)), 0600); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+type receipt struct {
+	Type   string `json:"type"`
+	Name   string `json:"name"`
+	Script string `json:"script"`
+	Sig    string `json:"sig"`
+}
+
+// sign binds type, name, and script, so a valid receipt can't be relabeled to
+// install one capability's bytes under another's name.
+func sign(secret []byte, typ, name, script string) string {
+	m := hmac.New(sha256.New, secret)
+	m.Write([]byte(typ))
+	m.Write([]byte{0})
+	m.Write([]byte(name))
+	m.Write([]byte{0})
+	m.Write([]byte(script))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+func appendReceipt(home, typ, name, script string) error {
+	secret, err := loadSecret(home)
+	if err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(receipt{typ, name, script, sign(secret, typ, name, script)})
+	e := newEvent("script.compiled", payload)
+	return appendEvent(home, &e)
+}
+
+func verifiedReceipt(secret []byte, payload json.RawMessage) (receipt, bool) {
+	var r receipt
+	if json.Unmarshal(payload, &r) != nil || r.Sig == "" || r.Script == "" || r.Name == "" {
+		return r, false
+	}
+	return r, hmac.Equal([]byte(sign(secret, r.Type, r.Name, r.Script)), []byte(r.Sig))
+}
+
+func scriptPath(home, typ, name string) (string, error) {
+	switch typ {
+	case "command":
+		return filepath.Join(home, "capabilities", "commands", name), nil
+	case "projector":
+		return filepath.Join(home, "capabilities", "projectors", name), nil
+	}
+	return "", fmt.Errorf("unknown capability type %q", typ)
+}
+
+func installScript(home, typ, name, script string) error {
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return fmt.Errorf("unsafe capability name %q", name)
+	}
+	p, err := scriptPath(home, typ, name)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(script), 0755)
+}
+
+// rehydrate rebuilds the body from the log alone: the latest kernel-signed
+// script.compiled receipt per capability installs verbatim, then every
+// projection re-renders. No LLM, no network — a home is events.jsonl + .secret.
+func rehydrate(home string) error {
+	events, err := readEvents(home)
+	if err != nil {
+		return err
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	secret, err := loadSecret(home)
+	if err != nil {
+		return err
+	}
+	latest := map[string]receipt{}
+	var order []string
+	for _, e := range events {
+		if e.Name != "script.compiled" {
 			continue
 		}
-		switch e.Name {
-		case event.ScriptCompiled:
-			// Don't carry the demo's receipts (signed with the demo key); keep the
-			// bytes and re-sign them under this home below.
-			var cs struct{ Type, Name, Script string }
-			if json.Unmarshal(e.Payload, &cs) == nil && cs.Name != "" {
-				if _, seen := latest[cs.Name]; !seen {
-					order = append(order, cs.Name)
-				}
-				latest[cs.Name] = script{cs.Type, cs.Script}
-			}
-		case event.CommandDeclared, event.ProjectorDeclared:
-			ev := event.New(e.Name, e.Payload) // declarations wire kernel.html + auto-run
-			if err := st.Append(&ev); err != nil {
-				return err
-			}
-			// Skip kernel.initialized, script.verified, seed.planted, and the demo's
-			// own content — we regenerate fresh content below.
+		r, ok := verifiedReceipt(secret, e.Payload)
+		if !ok {
+			continue
 		}
+		if _, seen := latest[r.Name]; !seen {
+			order = append(order, r.Name)
+		}
+		latest[r.Name] = r
 	}
 	for _, name := range order {
-		s := latest[name]
-		if err := kernel.InstallBuiltin(home, s.kind, name, s.body); err != nil {
+		r := latest[name]
+		if err := installScript(home, r.Type, r.Name, r.Script); err != nil {
 			return err
 		}
 	}
-
-	// Populate with a little real content (no LLM — these are plain commands).
-	demo := [][]string{
-		{"capture", "Email the contractor about the deck"},
-		{"capture", "Draft the Q3 planning doc"},
-		{"capture", "Book the dentist"},
-		{"move", "1", "This week"},
-		{"move", "3", "Done"},
-		{"plan", "mon", "Tacos"},
-		{"plan", "tue", "Sheet-pan salmon"},
-		{"shop", "olive oil"},
-		{"shop", "limes"},
-	}
-	for _, run := range demo {
-		_, _ = runCommand(home, run[0], run[1:]) // best-effort; demo content only
-	}
-
-	if err := kernel.RenderHTML(home); err != nil {
-		return err
-	}
-	for _, p := range []string{"welcome", "board", "kitchen"} {
-		_ = runProjectorToSite(home, p)
-	}
+	renderKernelHTML(home)
+	refreshProjections(home)
+	fmt.Fprintf(os.Stderr, "self: rehydrated %d capabilit(ies) from the log\n", len(order))
 	return nil
 }
 
-// cmdDemo loads the demo into the current home (use a fresh SELF_HOME if the
-// current one is already in use).
-func cmdDemo(home string) error {
-	if homeInitialized(home) {
-		return fmt.Errorf("home %s already exists — point SELF_HOME at a fresh dir to try the demo (e.g. SELF_HOME=$(mktemp -d) self demo)", home)
-	}
-	if err := loadDemo(home); err != nil {
-		return err
-	}
-	fmt.Printf("demo loaded at %s — run `self` and open http://localhost:7777\n", home)
-	return nil
+// ───────────────────────────── the pipe contract ────────────────────────────
+//
+// Compiled scripts are standalone executables in any language. A command reads
+// args as argv and the current events as JSONL on stdin, and writes new events
+// as JSONL on stdout ({name, payload} per line; the kernel assigns the rest). A
+// projector reads all events on stdin and writes HTML on stdout; the kernel
+// persists it to site/<name>.html. The kernel sets SELF_HOME on every script.
+
+func feedEvents(stdin io.WriteCloser, events []Event) {
+	go func() {
+		enc := json.NewEncoder(stdin)
+		for i := range events {
+			enc.Encode(events[i])
+		}
+		stdin.Close()
+	}()
 }
 
-func cmdInit(home string) error {
-	if err := os.MkdirAll(filepath.Join(home, "capabilities", "commands"), 0755); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(home, "capabilities", "projectors"), 0755); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(home, "site"), 0755); err != nil {
-		return err
-	}
-	if err := kernel.InitSecret(home); err != nil {
-		return fmt.Errorf("mint signing key: %w", err)
-	}
-	if err := kernel.InitIdentity(home); err != nil {
-		return fmt.Errorf("mint identity key: %w", err)
-	}
-	st := store.Open(home)
-	payload, _ := json.Marshal(map[string]string{
-		"version": "self/v0",
-	})
-	e := event.New(event.KernelInitialized, payload)
-	if err := st.Append(&e); err != nil {
-		return err
-	}
-
-	// Install the brain-setup surface (a baby-kernel onboarding seed, signed by
-	// the secret just minted) so a fresh user can wire in their LLM from a page,
-	// before any LLM exists. See onboarding.go.
-	if err := installOnboarding(home); err != nil {
-		return fmt.Errorf("install onboarding: %w", err)
-	}
-
-	fmt.Printf("initialized self at %s (seq %d %s)\n", home, e.Seq, e.Name)
-	fmt.Printf("%s\n", onboardingURLHint(home))
-	if err := kernel.RenderHTML(home); err != nil {
-		return err
-	}
-	// Render the onboarding pages so /, /setup and /interview are ready on first serve.
-	for _, p := range []string{"welcome", "setup", "interview"} {
-		if err := runProjectorToSite(home, p); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// cmdGrowIntent grows an intent seed (a genotype) into a phenotype: it persists
-// the intent, asks the orchestrator to design a decomposition from the intent +
-// the garden, compiles each declared capability with the whole intent woven in,
-// then checks the grown surface against the seed's invariants (the fitness
-// function). The intent stays on the log, so the surface can be re-grown later.
-func cmdGrowIntent(home string, seedDir string) error {
-	s, err := seed.LoadIntent(seedDir)
-	if err != nil {
-		return err
-	}
-	st := store.Open(home)
-
-	// 1. Persist the genotype.
-	invJSON, _ := json.Marshal(s.Invariants)
-	intentPayload, _ := json.Marshal(map[string]any{
-		"name": s.Name, "intent": s.Intent, "invariants": json.RawMessage(invJSON),
-	})
-	ie := event.New(event.IntentDeclared, intentPayload)
-	if err := st.Append(&ie); err != nil {
-		return err
-	}
-
-	compiler := seed.NewCompiler(home)
-	compiler.Intent = s.Intent
-	capDir := filepath.Join(home, "capabilities")
-
-	// Develop under selection: orchestrate → compile (intent woven into each) →
-	// lay the maternal deposit → check the phenotype against the invariants. If it
-	// fails its fitness function, feed the failures back and re-grow, up to a small
-	// bound. Every attempt is on the log (audit); the surviving one's scripts win.
-	const maxAttempts = 2
-	var failures []string
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		feedback := ""
-		if attempt == 1 {
-			fmt.Printf("orchestrating %q from intent...\n", s.Name)
-		} else {
-			feedback = "- " + strings.Join(failures, "\n- ")
-			fmt.Printf("selection: %d invariant(s) unmet — re-growing %q (attempt %d/%d)\n",
-				len(failures), s.Name, attempt, maxAttempts)
-		}
-
-		res, oErr := compiler.Orchestrate(s.Intent, s.Invariants, feedback)
-		if oErr != nil {
-			return fmt.Errorf("orchestrate %q: %w", s.Name, oErr)
-		}
-		if len(res.Declarations) == 0 {
-			return fmt.Errorf("the orchestrator declared nothing for %q", s.Name)
-		}
-
-		type compiled struct{ Type, Name, Script string }
-		var compiledScripts []compiled
-		for _, d := range res.Declarations {
-			name, _ := d["name"].(string)
-			payload, _ := json.Marshal(d["payload"])
-			switch name {
-			case event.CommandDeclared:
-				var cmd seed.Command
-				if err := json.Unmarshal(payload, &cmd); err != nil || cmd.Name == "" {
-					fmt.Fprintf(os.Stderr, "self: skipping malformed command declaration\n")
-					continue
-				}
-				de := event.New(event.CommandDeclared, payload)
-				if err := st.Append(&de); err != nil {
-					return err
-				}
-				fmt.Printf("compiling command %q...", cmd.Name)
-				script, cErr := compiler.CompileCommand(cmd)
-				if cErr != nil {
-					fmt.Printf(" failed\n")
-					return fmt.Errorf("command %q: %w", cmd.Name, cErr)
-				}
-				if err := seed.WriteCommandScript(capDir, cmd.Name, script); err != nil {
-					return err
-				}
-				fmt.Printf(" compiled\n")
-				compiledScripts = append(compiledScripts, compiled{"command", cmd.Name, script})
-			case event.ProjectorDeclared:
-				var proj seed.ProjectorDecl
-				if err := json.Unmarshal(payload, &proj); err != nil || proj.Name == "" {
-					fmt.Fprintf(os.Stderr, "self: skipping malformed projector declaration\n")
-					continue
-				}
-				de := event.New(event.ProjectorDeclared, payload)
-				if err := st.Append(&de); err != nil {
-					return err
-				}
-				fmt.Printf("compiling projector %q...", proj.Name)
-				script, cErr := compiler.CompileProjector(proj)
-				if cErr != nil {
-					fmt.Printf(" failed\n")
-					return fmt.Errorf("projector %q: %w", proj.Name, cErr)
-				}
-				if err := seed.WriteProjectorScript(capDir, proj.Name, script); err != nil {
-					return err
-				}
-				fmt.Printf(" compiled\n")
-				compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
-			}
-		}
-
-		for _, cs := range compiledScripts {
-			payload, sErr := kernel.SignedReceipt(home, cs.Type, cs.Name, cs.Script)
-			if sErr != nil {
-				return sErr
-			}
-			e := event.New(event.ScriptCompiled, payload)
-			if err := st.Append(&e); err != nil {
-				return err
-			}
-		}
-
-		// The maternal deposit is the genotype's, not the decomposition's — lay it
-		// once, on the first attempt, not again on a re-grow.
-		if attempt == 1 {
-			for i := range s.Content {
-				ce := event.New(s.Content[i].Name, s.Content[i].Payload)
-				if err := st.Append(&ce); err != nil {
-					return err
-				}
-			}
-		}
-
-		_ = kernel.RenderHTML(home)
-		for _, cs := range compiledScripts {
-			if cs.Type == "projector" {
-				_ = runProjectorToSite(home, cs.Name)
-			}
-		}
-		fmt.Printf("grew %q: %d capabilit(ies) from intent\n", s.Name, len(compiledScripts))
-
-		failures = checkInvariants(capDir, s.Invariants)
-		if len(failures) == 0 {
-			fmt.Printf("selection: all invariants hold — %q survives\n", s.Name)
-			return nil
-		}
-	}
-	return fmt.Errorf("%d invariant(s) unmet after %d attempt(s) — %q does not satisfy its intent: %s",
-		len(failures), maxAttempts, s.Name, strings.Join(failures, "; "))
-}
-
-// checkInvariants runs a seed's machine-checkable invariants against the grown
-// binaries (the fitness function), printing each result and returning the failed
-// ones (name + reason). Brain-dependent invariants are noted, not statically run —
-// a capability that thinks can't be replayed without a brain.
-func checkInvariants(capDir string, invs []seed.Invariant) []string {
-	var failed []string
-	fmt.Println("invariants:")
-	for _, iv := range invs {
-		ex := iv.Example()
-		if ex == nil {
-			fmt.Printf("  ~  %s (brain-dependent — checked live)\n", iv.Name)
-			continue
-		}
-		sub := "commands"
-		if iv.Kind == "projector" {
-			sub = "projectors"
-		}
-		data, rErr := os.ReadFile(filepath.Join(capDir, sub, iv.Capability))
-		if rErr != nil {
-			fmt.Printf("  ✗  %s — no %s %q was grown\n", iv.Name, iv.Kind, iv.Capability)
-			failed = append(failed, fmt.Sprintf("%s (no %s %q was grown)", iv.Name, iv.Kind, iv.Capability))
-			continue
-		}
-		vr, _ := seed.VerifyScript(string(data), iv.Kind, []seed.Example{*ex})
-		if vr.OK() {
-			fmt.Printf("  ✓  %s\n", iv.Name)
-		} else {
-			fmt.Printf("  ✗  %s — %s\n", iv.Name, strings.Join(vr.Failures, "; "))
-			failed = append(failed, fmt.Sprintf("%s (%s)", iv.Name, strings.Join(vr.Failures, "; ")))
-		}
-	}
-	return failed
-}
-
-func cmdGrow(home string, seedDir string) error {
-	loadBrainConfig(home)
-
-	// An intent seed (a genotype) grows developmentally: the orchestrator designs
-	// the decomposition from the intent against this garden. A legacy seed (a
-	// pre-decomposed parts list) compiles its declarations directly.
-	if seed.HasIntent(seedDir) {
-		return cmdGrowIntent(home, seedDir)
-	}
-
-	manifest, err := seed.Load(seedDir)
-	if err != nil {
-		return err
-	}
-
-	compiler := seed.NewCompiler(home)
-	capDir := filepath.Join(home, "capabilities")
-
-	type compiled struct {
-		Type   string `json:"type"`
-		Name   string `json:"name"`
-		Script string `json:"script"`
-	}
-	var compiledScripts []compiled
-
-	for _, cmd := range manifest.Commands {
-		fmt.Printf("compiling command %q...", cmd.Name)
-		script, err := compiler.CompileCommand(cmd)
-		if err != nil {
-			fmt.Printf(" failed\n")
-			return fmt.Errorf("command %q: %w", cmd.Name, err)
-		}
-		if ok, vErr := kernel.VerifyAndLog(home, "command", cmd.Name, script, cmd.Examples); vErr != nil {
-			fmt.Printf(" verify error\n")
-			return fmt.Errorf("verify command %q: %w", cmd.Name, vErr)
-		} else if !ok {
-			fmt.Printf(" failed verification\n")
-			return fmt.Errorf("command %q failed its examples — not installed", cmd.Name)
-		}
-		if err := seed.WriteCommandScript(capDir, cmd.Name, script); err != nil {
-			return err
-		}
-		fmt.Printf(" compiled\n")
-		compiledScripts = append(compiledScripts, compiled{"command", cmd.Name, script})
-	}
-
-	for _, proj := range manifest.Projectors {
-		fmt.Printf("compiling projector %q...", proj.Name)
-		script, err := compiler.CompileProjector(proj)
-		if err != nil {
-			fmt.Printf(" failed\n")
-			return fmt.Errorf("projector %q: %w", proj.Name, err)
-		}
-		if ok, vErr := kernel.VerifyAndLog(home, "projector", proj.Name, script, proj.Examples); vErr != nil {
-			fmt.Printf(" verify error\n")
-			return fmt.Errorf("verify projector %q: %w", proj.Name, vErr)
-		} else if !ok {
-			fmt.Printf(" failed verification\n")
-			return fmt.Errorf("projector %q failed its examples — not installed", proj.Name)
-		}
-		if err := seed.WriteProjectorScript(capDir, proj.Name, script); err != nil {
-			return err
-		}
-		fmt.Printf(" compiled\n")
-		compiledScripts = append(compiledScripts, compiled{"projector", proj.Name, script})
-	}
-
-	st := store.Open(home)
-	contentCount := 0
-	for i := range manifest.Events {
-		e := manifest.Events[i]
-		// No special-casing of script.compiled anymore: a seed can append one,
-		// but it carries no valid signature for this home, so it can never install
-		// (Restore verifies). It's inert data, like any other event.
-		isDeclaration := e.Name == event.CommandDeclared || e.Name == event.ProjectorDeclared
-		fresh := event.New(e.Name, e.Payload)
-		if err := st.Append(&fresh); err != nil {
-			return err
-		}
-		if !isDeclaration {
-			contentCount++
-		}
-	}
-
-	// Log a signed receipt for each script we just compiled. The signature is
-	// what gives a script.compiled power — only the kernel can produce it — so
-	// these (and only these) are restorable later.
-	for _, cs := range compiledScripts {
-		payload, sErr := kernel.SignedReceipt(home, cs.Type, cs.Name, cs.Script)
-		if sErr != nil {
-			return sErr
-		}
-		e := event.New(event.ScriptCompiled, payload)
-		if err := st.Append(&e); err != nil {
-			return err
-		}
-	}
-
-	receiptPayload, _ := json.Marshal(map[string]any{
-		"seed":            manifest.Name,
-		"commands":        commandNames(manifest.Commands),
-		"projectors":      projectorNames(manifest.Projectors),
-		"events_replayed": contentCount,
-	})
-	receipt := event.New(event.SeedPlanted, receiptPayload)
-	if err := st.Append(&receipt); err != nil {
-		return err
-	}
-
-	fmt.Printf("grew %q: %d command(s), %d projector(s), %d event(s) replayed, receipt seq %d\n",
-		manifest.Name, len(manifest.Commands), len(manifest.Projectors), contentCount, receipt.Seq)
-	return kernel.RenderHTML(home)
-}
-
-// runCommand runs a capability end-to-end: executes the script, appends the
-// events it emits, compiles any declarations it produced (the strange loop),
-// and auto-runs the projectors that consume those events. Returns the events
-// produced. Progress is logged to stderr; callers format their own output.
-// Shared by the CLI (cmdRun), the HTTP /run route, and the brain's command
-// tools — one run pipeline, three callers.
-func runCommand(home string, command string, args []string) ([]event.Event, error) {
-	scriptPath := filepath.Join(home, "capabilities", "commands", command)
-	if _, err := os.Stat(scriptPath); err != nil {
-		return nil, fmt.Errorf("command %q not found (grow a seed that declares it)", command)
-	}
-
-	newEvents, err := pipeProcess(home, scriptPath, args)
+// pipeProcess runs an executable as a Unix pipeline node — the one shape the
+// kernel uses to talk to any outside process, a compiled command or the brain.
+func pipeProcess(home, bin string, argv []string) ([]Event, error) {
+	current, err := readEvents(home)
 	if err != nil {
 		return nil, err
 	}
-	if err := ingestEvents(home, newEvents); err != nil {
-		return nil, err
-	}
-	return newEvents, nil
-}
-
-// pipeProcess runs an executable as a Unix pipeline node: it sets SELF_HOME and
-// cwd-relevant env, feeds the current event log as JSONL on stdin, and parses
-// the new events the process emits as JSONL on stdout. This is the one shape the
-// kernel uses to talk to *any* outside intelligence — a compiled command, or the
-// brain process — so a command and a brain are the same kind of thing: a process
-// the kernel pipes events through.
-func pipeProcess(home, bin string, argv []string) ([]event.Event, error) {
-	st := store.Open(home)
-	current, err := st.Read()
-	if err != nil {
-		return nil, err
-	}
-
 	cmd := exec.Command(bin, argv...)
 	cmd.Env = append(os.Environ(), "SELF_HOME="+home)
-	cmd.Dir = home // the process can read the garden directly (ls/cat), no tool round-trip
+	cmd.Dir = home
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -722,14 +272,12 @@ func pipeProcess(home, bin string, argv []string) ([]event.Event, error) {
 		return nil, err
 	}
 	cmd.Stderr = os.Stderr
-
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", filepath.Base(bin), err)
 	}
-
 	feedEvents(stdin, current)
 
-	var newEvents []event.Event
+	var out []Event
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for sc.Scan() {
@@ -747,654 +295,832 @@ func pipeProcess(home, bin string, argv []string) ([]event.Event, error) {
 		if partial.Name == "" {
 			return nil, fmt.Errorf("%s output missing event name: %s", filepath.Base(bin), line)
 		}
-		newEvents = append(newEvents, event.New(partial.Name, partial.Payload))
+		out = append(out, newEvent(partial.Name, partial.Payload))
 	}
-
 	if err := cmd.Wait(); err != nil {
 		return nil, fmt.Errorf("%s exited: %w", filepath.Base(bin), err)
 	}
-	return newEvents, nil
+	return out, nil
 }
 
-// ingestEvents appends the events a piped process emitted and runs the kernel's
-// three reactions over them: the strange-loop compile (command/projector
-// declarations), restore (data-only restore.requested), and projector auto-run.
-// Shared by command invocation and the brain — whatever emits the events, the
-// kernel reacts to them identically.
-func ingestEvents(home string, newEvents []event.Event) error {
-	st := store.Open(home)
+func runCommand(home, command string, args []string) ([]Event, error) {
+	bin, _ := scriptPath(home, "command", command)
+	if _, err := os.Stat(bin); err != nil {
+		return nil, fmt.Errorf("command %q not found (grow a seed that declares it)", command)
+	}
+	evs, err := pipeProcess(home, bin, args)
+	if err != nil {
+		return nil, err
+	}
+	return evs, ingest(home, evs)
+}
 
-	// No reserve filter: a process may emit a script.compiled, but it can't sign
-	// it for this home, so it's inert — Restore verifies before installing. Code
-	// reaches capabilities/ only through the kernel's own signed receipts.
-	for i := range newEvents {
-		if err := st.Append(&newEvents[i]); err != nil {
+// ingest appends the events a process emitted, compiles any declarations among
+// them (the strange loop), and re-renders every projection. Projections are
+// pure replays, so re-running them all is always correct.
+func ingest(home string, evs []Event) error {
+	for i := range evs {
+		if err := appendEvent(home, &evs[i]); err != nil {
 			return err
 		}
 	}
+	if n := compileDeclarations(newLLM(home), home, evs); n > 0 {
+		fmt.Fprintf(os.Stderr, "self: self-improved — %d capabilit(ies) compiled\n", n)
+	}
+	renderKernelHTML(home)
+	refreshProjections(home)
+	return nil
+}
 
-	// Strange-loop hook: compile any command.declared / projector.declared the
-	// process emitted, so a command — or the brain — can grow new capabilities.
-	compiledCmds, compiledProjs, cErr := kernel.CompileDeclarations(home, newEvents)
-	if cErr != nil {
-		fmt.Fprintf(os.Stderr, "self: warning: declaration compile failed: %s\n", cErr)
-	}
-	if len(compiledCmds) > 0 || len(compiledProjs) > 0 {
-		fmt.Fprintf(os.Stderr, "self: self-improved: %d command(s), %d projector(s) compiled\n",
-			len(compiledCmds), len(compiledProjs))
-	}
+type commandDecl struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Params      map[string]string `json:"params"`
+	Event       struct {
+		Name   string            `json:"name"`
+		Fields map[string]string `json:"fields"`
+	} `json:"event"`
+	// Implementation is an optional reference the compiler verifies and adapts —
+	// never installed as-is, so precision from the seed author and receiver
+	// adaptation both survive.
+	Implementation string `json:"implementation,omitempty"`
+}
 
-	// Restore hook: a process may emit a data-only restore.requested {name, seq};
-	// the kernel acts on it by reinstalling its own earlier receipt. This is how
-	// the `restore` capability works — an ordinary command, no special kernel verb.
-	if restored, rErr := kernel.ApplyRestores(home, newEvents); rErr != nil {
-		fmt.Fprintf(os.Stderr, "self: warning: restore failed: %s\n", rErr)
-	} else if len(restored) > 0 {
-		fmt.Fprintf(os.Stderr, "self: restored %s\n", strings.Join(restored, ", "))
-	}
+type projectorDecl struct {
+	Name           string   `json:"name"`
+	Description    string   `json:"description"`
+	Consumes       []string `json:"consumes"`
+	Implementation string   `json:"implementation,omitempty"`
+}
 
-	// Auto-run projectors that consume the new events. The kernel reads its own
-	// projection (site/kernel.html) to know which projectors care about which
-	// events — burn kernel.html, replay events, it comes back.
-	wiring, wErr := kernel.ReadWiring(home)
-	if wErr != nil {
-		fmt.Fprintf(os.Stderr, "self: warning: could not read kernel wiring: %s\n", wErr)
-		return nil
-	}
-	ran := map[string]bool{}
-	for _, e := range newEvents {
-		for _, projName := range wiring.ProjectorsForEvent(e.Name) {
-			if ran[projName] {
+// compileDeclarations is the strange-loop hook: every command.declared /
+// projector.declared among evs is compiled by the LLM into a script authored
+// for this receiver, installed, and logged as a signed receipt. Declaring IS
+// creating — this runs at grow time and at run time alike, so a capability (or
+// the brain) grows new capabilities just by emitting declarations.
+func compileDeclarations(c *llm, home string, evs []Event) int {
+	n := 0
+	for _, e := range evs {
+		var typ, name, script string
+		var err error
+		switch e.Name {
+		case "command.declared":
+			var d commandDecl
+			if json.Unmarshal(e.Payload, &d) != nil || d.Name == "" {
 				continue
 			}
-			ran[projName] = true
-			fmt.Fprintf(os.Stderr, "self: auto-running projector %q\n", projName)
-			if pErr := runProjectorToSite(home, projName); pErr != nil {
-				fmt.Fprintf(os.Stderr, "self: projector %q failed: %s\n", projName, pErr)
+			typ, name = "command", d.Name
+			fmt.Fprintf(os.Stderr, "self: compiling command %q…\n", name)
+			script, err = c.compileCommand(d)
+		case "projector.declared":
+			var d projectorDecl
+			if json.Unmarshal(e.Payload, &d) != nil || d.Name == "" {
+				continue
 			}
-		}
-	}
-	return nil
-}
-
-// cmdRun is the CLI wrapper around runCommand: it prints each appended event to
-// stdout. Two flags make acting safer on an append-only log: --help shows a
-// command's args before you run it, and --dry-run renders the event(s) a command
-// WOULD append without writing them — preview before a mistake becomes permanent
-// memory.
-func cmdRun(home string, command string, args []string) error {
-	dryRun := false
-	var rest []string
-	for _, a := range args {
-		switch a {
-		case "--dry-run", "--dry":
-			dryRun = true
-		case "--help", "-h":
-			return runHelp(home, command)
+			typ, name = "projector", d.Name
+			fmt.Fprintf(os.Stderr, "self: compiling projector %q…\n", name)
+			script, err = c.compileProjector(d)
 		default:
-			rest = append(rest, a)
-		}
-	}
-
-	if dryRun {
-		scriptPath := filepath.Join(home, "capabilities", "commands", command)
-		if _, err := os.Stat(scriptPath); err != nil {
-			return fmt.Errorf("command %q not found (grow a seed that declares it)", command)
-		}
-		evs, err := pipeProcess(home, scriptPath, rest) // run the command, but do NOT ingest/append
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "dry-run: %q would append %d event(s); nothing was written\n", command, len(evs))
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		for _, e := range evs {
-			if err := enc.Encode(map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)}); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	newEvents, err := runCommand(home, command, rest)
-	if err != nil {
-		return err
-	}
-	for _, e := range newEvents {
-		fmt.Printf("%s appended seq %d %s\n", e.ID, e.Seq, e.Name)
-	}
-	return nil
-}
-
-// runHelp prints what a command does and the arguments it expects, read from its
-// declaration in the log — so the shape of an action is discoverable through the
-// system, not only by reading the command's source.
-func runHelp(home, command string) error {
-	for _, c := range plantedCommands(home) {
-		if c.Name != command {
 			continue
 		}
-		fmt.Printf("self run %s — %s\n", c.Name, c.Description)
-		if len(c.Params) == 0 {
-			fmt.Println("  args:  all arguments are joined into one text field")
-		} else {
-			fmt.Println("  params (positional, in order):")
-			for _, k := range sortedByName(c.Params) {
-				fmt.Printf("    %-14s %s\n", k, c.Params[k])
-			}
+		if err == nil {
+			err = installScript(home, typ, name, script)
 		}
-		if c.Event.Name != "" {
-			fmt.Printf("  emits: %s\n", c.Event.Name)
+		if err == nil {
+			err = appendReceipt(home, typ, name, script)
 		}
-		fmt.Println("  tip:   add --dry-run to preview the event without appending it")
-		return nil
-	}
-	return fmt.Errorf("command %q not found — try 'self ls commands'", command)
-}
-
-// cmdRestore is the always-on, built-in trigger for a rollback — a thin
-// convenience so the safety net exists even on a bare kernel with no `restore`
-// seed grown. It does the same thing the `restore` capability does: log a
-// data-only restore.requested intent, then let the kernel act on it. (The
-// install itself is the kernel's; the CLI only supplies a name and seq.)
-func cmdRestore(home string, args []string) error {
-	name := args[0]
-	seq := 0
-	if len(args) >= 2 {
-		if _, e := fmt.Sscanf(args[1], "%d", &seq); e != nil || seq <= 0 {
-			return fmt.Errorf("seq must be a positive integer from 'self history', got %q", args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "self: %s %q failed: %s\n", typ, name, err)
+			continue
 		}
+		n++
 	}
-	payload, _ := json.Marshal(map[string]any{"name": name, "seq": seq})
-	intent := event.New(event.RestoreRequested, payload)
-	if err := store.Open(home).Append(&intent); err != nil {
-		return err
-	}
-	_, err := kernel.ApplyRestores(home, []event.Event{intent})
-	return err
+	return n
 }
 
-// cmdShow renders a projection. Unix-native: when stdout is piped it writes the
-// raw projection HTML to stdout (compose it with other tools); when run from a
-// terminal it writes a styled, self-contained copy and opens it in a browser.
-// Either way it refreshes the canonical bare projection in site/ that agents
-// read directly.
-func cmdShow(home string, args []string) error {
-	asText := false
-	name := ""
-	for _, a := range args {
-		switch a {
-		case "--text", "--plain":
-			asText = true
-		default:
-			if name == "" {
-				name = a
-			}
-		}
+// ─────────────────────────────── projections ────────────────────────────────
+
+// runProjection replays the whole log through a projector script and returns
+// the HTML it emits. Run it twice, get the same page — a pure function of the log.
+func runProjection(home, name string) ([]byte, error) {
+	bin, _ := scriptPath(home, "projector", name)
+	if _, err := os.Stat(bin); err != nil {
+		return nil, fmt.Errorf("projection %q not found", name)
 	}
-	if name == "" {
-		return fmt.Errorf("usage: self show <projection> [--text]")
-	}
-
-	scriptPath := filepath.Join(home, "capabilities", "projectors", name)
-	if _, err := os.Stat(scriptPath); err != nil {
-		return fmt.Errorf("projection %q not found — try 'self ls projectors'", name)
-	}
-	html, err := projectHTML(home, name)
-	if err != nil {
-		return err
-	}
-
-	siteDir := filepath.Join(home, "site")
-	os.MkdirAll(siteDir, 0755)
-	if err := os.WriteFile(filepath.Join(siteDir, name+".html"), html, 0644); err != nil {
-		return err
-	}
-
-	// --text renders the projection as readable plain text — for an agent or a
-	// terminal reading the body, so it need not pipe HTML through a tag stripper.
-	if asText {
-		_, err := io.WriteString(os.Stdout, htmlToText(html))
-		return err
-	}
-
-	if !isTerminal(os.Stdout) {
-		_, err := os.Stdout.Write(html)
-		return err
-	}
-
-	// Interactive: a styled, self-contained page (enrichment CSS inlined) so it
-	// looks right opened straight from disk, no server required.
-	preview := injectStyle(html)
-	tmp := filepath.Join(os.TempDir(), "self-show-"+name+".html")
-	if err := os.WriteFile(tmp, preview, 0644); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "self: rendered %q — opening in your browser\n", name)
-	if err := openInBrowser("file://" + tmp); err != nil {
-		fmt.Fprintf(os.Stderr, "self: couldn't open a browser (%v)\n", err)
-		fmt.Fprintf(os.Stderr, "self: the page is at %s — or run 'self live' and visit http://localhost:7777/%s\n", tmp, name)
-	}
-	return nil
-}
-
-var (
-	reDropBlocks = regexp.MustCompile(`(?is)<(script|style|head)[^>]*>.*?</\s*(script|style|head)\s*>`)
-	reBlockClose = regexp.MustCompile(`(?i)</(p|div|h[1-6]|li|tr|hr|section|article|header|footer|form|ul|ol|table)\s*>`)
-	reBr         = regexp.MustCompile(`(?i)<br\s*/?>`)
-	reAnyTag     = regexp.MustCompile(`<[^>]+>`)
-)
-
-// htmlToText flattens a projection's bare semantic HTML into readable plain
-// text: it drops head/script/style, turns block-level closers into line breaks,
-// strips remaining tags, decodes entities, and collapses runs of blank lines.
-func htmlToText(in []byte) string {
-	s := string(in)
-	s = reDropBlocks.ReplaceAllString(s, "")
-	s = reBr.ReplaceAllString(s, "\n")
-	s = reBlockClose.ReplaceAllString(s, "\n")
-	s = reAnyTag.ReplaceAllString(s, "")
-	s = htmlesc.UnescapeString(s)
-
-	var out []string
-	blank := 0
-	for _, ln := range strings.Split(s, "\n") {
-		ln = strings.TrimSpace(ln)
-		if ln == "" {
-			if blank > 0 {
-				continue
-			}
-			blank++
-		} else {
-			blank = 0
-		}
-		out = append(out, ln)
-	}
-	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
-}
-
-// isTerminal reports whether f is a terminal (character device) rather than a
-// pipe or file — used to decide between human and machine output.
-func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
-}
-
-// injectStyle inlines the kernel's enrichment stylesheet into a projection so a
-// bare projector page renders styled when opened from disk (no server, so no
-// nav or auto-reload — those are serve-time concerns).
-func injectStyle(html []byte) []byte {
-	s := string(html)
-	if i := strings.Index(s, "</head>"); i >= 0 {
-		return []byte(s[:i] + enrichmentCSS + s[i:])
-	}
-	return append([]byte(enrichmentCSS), html...)
-}
-
-// openInBrowser opens target with the platform's default opener.
-func openInBrowser(target string) error {
-	for _, bin := range []string{"xdg-open", "open", "sensible-browser", "x-www-browser"} {
-		if path, err := exec.LookPath(bin); err == nil {
-			return exec.Command(path, target).Start()
-		}
-	}
-	return fmt.Errorf("no opener (xdg-open/open) found on PATH")
-}
-
-// runProjectorToSite runs a projector and persists its HTML to
-// SELF_HOME/site/<name>.html. Used by the auto-run mechanism after invoke.
-func runProjectorToSite(home string, name string) error {
-	return runProjector(home, name, false)
-}
-
-// runProjector runs a projector script, piping all events as JSONL to stdin.
-// It always persists HTML to SELF_HOME/site/<name>.html. If showStdout is true,
-// it also writes HTML to os.Stdout.
-func runProjector(home string, name string, showStdout bool) error {
-	scriptPath := filepath.Join(home, "capabilities", "projectors", name)
-	if _, err := os.Stat(scriptPath); err != nil {
-		return fmt.Errorf("projector %q not found", name)
-	}
-
-	st := store.Open(home)
-	events, err := st.Read()
-	if err != nil {
-		return err
-	}
-
-	siteDir := filepath.Join(home, "site")
-	os.MkdirAll(siteDir, 0755)
-	siteFile, err := os.Create(filepath.Join(siteDir, name+".html"))
-	if err != nil {
-		return err
-	}
-	defer siteFile.Close()
-
-	cmd := exec.Command(scriptPath)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	if showStdout {
-		cmd.Stdout = io.MultiWriter(os.Stdout, siteFile)
-	} else {
-		cmd.Stdout = siteFile
-	}
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	feedEvents(stdin, events)
-
-	return cmd.Wait()
-}
-
-// feedEvents writes events as JSONL to a child process's stdin in a goroutine,
-// closing stdin when done. Shared by the command and projector pipelines.
-func feedEvents(stdin io.WriteCloser, events []event.Event) {
-	go func() {
-		w := bufio.NewWriter(stdin)
-		for _, e := range events {
-			line, _ := json.Marshal(e)
-			w.Write(line)
-			w.WriteByte('\n')
-		}
-		w.Flush()
-		stdin.Close()
-	}()
-}
-
-// projectHTML runs a projector against the current event log and returns its
-// HTML output, without persisting to site/. Used by self live to render fresh
-// projections on every request.
-func projectHTML(home, name string) ([]byte, error) {
-	scriptPath := filepath.Join(home, "capabilities", "projectors", name)
-	events, err := store.Open(home).Read()
+	events, err := readEvents(home)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(scriptPath)
+	cmd := exec.Command(bin)
 	cmd.Env = append(os.Environ(), "SELF_HOME="+home)
-	cmd.Stderr = os.Stderr
+	cmd.Dir = home
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
 	}
-	feedEvents(stdin, events)
-	return cmd.Output()
-}
-
-// autoReloadSnippet polls /version and reloads the page when the event log
-// grows, so served projections update hands-free.
-const autoReloadSnippet = `<script>(function(){var c=null;function p(){fetch('/version').then(function(r){return r.text()}).then(function(v){if(c===null){c=v}else if(v!==c){location.reload()}}).catch(function(){});setTimeout(p,1000)}p()})();</script>`
-
-// injectAutoReload inserts the auto-reload script before </body> (or appends it
-// if there's no body tag), so any served HTML page live-updates.
-func injectAutoReload(html []byte) []byte {
-	s := string(html)
-	if i := strings.LastIndex(s, "</body>"); i >= 0 {
-		return []byte(s[:i] + autoReloadSnippet + s[i:])
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
 	}
-	return append(html, []byte(autoReloadSnippet)...)
+	feedEvents(stdin, events)
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("projection %q exited: %w", name, err)
+	}
+	return out.Bytes(), nil
 }
 
-// enrichmentCSS is the kernel's one shared stylesheet — the "enrichment layer".
-// Projectors emit bare semantic HTML (no styling); the kernel injects this so
-// every projection is themed consistently. Classless-first (elements styled
-// directly) plus a tiny stable class vocabulary: muted, card, row, stack, tag
-// (+accent), msg (+who), num, button.secondary/.danger. Themes = override :root.
-const enrichmentCSS = `<style>
-:root{--bg:#fbfbfa;--fg:#1f2328;--muted:#6a737d;--border:#e2e4e8;--accent:#2563eb;--accent-fg:#fff;--card:#fff;--danger:#b42318;--radius:6px;--gap:16px;--maxw:880px}
-@media (prefers-color-scheme:dark){:root{--bg:#0e1116;--fg:#e6edf3;--muted:#8b949e;--border:#30363d;--accent:#4493f8;--card:#161b22}}
-*{box-sizing:border-box}
-body{background:var(--bg);color:var(--fg);max-width:var(--maxw);margin:0 auto;padding:28px 24px 64px;line-height:1.55;font-size:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-h1,h2,h3{line-height:1.25;margin:1.5em 0 .5em;font-weight:650}h1{font-size:1.7rem;margin-top:0}h2{font-size:1.25rem}
-p{margin:.6em 0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-hr{border:0;border-top:1px solid var(--border);margin:28px 0}
-nav{display:flex;gap:18px;align-items:baseline;padding-bottom:14px;border-bottom:1px solid var(--border)}
-nav .brand{font-weight:700;margin-right:auto;font-family:ui-monospace,Menlo,monospace}
-code{font-family:ui-monospace,Menlo,monospace;font-size:.88em;background:var(--card);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
-table{border-collapse:collapse;width:100%;margin:12px 0}th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}
-th{font-size:.74rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
-tbody tr:hover{background:color-mix(in srgb,var(--accent) 7%,transparent)}
-td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}tfoot td{font-weight:700;border-top:2px solid var(--fg)}
-button,input,select,textarea{font:inherit;color:inherit}
-input,textarea,select{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:8px 11px;width:100%}
-input:focus,textarea:focus{outline:2px solid var(--accent);border-color:var(--accent)}
-button{background:var(--accent);color:var(--accent-fg);border:1px solid var(--accent);border-radius:var(--radius);padding:8px 16px;cursor:pointer;font-weight:600}
-button:hover{filter:brightness(1.08)}button.secondary{background:transparent;color:var(--accent)}button.danger{background:var(--danger);border-color:var(--danger)}
-form{display:flex;flex-direction:column;gap:10px;max-width:520px}
-.muted{color:var(--muted)}
-.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin:14px 0}
-.row{display:flex;gap:var(--gap);align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:10px}
-.tag{display:inline-block;font-size:.72rem;padding:2px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted)}
-.tag.accent{color:var(--accent);border-color:var(--accent)}
-.msg{padding:8px 0;border-bottom:1px solid var(--border)}.msg:last-child{border-bottom:0}
-.msg .who{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-</style>`
+func projectToSite(home, name string) error {
+	page, err := runProjection(home, name)
+	if err != nil {
+		return err
+	}
+	siteDir := filepath.Join(home, "site")
+	if err := os.MkdirAll(siteDir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(siteDir, name+".html"), page, 0644)
+}
 
-// navCSS styles the projection sidebar. Injected after the page's own styles
-// (so its body offset wins), with fallback colors for pages that don't define
-// the enrichment variables (e.g. kernel.html). Collapses to a top bar on narrow
-// screens.
-const navCSS = `<style>
-.self-nav{position:fixed;left:0;top:0;bottom:0;width:180px;overflow:auto;box-sizing:border-box;
-  border-right:1px solid var(--border,#e2e4e8);padding:20px 14px;background:var(--card,#fff);font-size:14px}
-.self-nav a{display:block;padding:5px 8px;border-radius:5px;color:var(--fg,#1f2328);text-decoration:none;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.self-nav a:hover{background:color-mix(in srgb,var(--accent,#2563eb) 12%,transparent)}
-.self-nav .self-brand{font-weight:700;font-family:ui-monospace,Menlo,monospace;font-size:1.1rem;margin-bottom:6px}
-.self-nav .self-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;opacity:.55;margin:14px 8px 4px}
-body{padding-left:210px}
-@media (max-width:640px){.self-nav{position:static;width:auto;height:auto;border-right:0;border-bottom:1px solid var(--border,#e2e4e8)}body{padding-left:0}}
-</style>`
-
-// navHTML builds the projection sidebar from the planted projectors. Flat for
-// now (nested projections aren't modelled yet — they'd need a recursive walk).
-func navHTML(home string) string {
-	var b strings.Builder
-	b.WriteString(`<aside class="self-nav"><a class="self-brand" href="/">self</a>`)
-	b.WriteString(`<div class="self-label">projections</div>`)
-	entries, _ := os.ReadDir(filepath.Join(home, "capabilities", "projectors"))
+func refreshProjections(home string) {
+	entries, err := os.ReadDir(filepath.Join(home, "capabilities", "projectors"))
+	if err != nil {
+		return
+	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		n := e.Name()
-		b.WriteString(fmt.Sprintf(`<a href="/%s">%s</a>`, n, htmlesc.EscapeString(n)))
-	}
-	b.WriteString(`<div class="self-label">kernel</div><a href="/">wiring &amp; identity</a></aside>`)
-	return b.String()
-}
-
-// injectNav adds the projection sidebar (and its styles) to a served page —
-// universal chrome the kernel provides so projectors stay bare. Used for both
-// projector pages and kernel.html.
-func injectNav(home string, page []byte) []byte {
-	s := string(page)
-	if i := strings.Index(s, "</head>"); i >= 0 {
-		s = s[:i] + navCSS + s[i:]
-	} else {
-		s = navCSS + s
-	}
-	aside := navHTML(home)
-	if i := strings.Index(s, "<body"); i >= 0 {
-		if j := strings.Index(s[i:], ">"); j >= 0 {
-			pos := i + j + 1
-			return []byte(s[:pos] + aside + s[pos:])
+		if err := projectToSite(home, e.Name()); err != nil {
+			fmt.Fprintf(os.Stderr, "self: projection %q failed: %s\n", e.Name(), err)
 		}
 	}
-	return []byte(aside + s)
 }
 
-// enrich injects the shared stylesheet into <head>, the projection sidebar, and
-// the auto-reload script — so bare semantic projector output renders styled,
-// navigable, and live without the projector carrying any of it.
-func enrich(home string, page []byte) []byte {
-	s := string(page)
-	if i := strings.Index(s, "</head>"); i >= 0 {
-		s = s[:i] + enrichmentCSS + s[i:]
-	} else {
-		s = enrichmentCSS + s
-	}
-	return injectNav(home, injectAutoReload([]byte(s)))
+// ──────────────────────────────── the LLM ───────────────────────────────────
+//
+// One OpenAI-compatible endpoint plays two roles: the COMPILER (declaration in,
+// script out) and the default BRAIN (`self brain`). Both explore the garden
+// through a single read-only bash tool before writing anything — same seed,
+// different garden, different binary.
+
+type llm struct {
+	url, key, model string
+	stub            bool
+	home            string
+	// intent is the whole-seed genotype, woven into every compile during a grow
+	// so no piece is compiled in a dark room.
+	intent string
 }
 
-func cmdServe(home string, port string) error {
-	if port == "" {
-		port = "7777"
+func newLLM(home string) *llm {
+	if os.Getenv("SELF_LLM_STUB") == "1" {
+		return &llm{stub: true, home: home}
 	}
-
-	os.MkdirAll(filepath.Join(home, "site"), 0755)
-
-	// Rebuild kernel.html
-	if err := kernel.RenderHTML(home); err != nil {
-		fmt.Fprintf(os.Stderr, "self: warning: could not rebuild kernel.html: %s\n", err)
+	return &llm{
+		url:   envOr("SELF_LLM_URL", "http://127.0.0.1:8080"),
+		key:   os.Getenv("SELF_LLM_API_KEY"),
+		model: envOr("SELF_LLM_MODEL", "local"),
+		home:  home,
 	}
+}
 
-	// Rebuild all projectors from the registry
-	projDir := filepath.Join(home, "capabilities", "projectors")
-	entries, err := os.ReadDir(projDir)
-	if err == nil {
-		for _, e := range entries {
-			if !e.IsDir() {
-				fmt.Fprintf(os.Stderr, "rebuilding projector %q...\n", e.Name())
-				if rebuildErr := runProjectorToSite(home, e.Name()); rebuildErr != nil {
-					fmt.Fprintf(os.Stderr, "self: warning: projector %q failed: %s\n", e.Name(), rebuildErr)
+func (c *llm) available() bool {
+	return !c.stub && (c.key != "" ||
+		strings.HasPrefix(c.url, "http://127.0.0.1") || strings.HasPrefix(c.url, "http://localhost"))
+}
+
+type toolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type assistantMsg struct {
+	Content   string     `json:"content"`
+	ToolCalls []toolCall `json:"tool_calls"`
+}
+
+var llmClient = &http.Client{Timeout: 10 * time.Minute}
+
+func (c *llm) doRound(messages, tools []map[string]any) (*assistantMsg, error) {
+	body, _ := json.Marshal(map[string]any{
+		"model": c.model, "messages": messages, "temperature": 0.2, "tools": tools,
+	})
+	req, err := http.NewRequest("POST", strings.TrimRight(c.url, "/")+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.key)
+	}
+	resp, err := llmClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("llm call failed: %w (check SELF_LLM_URL)", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("llm returned %d: %s", resp.StatusCode, b)
+	}
+	var result struct {
+		Choices []struct {
+			Message assistantMsg `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if len(result.Choices) == 0 {
+		return nil, fmt.Errorf("llm returned no choices")
+	}
+	return &result.Choices[0].Message, nil
+}
+
+// toolLoop drives one conversation until the model answers with plain text or a
+// handler ends it (done=true, out as the final result).
+func (c *llm) toolLoop(system string, turns, tools []map[string]any, handle func(name, args string) (out string, done bool)) (string, error) {
+	if !c.available() {
+		return "", fmt.Errorf("no LLM configured (set SELF_LLM_URL / SELF_LLM_API_KEY / SELF_LLM_MODEL)")
+	}
+	messages := append([]map[string]any{{"role": "system", "content": system}}, turns...)
+	calls := 0
+	for round := 0; round < 40; round++ {
+		msg, err := c.doRound(messages, tools)
+		if err != nil {
+			return "", err
+		}
+		if len(msg.ToolCalls) == 0 {
+			return msg.Content, nil
+		}
+		messages = append(messages, map[string]any{"role": "assistant", "content": msg.Content, "tool_calls": msg.ToolCalls})
+		for _, tc := range msg.ToolCalls {
+			if calls++; calls > 60 {
+				return "", fmt.Errorf("stopped after %d tool calls without a final response", calls-1)
+			}
+			out, done := handle(tc.Function.Name, tc.Function.Arguments)
+			if done {
+				return out, nil
+			}
+			messages = append(messages, map[string]any{"role": "tool", "tool_call_id": tc.ID, "content": out})
+		}
+	}
+	return "", fmt.Errorf("exceeded 40 tool rounds without a final response")
+}
+
+func tool(name, desc string, props map[string]any, required ...string) map[string]any {
+	if required == nil {
+		required = []string{}
+	}
+	return map[string]any{"type": "function", "function": map[string]any{
+		"name": name, "description": desc,
+		"parameters": map[string]any{"type": "object", "properties": props, "required": required},
+	}}
+}
+
+func str(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+
+var (
+	bashTool    = tool("bash", "Run a READ-ONLY shell command with cwd=SELF_HOME to explore the garden: events.jsonl, capabilities/, site/. Allowed: ls, cat, head, tail, grep, find, wc, sort, uniq, cut, tr, echo, jq. No redirection or substitution.", map[string]any{"command": str("the shell command")}, "command")
+	declareTool = tool("declare", `Declare ONE new capability; the kernel compiles it into a live script. Call once per capability. A command: {"name":"command.declared","payload":{"name","description","params":{k:type},"event":{"name","fields":{k:type}}}}. A projector: {"name":"projector.declared","payload":{"name","description","consumes":["event.name"]}}.`, map[string]any{"name": str("command.declared or projector.declared"), "payload": map[string]any{"type": "object", "description": "the declaration"}}, "name", "payload")
+	doneTool    = tool("done", "Finish, with a short summary for the user.", map[string]any{"summary": str("one or two sentences")}, "summary")
+	runTool     = tool("run", "Run one of the capabilities listed under CAPABILITIES; the kernel appends the events it emits.", map[string]any{"name": str("the capability"), "args": str("space-separated args, in declared order")}, "name")
+	submitTool  = tool("submit", "Submit the finished script (full source, with shebang).", map[string]any{"script": str("the executable script")}, "script")
+)
+
+var readOnlyCmds = map[string]bool{"ls": true, "cat": true, "head": true, "tail": true, "grep": true,
+	"find": true, "wc": true, "sort": true, "uniq": true, "cut": true, "tr": true, "echo": true, "jq": true}
+
+// readOnlyBash is the exploration tool: fail-closed to plain readers, so the
+// model can look at the garden but not touch it.
+func readOnlyBash(home, command string) string {
+	if strings.ContainsAny(command, "><`") || strings.Contains(command, "$(") ||
+		strings.Contains(command, "-exec") || strings.Contains(command, "-delete") || strings.Contains(command, "-ok") {
+		return "error: read-only bash — redirection, substitution, and find actions are not allowed"
+	}
+	for _, seg := range strings.FieldsFunc(command, func(r rune) bool { return r == '|' || r == ';' || r == '&' || r == '\n' }) {
+		f := strings.Fields(seg)
+		if len(f) > 0 && !readOnlyCmds[f[0]] {
+			return fmt.Sprintf("error: %q is not on the read-only allowlist", f[0])
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	cmd.Dir = home
+	out, err := cmd.CombinedOutput()
+	if len(out) > 16384 {
+		out = append(out[:16384], "\n… (truncated)"...)
+	}
+	if err != nil {
+		return fmt.Sprintf("%serror: %s", out, err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return "(no output)"
+	}
+	return string(out)
+}
+
+func (c *llm) handleBash(args string) string {
+	var a struct {
+		Command string `json:"command"`
+	}
+	json.Unmarshal([]byte(args), &a)
+	return readOnlyBash(c.home, a.Command)
+}
+
+// ─────────────────────────────── the prompts ────────────────────────────────
+
+// kernelPrimer is the mental model every compile/brain prompt opens with — the
+// load-bearing protocols, held BEFORE exploration.
+const kernelPrimer = `self in one breath — hold this before you explore or write anything:
+
+- One append-only event log is the ONLY state. Every capability is a small script the kernel runs over that log; every view is a pure replay of it. There is no hidden memory: to remember something, emit an event; to use memory, read events back and fold them into what you produce.
+- THE STRANGE LOOP — the heart of self. Emitting a command.declared or projector.declared event makes the kernel compile it into a live capability on the spot, at grow time AND at run time. Declaring IS creating: a running capability (or you) grows new capabilities just by emitting those events. Code never arrives pre-built — the kernel compiles every script from a declaration, for this receiver.
+- INTELLIGENCE is a capability the kernel binary exposes. A command that needs to think runs the kernel: 'self think "<prompt>"'. That single argument may instead be a JSON array of {role, content} turns, which reach the brain as a real conversation; 'self think' returns {response, declarations} JSON, and any declarations flow back through the strange loop. So a surface that converses with the brain works by replaying the log into turns, handing them to 'self think', and emitting the reply as events — and "memory" is just those events, read back.
+
+With that model in hand, explore the garden (the bash tool, cwd=SELF_HOME) to see how THIS receiver already does these things, then build.`
+
+const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
+projector script: receives all events as JSONL on stdin, writes HTML on stdout. The kernel persists it to SELF_HOME/site/<name>.html.
+The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries.`
+
+const commandSystemPrompt = kernelPrimer + `
+
+You are the self compiler. You read a command declaration and write an executable command script.
+
+` + pipeContract + `
+
+Before writing, explore: the event vocabulary in events.jsonl, the installed capabilities, the rendered site/. If the new command's event overlaps with events already in the log, integrate — align field names, avoid collisions, consider co-producing an existing event name so existing projections pick it up. If the declaration includes a REFERENCE IMPLEMENTATION, verify it against the pipe contract and adapt it to this garden — never submit code you have not verified.
+
+When done exploring, call submit with the full script.`
+
+const projectorSystemPrompt = kernelPrimer + `
+
+You are the self compiler. You read a projector declaration and write an executable projector script.
+
+` + pipeContract + `
+
+Build state by filtering stdin for the consumed event names. Emit BARE semantic HTML — no CSS, no <style>, no inline styles (the kernel injects one shared stylesheet at serve time), and no JavaScript. Use plain elements plus only this class vocabulary where needed: muted, card, row, stack, tag, msg (+ who), num, and on buttons secondary / danger. Affordances are plain HTML forms: <form method="post" action="/run/COMMAND"><input name="x"><button>Label</button></form> — each field's value becomes a positional argument in document order, and the kernel redirects back so the page reloads with the new state.
+
+Before writing, explore. If the consumed events overlap with events already in the stream under different names, extend the filter to consume both and map their fields — the seed adapts to the garden, not the other way around. If the declaration includes a REFERENCE IMPLEMENTATION, verify and adapt it — never submit code you have not verified.
+
+When done exploring, call submit with the full script.`
+
+const brainSystemPrompt = kernelPrimer + `
+
+You are self's brain — the intelligence that lives inside the kernel. Commands call you via 'self think'.
+
+You have three powers:
+- READ: the bash tool, to explore events.jsonl, capabilities/, and site/ (site/*.html is your memory — read the relevant page before answering).
+- ACT: call the run tool with a capability from the CAPABILITIES list to actually do what the user asks — don't merely describe it. The log is append-only, so acting is safe: nothing is ever destroyed.
+- GROW: when no capability fits, call declare to add one; the kernel compiles it on the spot.
+
+Explore before responding when needed; adapt to what exists rather than duplicating it. Respond with plain text (or done) for conversational replies.`
+
+const orchestratorSystemPrompt = kernelPrimer + `
+
+You are self's developmental compiler. You are given a product's INTENT — what it is for, its core intuitions, the feel, the anti-goals. Grow it: design the SMALLEST coherent set of capabilities that realizes this intent in THIS garden, and declare each one with the declare tool.
+
+- Decompose into commands (verbs that emit events) and projectors (views over events); let a shared event vocabulary be the seams.
+- Write each description richly enough that someone compiling that one piece in isolation would still serve the WHOLE intent — name the sibling capabilities, the shared events, the feel.
+- Honor the public surface names the intent fixes; how you realize them is yours to choose for this garden.
+- The kernel's contracts win over any conflicting wording in the intent: commands read argv + JSONL stdin and emit JSONL events; projectors read JSONL stdin and emit bare semantic HTML with /run/<command> forms, no JavaScript.
+
+Explore, declare every capability, then call done with a one-line summary of the decomposition.`
+
+// ────────────────────────────── the compiler ────────────────────────────────
+
+func (c *llm) compileCommand(d commandDecl) (string, error) {
+	if c.stub {
+		return stubCommand(d), nil
+	}
+	user := fmt.Sprintf("Compile this command declaration into a command script.\n\nCOMMAND: %s\n  description: %s\n  params: %s\n\nEVENT it produces:\n  name: %s\n  fields: %s\n\nIt must produce an event with the declared name, its fields populated from argv.",
+		d.Name, d.Description, jsonRepr(d.Params), d.Event.Name, jsonRepr(d.Event.Fields))
+	return c.compile(commandSystemPrompt, user, d.Implementation)
+}
+
+func (c *llm) compileProjector(d projectorDecl) (string, error) {
+	if c.stub {
+		return stubProjector(d), nil
+	}
+	user := fmt.Sprintf("Compile this projector declaration into a projector script.\n\nPROJECTOR: %s\n  description: %s\n  consumes: %s\n\nIt must filter events by the consumed names and render HTML.",
+		d.Name, d.Description, jsonRepr(d.Consumes))
+	return c.compile(projectorSystemPrompt, user, d.Implementation)
+}
+
+func (c *llm) compile(system, user, reference string) (string, error) {
+	if strings.TrimSpace(c.intent) != "" {
+		user = "This capability is one part of a product with the following INTENT. Compile it so the whole intent is served.\n\n--- INTENT ---\n" + c.intent + "\n--- END INTENT ---\n\n" + user
+	}
+	if strings.TrimSpace(reference) != "" {
+		user += "\n\nREFERENCE IMPLEMENTATION (verify against the contract and adapt to this garden — do not copy blindly):\n```\n" + reference + "\n```"
+	}
+	var script string
+	_, err := c.toolLoop(system, []map[string]any{{"role": "user", "content": user}},
+		[]map[string]any{bashTool, submitTool},
+		func(name, args string) (string, bool) {
+			switch name {
+			case "bash":
+				return c.handleBash(args), false
+			case "submit":
+				var a struct {
+					Script string `json:"script"`
 				}
+				if json.Unmarshal([]byte(args), &a) != nil || strings.TrimSpace(a.Script) == "" {
+					return `error: submit needs {"script": "..."}`, false
+				}
+				script = a.Script
+				return "", true
+			}
+			return fmt.Sprintf("error: unknown tool %q", name), false
+		})
+	if err != nil {
+		return "", err
+	}
+	if script == "" {
+		return "", fmt.Errorf("the compiler returned no script (it must call submit)")
+	}
+	return script, nil
+}
+
+// Stub scripts (SELF_LLM_STUB=1) keep the whole loop testable offline: no LLM,
+// no network, real pipe-contract binaries.
+func stubCommand(d commandDecl) string {
+	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nprint(json.dumps({\"name\": %q, \"payload\": {\"title\": \" \".join(sys.argv[1:]) or \"(untitled)\"}}))\n",
+		d.Description, d.Event.Name)
+}
+
+func stubProjector(d projectorDecl) string {
+	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nfrom html import escape\nprint(\"<h1>%s</h1><ul>\")\nfor line in sys.stdin:\n    line = line.strip()\n    if not line:\n        continue\n    e = json.loads(line)\n    if e.get(\"name\") in %s:\n        print(f\"<li>{escape(str(e.get('payload', {}).get('title', '(untitled)')))}</li>\")\nprint(\"</ul>\")\n",
+		d.Name, d.Name, jsonRepr(d.Consumes))
+}
+
+// ──────────────────────────────── the brain ─────────────────────────────────
+
+type brainResult struct {
+	Response     string
+	Declarations []map[string]any
+}
+
+// agent runs one brain conversation with the three powers: read (bash), act
+// (run, over the given capability catalog), grow (declare). user may be a JSON
+// array of {role, content} turns, so a chat surface can hand the brain real
+// turn-based history.
+func (c *llm) agent(system, user string, commands []commandDecl, invoke func(name, args string) (string, error)) (*brainResult, error) {
+	tools := []map[string]any{bashTool, declareTool, doneTool}
+	known := map[string]bool{}
+	if len(commands) > 0 {
+		tools = append(tools, runTool)
+		var b strings.Builder
+		for _, cmd := range commands {
+			known[cmd.Name] = true
+			fmt.Fprintf(&b, "  %s — %s", cmd.Name, firstSentence(cmd.Description))
+			if len(cmd.Params) > 0 {
+				b.WriteString(" (args: " + jsonRepr(cmd.Params) + ")")
+			}
+			b.WriteByte('\n')
+		}
+		system += "\n\nCAPABILITIES YOU CAN RUN — call the run tool with {\"name\", \"args\"}:\n" + b.String()
+	}
+	res := &brainResult{}
+	seen := map[string]bool{}
+	final, err := c.toolLoop(system, conversationTurns(user), tools,
+		func(name, args string) (string, bool) {
+			switch name {
+			case "bash":
+				return c.handleBash(args), false
+			case "done":
+				var a struct {
+					Summary string `json:"summary"`
+				}
+				json.Unmarshal([]byte(args), &a)
+				return a.Summary, true
+			case "declare":
+				var d map[string]any
+				if json.Unmarshal([]byte(args), &d) != nil || d["name"] == nil {
+					return "error: declare needs {name, payload}", false
+				}
+				if seen[args] {
+					return "declaration already recorded", false
+				}
+				seen[args] = true
+				res.Declarations = append(res.Declarations, d)
+				return "declaration recorded — it compiles when you finish", false
+			case "run":
+				var a struct {
+					Name string `json:"name"`
+					Args string `json:"args"`
+				}
+				json.Unmarshal([]byte(args), &a)
+				if !known[a.Name] {
+					return fmt.Sprintf("error: no such capability %q — pick from the CAPABILITIES list", a.Name), false
+				}
+				if invoke == nil {
+					return "error: acting is disabled here", false
+				}
+				out, err := invoke(a.Name, a.Args)
+				if err != nil {
+					return "error: " + err.Error(), false
+				}
+				return out, false
+			}
+			return fmt.Sprintf("error: unknown tool %q", name), false
+		})
+	if err != nil {
+		return nil, err
+	}
+	res.Response = final
+	return res, nil
+}
+
+// conversationTurns: a JSON array of {role, content} becomes real turns;
+// anything else is a single user message.
+func conversationTurns(user string) []map[string]any {
+	if s := strings.TrimSpace(user); strings.HasPrefix(s, "[") {
+		var raw []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal([]byte(s), &raw) == nil && len(raw) > 0 {
+			turns := make([]map[string]any, 0, len(raw))
+			for _, m := range raw {
+				if m.Role == "" {
+					return []map[string]any{{"role": "user", "content": user}}
+				}
+				turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
+			}
+			return turns
+		}
+	}
+	return []map[string]any{{"role": "user", "content": user}}
+}
+
+// plantedCommands reads the command catalog from the log — latest declaration
+// per name, first-seen order. chat is excluded: the brain calling chat would
+// re-enter itself.
+func plantedCommands(home string) []commandDecl {
+	events, err := readEvents(home)
+	if err != nil {
+		return nil
+	}
+	byName := map[string]commandDecl{}
+	var order []string
+	for _, e := range events {
+		if e.Name != "command.declared" {
+			continue
+		}
+		var d commandDecl
+		if json.Unmarshal(e.Payload, &d) != nil || d.Name == "" {
+			continue
+		}
+		if _, seen := byName[d.Name]; !seen {
+			order = append(order, d.Name)
+		}
+		byName[d.Name] = d
+	}
+	var out []commandDecl
+	for _, n := range order {
+		if n != "chat" {
+			out = append(out, byName[n])
+		}
+	}
+	return out
+}
+
+// brainTools returns the brain's act power — the runnable catalog and an
+// invoker — honoring SELF_THINK_DEPTH so a brain-invoked command that itself
+// thinks can't recurse without bound.
+func brainTools(home string) ([]commandDecl, func(name, args string) (string, error)) {
+	depth := 0
+	fmt.Sscanf(os.Getenv("SELF_THINK_DEPTH"), "%d", &depth)
+	if depth >= 3 {
+		return nil, nil
+	}
+	os.Setenv("SELF_THINK_DEPTH", fmt.Sprintf("%d", depth+1))
+	invoke := func(name, args string) (string, error) {
+		var argv []string
+		if strings.TrimSpace(args) != "" {
+			argv = []string{args}
+		}
+		evs, err := runCommand(home, name, argv)
+		if err != nil {
+			return "", err
+		}
+		names := make([]string, len(evs))
+		for i, e := range evs {
+			names[i] = e.Name
+		}
+		return fmt.Sprintf("ran %q — appended %d event(s): %s", name, len(evs), strings.Join(names, ", ")), nil
+	}
+	return plantedCommands(home), invoke
+}
+
+// applyDeclarations appends what the brain declared and runs it through the
+// strange loop.
+func applyDeclarations(home string, res *brainResult) {
+	var evs []Event
+	for _, d := range res.Declarations {
+		name, _ := d["name"].(string)
+		payload, _ := json.Marshal(d["payload"])
+		if name == "" || string(payload) == "null" {
+			continue
+		}
+		e := newEvent(name, payload)
+		if err := appendEvent(home, &e); err != nil {
+			fmt.Fprintf(os.Stderr, "self: append declaration: %s\n", err)
+			return
+		}
+		evs = append(evs, e)
+	}
+	if len(evs) > 0 {
+		n := compileDeclarations(newLLM(home), home, evs)
+		fmt.Fprintf(os.Stderr, "self: grew %d capabilit(ies)\n", n)
+		renderKernelHTML(home)
+		refreshProjections(home)
+	}
+}
+
+// ─────────────────────────────── kernel.html ────────────────────────────────
+
+// renderKernelHTML writes the kernel's self-description — capabilities, paths,
+// the pipe contract — to site/kernel.html: the page a human lands on and the
+// first context a brain reads. Like everything in site/, it is a replay of the log.
+func renderKernelHTML(home string) {
+	events, err := readEvents(home)
+	if err != nil {
+		return
+	}
+	commands := map[string]commandDecl{}
+	projectors := map[string]projectorDecl{}
+	var cmdOrder, projOrder []string
+	for _, e := range events {
+		switch e.Name {
+		case "command.declared":
+			var d commandDecl
+			if json.Unmarshal(e.Payload, &d) == nil && d.Name != "" {
+				if _, ok := commands[d.Name]; !ok {
+					cmdOrder = append(cmdOrder, d.Name)
+				}
+				commands[d.Name] = d
+			}
+		case "projector.declared":
+			var d projectorDecl
+			if json.Unmarshal(e.Payload, &d) == nil && d.Name != "" {
+				if _, ok := projectors[d.Name]; !ok {
+					projOrder = append(projOrder, d.Name)
+				}
+				projectors[d.Name] = d
 			}
 		}
 	}
 
+	esc := html.EscapeString
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>self</title></head><body>\n")
+	b.WriteString("<h1>self</h1>\n")
+	b.WriteString("<p class=\"muted\">a local-first, self-growing capability system</p>\n")
+	b.WriteString("<p>One append-only event log is my only truth. Everything here — my capabilities, my projections, this page — is a pure replay of that log, and you and my brain read exactly the same thing. Nothing is hidden: every path below is a plain file.</p>\n")
+	b.WriteString("<h2>you are my brain</h2>\n<p>If you are the LLM reading this as context: <code>events.jsonl</code> is the only source of truth; <code>site/*.html</code> is your memory. You have three powers — <strong>read</strong> (explore the garden), <strong>act</strong> (run any capability below), and <strong>grow</strong> (declare a new capability; the kernel compiles it on the spot). The log is append-only, so acting is safe.</p>\n")
+
+	b.WriteString("<h2>commands</h2>\n")
+	if len(cmdOrder) == 0 {
+		b.WriteString("<p class=\"muted\">None yet — grow a seed: <code>self grow seeds/chat</code>.</p>\n")
+	}
+	for _, n := range cmdOrder {
+		d := commands[n]
+		b.WriteString("<article class=\"card\"><h3>" + esc(d.Name) + "</h3><p>" + esc(d.Description) + "</p>")
+		b.WriteString("<p class=\"muted\">produces <code>" + esc(d.Event.Name) + "</code>")
+		if len(d.Params) > 0 {
+			b.WriteString(" · args " + esc(jsonRepr(d.Params)))
+		}
+		b.WriteString(" · <code>self run " + esc(d.Name) + " …</code></p></article>\n")
+	}
+
+	b.WriteString("<h2>projections</h2>\n")
+	if len(projOrder) == 0 {
+		b.WriteString("<p class=\"muted\">None yet.</p>\n")
+	}
+	for _, n := range projOrder {
+		d := projectors[n]
+		b.WriteString("<article class=\"card\"><h3><a href=\"/" + esc(d.Name) + "\">/" + esc(d.Name) + "</a></h3><p>" + esc(d.Description) + "</p>")
+		b.WriteString("<p class=\"muted\">consumes <code>" + esc(strings.Join(d.Consumes, ", ")) + "</code></p></article>\n")
+	}
+
+	b.WriteString("<h2>where I live</h2>\n<table><tr><th>what</th><th>path</th></tr>")
+	for _, row := range [][2]string{
+		{"the only truth", filepath.Join(home, "events.jsonl")},
+		{"compiled commands", filepath.Join(home, "capabilities", "commands")},
+		{"compiled projectors", filepath.Join(home, "capabilities", "projectors")},
+		{"materialized HTML", filepath.Join(home, "site")},
+	} {
+		b.WriteString("<tr><td>" + esc(row[0]) + "</td><td><code>" + esc(row[1]) + "</code></td></tr>")
+	}
+	b.WriteString("</table>\n")
+
+	b.WriteString("<h2>the pipe contract</h2>\n<pre>" + esc(pipeContract) + "</pre>\n")
+	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole body from them.</p>\n")
+	b.WriteString("</body></html>\n")
+
+	siteDir := filepath.Join(home, "site")
+	os.MkdirAll(siteDir, 0755)
+	os.WriteFile(filepath.Join(siteDir, "kernel.html"), []byte(b.String()), 0644)
+}
+
+// ─────────────────────────────── the surface ────────────────────────────────
+
+// stylesheet is the one shared enrichment the kernel injects at serve time, so
+// projectors emit bare semantic HTML and every page is uniformly themed.
+const stylesheet = `<style>
+body{font-family:-apple-system,system-ui,sans-serif;margin:24px auto;max-width:72ch;padding:0 16px;background:#fafafa;color:#222;line-height:1.5}
+h1,h2,h3{line-height:1.2}h2{margin-top:28px;border-bottom:1px solid #ddd;padding-bottom:4px}
+.muted{color:#777}.card,article{background:#fff;border:1px solid #e0e0e0;border-radius:6px;padding:10px 14px;margin:8px 0}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:8px}
+.tag{display:inline-block;background:#e8f0fe;border-radius:3px;padding:1px 6px;font-size:12px;font-family:monospace}
+.msg{margin:6px 0}.msg .who{font-weight:bold;margin-right:6px}.num{text-align:right;font-variant-numeric:tabular-nums}
+table{border-collapse:collapse;width:100%}th{background:#4a5568;color:#fff;text-align:left}th,td{border:1px solid #ddd;padding:5px 9px;font-size:14px}
+pre{background:#f4f4f4;border:1px solid #e0e0e0;border-radius:4px;padding:10px;overflow-x:auto;font-size:13px}
+code{font-family:monospace;background:#f0f0f0;border-radius:3px;padding:1px 4px}
+form{margin:8px 0}input,textarea{font:inherit;padding:5px 8px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box;margin:2px 0}
+button{font:inherit;padding:5px 14px;border:1px solid #2563eb;border-radius:4px;background:#2563eb;color:#fff;cursor:pointer}
+button.secondary{background:#fff;color:#2563eb}button.danger{border-color:#dc2626;background:#dc2626}
+</style>`
+
+func injectStyle(page []byte) []byte {
+	if i := bytes.Index(page, []byte("<head>")); i >= 0 {
+		i += len("<head>")
+		return append(page[:i:i], append([]byte(stylesheet), page[i:]...)...)
+	}
+	return append([]byte(stylesheet), page...)
+}
+
+// cmdServe is the live garden: every page re-rendered against current events,
+// every affordance a plain HTML form — zero JavaScript.
+func cmdServe(home, port string) error {
+	if port == "" {
+		port = "7777"
+	}
+	renderKernelHTML(home)
+	refreshProjections(home)
+
 	mux := http.NewServeMux()
 
-	// / serves a live view. "/" and "/kernel" re-render the kernel wiring; any
-	// path matching a planted projector re-runs it against current events so
-	// the page is never stale. Everything else falls back to static site/ files.
-	// HTML responses get a small auto-reload script injected: the browser polls
-	// /version and reloads when the event log grows, so projections update hands-
-	// free as new events land.
+	// GET /            → kernel.html (my identity), or a welcome projection if grown
+	// GET /<name>      → that projection, re-run live
+	// anything else    → static site/ files
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimSuffix(strings.Trim(r.URL.Path, "/"), ".html")
-
-		// The root is the welcome page — the human landing. The dev wiring view
-		// lives at /kernel. Fall back to it if welcome isn't installed (an older
-		// home that predates onboarding).
 		if name == "" {
-			if _, err := os.Stat(filepath.Join(home, "capabilities", "projectors", "welcome")); err == nil {
+			if p, _ := scriptPath(home, "projector", "welcome"); fileExists(p) {
 				name = "welcome"
 			} else {
 				name = "kernel"
 			}
 		}
-
 		if name == "kernel" {
-			if err := kernel.RenderHTML(home); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			data, err := os.ReadFile(filepath.Join(home, "site", "kernel.html"))
+			renderKernelHTML(home)
+			page, err := os.ReadFile(filepath.Join(home, "site", "kernel.html"))
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				http.Error(w, err.Error(), 500)
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(injectNav(home, injectAutoReload(data)))
+			w.Write(injectStyle(page))
 			return
 		}
-
-		if _, err := os.Stat(filepath.Join(home, "capabilities", "projectors", name)); err == nil {
-			html, err := projectHTML(home, name)
+		if p, _ := scriptPath(home, "projector", name); fileExists(p) {
+			page, err := runProjection(home, name)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				http.Error(w, err.Error(), 500)
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(enrich(home, html))
+			w.Write(injectStyle(page))
 			return
 		}
-
 		http.FileServer(http.Dir(filepath.Join(home, "site"))).ServeHTTP(w, r)
 	})
 
-	// /version — a cheap change token: the byte size of the append-only event
-	// log. Stat is O(1) and catches appends from any writer (including other
-	// processes), where reading + parsing the whole log for the last seq is
-	// O(n) on every 1s poll. The injected auto-reload script polls this.
-	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
-		var size int64
-		if fi, err := os.Stat(filepath.Join(home, "events.jsonl")); err == nil {
-			size = fi.Size()
-		}
-		fmt.Fprintf(w, "%d", size)
-	})
-
-	// /live/<projector> — re-run projector against current events.jsonl.
-	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) {
-		name := strings.TrimPrefix(r.URL.Path, "/live/")
-		if name == "" {
-			http.Error(w, "projector name required (e.g. /live/note)", http.StatusBadRequest)
-			return
-		}
-		scriptPath := filepath.Join(home, "capabilities", "projectors", name)
-		if _, err := os.Stat(scriptPath); err != nil {
-			http.Error(w, "projector "+name+" not found", http.StatusNotFound)
-			return
-		}
-		st := store.Open(home)
-		events, err := st.Read()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		c := exec.Command(scriptPath)
-		stdin, err := c.StdinPipe()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		c.Stdout = w
-		c.Stderr = os.Stderr
-		if err := c.Start(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		feedEvents(stdin, events)
-		c.Wait()
-	})
-
-	// /events — raw events.jsonl.
+	// GET /events → the raw log
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, filepath.Join(home, "events.jsonl"))
+		http.ServeFile(w, r, logPath(home))
 	})
 
-	// POST /run/<command> — run a capability from the browser. The raw request
-	// body is passed as the command's single argument. This makes projections a
-	// read+write surface: a projector can emit a form that POSTs here, the
-	// command runs through the normal pipeline (append events, strange-loop
-	// compile, auto-run projectors), and the auto-reload script then refreshes
-	// the page to show the new events.
+	// POST /run/<command> → run a capability from the browser. A form's field
+	// values become positional args in document order (names are for humans;
+	// order is the contract); then Post/Redirect/Get back to the page.
 	mux.HandleFunc("/run/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
 			return
 		}
 		command := strings.TrimPrefix(r.URL.Path, "/run/")
-		if command == "" {
-			http.Error(w, "command required (e.g. /run/chat)", http.StatusBadRequest)
-			return
-		}
 		body, _ := io.ReadAll(r.Body)
-		// A plain HTML <form> posts application/x-www-form-urlencoded: each
-		// field's value becomes a positional command argument, in submission
-		// order (which the projector author controls). Any other body (e.g. a
-		// raw fetch) is passed as a single argument. Field names are for humans;
-		// position is the contract.
 		var args []string
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
 			for _, pair := range strings.Split(string(body), "&") {
@@ -1411,806 +1137,148 @@ func cmdServe(home string, port string) error {
 		} else if msg := strings.TrimSpace(string(body)); msg != "" {
 			args = []string{msg}
 		}
-		if err := cmdRun(home, command, args); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if _, err := runCommand(home, command, args); err != nil {
+			http.Error(w, err.Error(), 500)
 			return
 		}
-		// Post/Redirect/Get: send a browser form back to the page it came from
-		// so a full reload shows the new state. Zero JavaScript required.
 		if ref := r.Header.Get("Referer"); ref != "" {
 			http.Redirect(w, r, ref, http.StatusSeeOther)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprint(w, "ok")
 	})
 
-	// POST /teach — the human-is-the-compiler route. The operator authors a
-	// capability's script by hand (in the interview page) and the kernel signs +
-	// installs it. This is a privileged KERNEL route, distinct from /run: code
-	// enters only through a path the person at the keyboard drives, never through
-	// a command-emitted event, so the foreign-code line (Slices 4–6) stays drawn.
-	mux.HandleFunc("/teach", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST required", http.StatusMethodNotAllowed)
-			return
-		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		var consumes []string
-		for _, c := range strings.Split(r.FormValue("consumes"), ",") {
-			if c = strings.TrimSpace(c); c != "" {
-				consumes = append(consumes, c)
-			}
-		}
-		var examples []seed.Example
-		if ex := strings.TrimSpace(r.FormValue("examples")); ex != "" {
-			if err := json.Unmarshal([]byte(ex), &examples); err != nil {
-				http.Error(w, "examples must be a JSON array: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		if err := kernel.Teach(home, r.FormValue("kind"), r.FormValue("name"), consumes, r.FormValue("script"), r.FormValue("description"), r.FormValue("author"), examples); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		// If this answered a parked question, close it.
-		if id := strings.TrimSpace(r.FormValue("id")); id != "" {
-			ans, _ := json.Marshal(map[string]string{"id": id})
-			e := event.New("brain.answered", ans)
-			_ = store.Open(home).Append(&e)
-		}
-		if ref := r.Header.Get("Referer"); ref != "" {
-			http.Redirect(w, r, ref, http.StatusSeeOther)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "taught")
-	})
-
-	addr := ":" + port
-	fmt.Fprintf(os.Stderr, "self: the living garden is at http://localhost:%s\n", port)
-	fmt.Fprintf(os.Stderr, "  /              my identity — capabilities, paths, wiring\n")
+	fmt.Fprintf(os.Stderr, "self: the living garden is at http://localhost:%s (home %s)\n", port, home)
+	fmt.Fprintf(os.Stderr, "  /              my identity — capabilities, paths, contract\n")
 	fmt.Fprintf(os.Stderr, "  /<projection>  a projection, re-rendered live\n")
 	fmt.Fprintf(os.Stderr, "  /run/<command> run a capability (plain HTML forms)\n")
 	fmt.Fprintf(os.Stderr, "  /events        the raw event log\n")
-	fmt.Fprintf(os.Stderr, "self: home is %s (run 'self where' for all paths)\n", home)
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(":"+port, mux)
 }
 
-// cmdHistory shows recent events newest-last. Human-readable by default
-// (seq, time, name, a short payload hint); --raw dumps the JSONL; -n N bounds
-// the count (default 20), --all shows everything.
-func cmdHistory(home string, args []string) error {
-	n := 20
-	raw := false
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--raw":
-			raw = true
-		case "--all":
-			n = -1
-		case "-n":
-			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%d", &n)
-				i++
-			}
-		}
-	}
-	events, err := store.Open(home).Read()
+// ────────────────────────────── the commands ────────────────────────────────
+
+// cmdGrow grows a seed: a directory with intent.md (the genotype — prose
+// intent, not a parts-list) and optionally seed.jsonl (initial content events,
+// the maternal deposit). The orchestrator reads the intent, explores the
+// garden, and declares the decomposition that realizes it here; each piece is
+// then compiled with the whole intent woven in. Same intent, different garden,
+// different decomposition.
+func cmdGrow(home, seedDir string) error {
+	raw, err := os.ReadFile(filepath.Join(seedDir, "intent.md"))
 	if err != nil {
+		return fmt.Errorf("a seed is a directory with an intent.md: %w", err)
+	}
+	intent := strings.TrimSpace(string(raw))
+	name := filepath.Base(seedDir)
+
+	payload, _ := json.Marshal(map[string]any{"name": name, "intent": intent})
+	ie := newEvent("intent.declared", payload)
+	if err := appendEvent(home, &ie); err != nil {
 		return err
 	}
-	if len(events) == 0 {
-		fmt.Println("(no events yet — run 'self init')")
-		return nil
+
+	c := newLLM(home)
+	c.intent = intent
+	fmt.Fprintf(os.Stderr, "self: orchestrating %q from intent…\n", name)
+	res, err := c.agent(orchestratorSystemPrompt,
+		"Grow the capabilities that realize this product, then call done with a one-line summary.\n\n--- INTENT ---\n"+intent+"\n--- END INTENT ---", nil, nil)
+	if err != nil {
+		return fmt.Errorf("orchestrate %q: %w (growing needs a brain)", name, err)
 	}
-	start := 0
-	if n >= 0 && len(events) > n {
-		start = len(events) - n
+	if len(res.Declarations) == 0 {
+		return fmt.Errorf("the orchestrator declared nothing for %q", name)
 	}
-	for _, e := range events[start:] {
-		if raw {
-			line, _ := json.Marshal(e)
-			fmt.Println(string(line))
+
+	var declEvents []Event
+	for _, d := range res.Declarations {
+		n, _ := d["name"].(string)
+		p, _ := json.Marshal(d["payload"])
+		if (n != "command.declared" && n != "projector.declared") || string(p) == "null" {
 			continue
 		}
-		fmt.Printf("%4d  %s  %-20s  %s\n", e.Seq, e.OccurredAt.Format("15:04:05"), e.Name, eventHint(e))
-	}
-	return nil
-}
-
-// eventHint pulls a short, human-friendly summary from common payload shapes so
-// 'self history' reads like a story rather than a wall of JSON.
-func eventHint(e event.Event) string {
-	var p map[string]any
-	if json.Unmarshal(e.Payload, &p) != nil {
-		return ""
-	}
-	for _, k := range []string{"title", "content", "text", "meal", "item", "issue", "what", "response", "message", "seed", "name", "stage"} {
-		if v, ok := p[k].(string); ok && v != "" {
-			return truncateLine(v, 64)
-		}
-	}
-	return ""
-}
-
-func truncateLine(s string, n int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > n {
-		return s[:n] + "…"
-	}
-	return s
-}
-
-// cmdMap prints a one-glance overview of the whole garden: ways to act
-// (commands), ways to see (projections + their live URLs), and recent activity.
-// As capabilities grow, this is the human's entry point — the navigable map the
-// scaling story needs — and it's a pure read of the log, no kernel, no brain.
-func cmdMap(home string) error {
-	events, err := store.Open(home).Read()
-	if err != nil {
-		return err
-	}
-	if len(events) == 0 {
-		fmt.Println("(empty garden — run 'self init')")
-		return nil
-	}
-
-	type decl struct {
-		desc  string
-		order int
-	}
-	cmds := map[string]decl{}
-	projs := map[string]decl{}
-	noise := map[string]bool{
-		event.ScriptCompiled: true, event.ScriptVerified: true,
-		event.CommandDeclared: true, event.ProjectorDeclared: true,
-		event.SeedPlanted: true, event.KernelInitialized: true,
-		event.RestoreRequested: true, "self.heartbeat": true,
-	}
-	var born string
-	var recent []event.Event
-	for i, e := range events {
-		switch e.Name {
-		case event.KernelInitialized:
-			if born == "" {
-				born = e.OccurredAt.Format("2006-01-02 15:04")
-			}
-		case event.CommandDeclared:
-			var c seed.Command
-			if json.Unmarshal(e.Payload, &c) == nil && c.Name != "" {
-				cmds[c.Name] = decl{firstSentence(c.Description), i}
-			}
-		case event.ProjectorDeclared:
-			var p seed.ProjectorDecl
-			if json.Unmarshal(e.Payload, &p) == nil && p.Name != "" {
-				projs[p.Name] = decl{firstSentence(p.Description), i}
-			}
-		}
-		if !noise[e.Name] {
-			recent = append(recent, e)
-		}
-	}
-
-	fmt.Printf("self — a garden born %s, %d events\n\n", born, len(events))
-
-	fmt.Printf("ways to act (%d commands):\n", len(cmds))
-	for _, name := range sortedByName(cmds) {
-		fmt.Printf("  self run %-10s %s\n", name, cmds[name].desc)
-	}
-	fmt.Printf("\nways to see (%d projections):\n", len(projs))
-	for _, name := range sortedByName(projs) {
-		fmt.Printf("  /%-12s %s\n", name, projs[name].desc)
-	}
-
-	if len(recent) > 0 {
-		fmt.Printf("\nlately:\n")
-		start := 0
-		if len(recent) > 6 {
-			start = len(recent) - 6
-		}
-		for _, e := range recent[start:] {
-			hint := eventHint(e)
-			fmt.Printf("  %s  %-16s %s\n", e.OccurredAt.Format("15:04"), e.Name, hint)
-		}
-	}
-	fmt.Printf("\nbrowse it live with 'self' (web), or 'self ls' / 'self where' for paths.\n")
-	return nil
-}
-
-// firstSentence trims a description to its first sentence (or 80 chars) for a
-// compact one-line map entry.
-func firstSentence(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '.'); i > 0 && i < 90 {
-		return s[:i]
-	}
-	return truncateLine(s, 80)
-}
-
-func sortedByName[T any](m map[string]T) []string {
-	names := make([]string, 0, len(m))
-	for n := range m {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// cmdLs lists what exists. With no argument it prints an overview; with
-// commands/projectors it prints names with their full file paths (so the
-// filesystem is obvious); with seeds it lists what's been grown.
-func cmdLs(home string, args []string) error {
-	what := ""
-	if len(args) > 0 {
-		what = args[0]
-	}
-	switch what {
-	case "commands":
-		return listDir(filepath.Join(home, "capabilities", "commands"), "command")
-	case "projectors":
-		return listDir(filepath.Join(home, "capabilities", "projectors"), "projection")
-	case "seeds":
-		return listSeeds(home)
-	case "":
-		cmds := dirEntries(filepath.Join(home, "capabilities", "commands"))
-		projs := dirEntries(filepath.Join(home, "capabilities", "projectors"))
-		fmt.Printf("self at %s\n\n", home)
-		fmt.Printf("commands (%d):    %s\n", len(cmds), strings.Join(cmds, ", "))
-		fmt.Printf("projections (%d): %s\n", len(projs), strings.Join(projs, ", "))
-		fmt.Println("\nmore: self ls commands | self ls projectors | self ls seeds | self where")
-		return nil
-	default:
-		return fmt.Errorf("unknown list %q — try: commands, projectors, seeds (or just 'self ls')", what)
-	}
-}
-
-func dirEntries(dir string) []string {
-	entries, _ := os.ReadDir(dir)
-	var names []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			names = append(names, e.Name())
-		}
-	}
-	return names
-}
-
-func listDir(dir, label string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) == 0 {
-		fmt.Printf("(no %ss yet — grow a seed: self grow <seed>)\n", label)
-		return nil
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		fmt.Printf("%-22s %s\n", e.Name(), filepath.Join(dir, e.Name()))
-	}
-	return nil
-}
-
-func listSeeds(home string) error {
-	events, err := store.Open(home).Read()
-	if err != nil {
-		return fmt.Errorf("no self home yet (run 'self init')")
-	}
-	found := false
-	for _, e := range events {
-		if e.Name != event.SeedPlanted {
-			continue
-		}
-		var rec struct {
-			Seed           string   `json:"seed"`
-			Commands       []string `json:"commands"`
-			Projectors     []string `json:"projectors"`
-			EventsReplayed int      `json:"events_replayed"`
-		}
-		json.Unmarshal(e.Payload, &rec)
-		parts := []string{}
-		if len(rec.Commands) > 0 {
-			parts = append(parts, "commands: "+strings.Join(rec.Commands, ", "))
-		}
-		if len(rec.Projectors) > 0 {
-			parts = append(parts, "projections: "+strings.Join(rec.Projectors, ", "))
-		}
-		parts = append(parts, fmt.Sprintf("events replayed: %d", rec.EventsReplayed))
-		fmt.Printf("%s — %s (seq %d)\n", rec.Seed, strings.Join(parts, ", "), e.Seq)
-		found = true
-	}
-	if !found {
-		fmt.Println("(no seeds grown yet — self grow <seed>)")
-	}
-	return nil
-}
-
-// cmdWhere prints SELF_HOME and every important path, marking what exists, so
-// the filesystem never feels hidden.
-func cmdWhere(home string) error {
-	fmt.Printf("SELF_HOME=%s\n\n", home)
-	for _, p := range []struct{ label, path string }{
-		{"event log", filepath.Join(home, "events.jsonl")},
-		{"signing key", filepath.Join(home, ".secret")},
-		{"commands", filepath.Join(home, "capabilities", "commands")},
-		{"projections", filepath.Join(home, "capabilities", "projectors")},
-		{"site (HTML)", filepath.Join(home, "site")},
-		{"identity page", filepath.Join(home, "site", "kernel.html")},
-	} {
-		mark := "—"
-		if _, err := os.Stat(p.path); err == nil {
-			mark = "✓"
-		}
-		fmt.Printf("  %s  %-14s %s\n", mark, p.label, p.path)
-	}
-	fmt.Println("\neverything here is plain files — read, grep, and inspect freely.")
-	return nil
-}
-
-// cmdWhich prints the full path to a command or projection by name.
-func cmdWhich(home string, name string) error {
-	found := false
-	for _, kind := range []struct{ dir, label string }{
-		{"commands", "command"},
-		{"projectors", "projection"},
-	} {
-		p := filepath.Join(home, "capabilities", kind.dir, name)
-		if _, err := os.Stat(p); err == nil {
-			fmt.Printf("%-11s %s\n", kind.label, p)
-			found = true
-		}
-	}
-	if !found {
-		return fmt.Errorf("%q is neither a command nor a projection — try 'self ls'", name)
-	}
-	return nil
-}
-
-// rehydrateFromLog rebuilds the on-disk body — capabilities/ and the rendered
-// site/ — from the event log's signed receipts, so the working tree is a pure
-// materialization of the one truth. No LLM, no network; safe to run repeatedly
-// (it reinstalls identical bytes). This is what makes events.jsonl (+ the home's
-// .secret, which verifies the receipts) a sufficient artifact: drop those two
-// files into a fresh home and the whole body comes back.
-func rehydrateFromLog(home string) (commands, projectors []string, err error) {
-	commands, projectors, err = kernel.Rehydrate(home)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(commands)+len(projectors) == 0 {
-		return commands, projectors, nil // uninitialized, or no signed receipts to install
-	}
-	if rErr := kernel.RenderHTML(home); rErr != nil {
-		return commands, projectors, rErr
-	}
-	for _, name := range projectors {
-		if rErr := runProjectorToSite(home, name); rErr != nil {
-			fmt.Fprintf(os.Stderr, "self: rehydrate render %q: %s\n", name, rErr)
-		}
-	}
-	return commands, projectors, nil
-}
-
-// cmdRehydrate explicitly rebuilds the body from the log and reports what it
-// reinstated. Bare `self` does this automatically before serving.
-func cmdRehydrate(home string) error {
-	commands, projectors, err := rehydrateFromLog(home)
-	if err != nil {
-		return err
-	}
-	if len(commands)+len(projectors) == 0 {
-		fmt.Println("rehydrate: nothing signed to reinstall.")
-		fmt.Printf("  I looked in SELF_HOME=%s\n", home)
-		fmt.Println("  Either this home is uninitialized, or its .secret did not sign the log's")
-		fmt.Println("  receipts (a fresh key can't verify another home's bytes). Point SELF_HOME")
-		fmt.Println("  at a home that holds BOTH events.jsonl and the .secret that signed it:")
-		fmt.Println("    SELF_HOME=/path/to/home self rehydrate")
-		return nil
-	}
-	fmt.Printf("rehydrated from the log: %d command(s), %d projection(s) reinstalled and rendered\n",
-		len(commands), len(projectors))
-	fmt.Printf("  commands:    %s\n", strings.Join(commands, ", "))
-	fmt.Printf("  projectors:  %s\n", strings.Join(projectors, ", "))
-	return nil
-}
-
-// cmdSelfTest re-runs every installed capability's declared examples against the
-// binary on disk and reports pass/fail/untested per capability, exiting nonzero
-// if any fail. It is the standing regression gate — the projection/output is the
-// oracle — that lets the system (and the autonomous heartbeat loop) prove a
-// change didn't break a contract before trusting it.
-func cmdSelfTest(home string) error {
-	results, err := kernel.SelfTest(home)
-	if err != nil {
-		return err
-	}
-	if len(results) == 0 {
-		fmt.Println("selftest: no installed capabilities to test")
-		return nil
-	}
-	passed, failed, untested := 0, 0, 0
-	for _, r := range results {
-		switch {
-		case !r.HasExamples:
-			untested++
-			fmt.Printf("  ?  %-14s (%s)  no examples — untested\n", r.Name, r.Kind)
-		case r.Result.OK():
-			passed++
-			fmt.Printf("  ✓  %-14s (%s)  %s\n", r.Name, r.Kind, r.Result.Summary())
-		default:
-			failed++
-			fmt.Printf("  ✗  %-14s (%s)  %s\n", r.Name, r.Kind, r.Result.Summary())
-			for _, f := range r.Result.Failures {
-				fmt.Printf("        %s\n", f)
-			}
-		}
-	}
-	tested := passed + failed
-	pct := 0
-	if len(results) > 0 {
-		pct = tested * 100 / len(results)
-	}
-	fmt.Printf("selftest: %d passed, %d failed, %d untested  —  %d/%d capabilities gated (%d%% coverage)\n",
-		passed, failed, untested, tested, len(results), pct)
-	if untested > 0 {
-		fmt.Printf("  note: %d capabilit(ies) ship no examples, so 0 failed does NOT mean they all work.\n", untested)
-	}
-	if failed > 0 {
-		return fmt.Errorf("%d capabilit(ies) failed selftest", failed)
-	}
-	return nil
-}
-
-// cmdIdentity prints the home's public verification key — its shareable
-// identity. Other nodes use it to check this home's script.verified attestations
-// without re-running anything and without any shared secret.
-func cmdIdentity(home string) error {
-	pub, err := kernel.PublicIdentity(home)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("verification identity (ed25519 public key):\n%s\n", pub)
-	fmt.Printf("\nShare this so others can verify your script.verified attestations.\n")
-	fmt.Printf("Your private key stays in %s/.identity and never leaves.\n", home)
-	return nil
-}
-
-// cmdVerifyAttestation reads a script.verified event (or its bare payload) as
-// JSON on stdin and reports whether its ed25519 signature is valid — the
-// receiver-side check that turns a foreign node's verification claim from
-// "trust me" into "the math agrees." It needs no secret and no access to the
-// signer; trusting WHO the key belongs to is a separate, human decision.
-func cmdVerifyAttestation(home string) error {
-	data, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return err
-	}
-	var probe map[string]json.RawMessage
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("input is not JSON: %w", err)
-	}
-	payload := json.RawMessage(data)
-	if p, ok := probe["payload"]; ok {
-		payload = p // a full event was piped in; check its payload
-	}
-
-	att, ok, err := kernel.VerifyAttestation(payload)
-	if err != nil {
-		return fmt.Errorf("not a verifiable attestation: %w", err)
-	}
-	if !ok {
-		fmt.Println("✗ INVALID — signature does not match (tampered, or wrong key)")
-		return fmt.Errorf("attestation failed verification")
-	}
-	fmt.Printf("✓ VALID signature\n")
-	fmt.Printf("  signer pubkey:   %s\n", att.PubKey)
-	fmt.Printf("  attests:         %q (%s) passed=%v (%d/%d examples)\n",
-		att.Name, att.Type, att.Passed, att.PassedCount, att.Ran)
-	fmt.Printf("  of script sha256:   %s\n", att.ScriptSHA256)
-	fmt.Printf("  vs examples sha256: %s\n", att.ExamplesSHA256)
-	fmt.Printf("\nThe signature is sound. Whether to trust this signer is your call;\n")
-	fmt.Printf("recompute the script/examples hashes against the bytes you hold to\n")
-	fmt.Printf("confirm the claim is about the same capability.\n")
-	return nil
-}
-
-// cmdHeartbeat runs one self-improvement cycle: the brain reflects on the
-// garden, may act (call capabilities) and grow (declare new ones). Declarations
-// it produces are applied through the strange loop, so the cycle can leave self
-// with a genuinely new capability.
-func cmdHeartbeat(home string) error {
-	loadBrainConfig(home)
-
-	compiler := seed.NewCompiler(home)
-	if !compiler.Available() {
-		return fmt.Errorf("heartbeat needs the brain (an LLM) — set SELF_LLM_* or run a local llama-server")
-	}
-	st := store.Open(home)
-
-	// Read the log before this beat so we can hand the brain, by default, the
-	// events since its last heartbeat — its context for "what changed in the
-	// garden, and can I help?" — instead of making it explore from scratch. This
-	// is the first step toward a brain that reacts to activity: a heartbeat that
-	// already knows what happened since it last looked.
-	prior, _ := st.Read()
-
-	hb := event.New("self.heartbeat", json.RawMessage(`{}`))
-	if err := st.Append(&hb); err != nil {
-		return err
-	}
-
-	const basePrompt = `This is a self-improvement heartbeat. Explore your garden — your capabilities, recent events, and projections — and choose ONE small, high-value improvement: a missing capability, a projection that would make your shared state clearer, or a fix for something that has drifted. If it is warranted, declare it (command.declared / projector.declared) so it compiles into a real capability. Adapt to what already exists rather than duplicating it. If nothing is worth changing right now, say so plainly and declare nothing. Keep it minimal.`
-	prompt := basePrompt + heartbeatContext(prior)
-
-	commands, invoke := brainTools(home)
-	result, err := compiler.CallBrain(prompt, commands, invoke)
-	if err != nil {
-		return err
-	}
-
-	// Apply any declarations the brain produced, through the strange loop.
-	applyDeclarations(home, result)
-	fmt.Println(result.Response)
-	return nil
-}
-
-// sinceLastHeartbeat returns the events strictly after the most recent
-// self.heartbeat. With no prior heartbeat (the first beat) it returns them all —
-// the whole garden is new — and heartbeatContext caps the volume.
-func sinceLastHeartbeat(events []event.Event) []event.Event {
-	last := -1
-	for i, e := range events {
-		if e.Name == "self.heartbeat" {
-			last = i
-		}
-	}
-	return events[last+1:]
-}
-
-// heartbeatContext formats the activity since the last heartbeat into a concise
-// block for the brain's prompt — name + a truncated payload per event, so the
-// brain sees what changed without re-exploring. Kernel bookkeeping receipts
-// (script.compiled / script.verified) are skipped: they are derived, not
-// "actions to respond to." Empty string when nothing of note happened (so a
-// quiet beat stays quiet). Capped so a busy stretch can't blow up the prompt.
-// meaningfulEvents drops kernel bookkeeping receipts (script.compiled /
-// script.verified) — derived events, not "actions to respond to."
-func meaningfulEvents(events []event.Event) []event.Event {
-	var acts []event.Event
-	for _, e := range events {
-		if e.Name == event.ScriptCompiled || e.Name == event.ScriptVerified {
-			continue
-		}
-		acts = append(acts, e)
-	}
-	return acts
-}
-
-// formatEventContext renders a capped, concise block of events for a brain
-// prompt (name + truncated payload per event). Returns "" when there's nothing.
-// Shared by the heartbeat (events since last beat) and the watcher (events since
-// last reaction).
-func formatEventContext(acts []event.Event, intro string) string {
-	if len(acts) == 0 {
-		return ""
-	}
-	const capN = 40
-	omitted := 0
-	if len(acts) > capN {
-		omitted = len(acts) - capN
-		acts = acts[len(acts)-capN:]
-	}
-	var b strings.Builder
-	b.WriteString(intro)
-	if omitted > 0 {
-		fmt.Fprintf(&b, "  (… %d earlier events omitted …)\n", omitted)
-	}
-	for _, e := range acts {
-		fmt.Fprintf(&b, "  seq %d  %s  %s\n", e.Seq, e.Name,
-			truncateLine(strings.TrimSpace(string(e.Payload)), 140))
-	}
-	return b.String()
-}
-
-func heartbeatContext(events []event.Event) string {
-	acts := meaningfulEvents(sinceLastHeartbeat(events))
-	body := formatEventContext(acts,
-		"\n\nSince your last heartbeat, these things happened in the garden — your context for what changed and whether you can help:\n")
-	if body == "" {
-		return ""
-	}
-	return body + "\nResponding to what changed is welcome, but optional — if nothing here warrants action, say so and declare nothing."
-}
-
-// applyDeclarations appends any declarations the brain produced and runs them
-// through the strange loop (compile). Shared by heartbeat and watch.
-func applyDeclarations(home string, result *seed.BrainResult) {
-	st := store.Open(home)
-	var declEvents []event.Event
-	for _, d := range result.Declarations {
-		name, _ := d["name"].(string)
-		payload, _ := json.Marshal(d["payload"])
-		if name == "" || len(payload) == 0 || string(payload) == "null" {
-			continue
-		}
-		e := event.New(name, payload)
-		if err := st.Append(&e); err != nil {
-			fmt.Fprintf(os.Stderr, "self: append declaration: %s\n", err)
-			return
+		e := newEvent(n, p)
+		if err := appendEvent(home, &e); err != nil {
+			return err
 		}
 		declEvents = append(declEvents, e)
 	}
-	if len(declEvents) > 0 {
-		cmds, projs, cErr := kernel.CompileDeclarations(home, declEvents)
-		if cErr != nil {
-			fmt.Fprintf(os.Stderr, "self: compile failed: %s\n", cErr)
-		} else {
-			fmt.Fprintf(os.Stderr, "self: grew %d command(s), %d projection(s)\n", len(cmds), len(projs))
+	grown := compileDeclarations(c, home, declEvents)
+
+	// The maternal deposit: initial content laid once, so the surface has
+	// something to render from the first moment.
+	if raw, err := os.ReadFile(filepath.Join(seedDir, "seed.jsonl")); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			if line = strings.TrimSpace(line); line == "" {
+				continue
+			}
+			var e Event
+			if err := json.Unmarshal([]byte(line), &e); err != nil {
+				return fmt.Errorf("parse seed.jsonl: %w", err)
+			}
+			fresh := newEvent(e.Name, e.Payload)
+			if err := appendEvent(home, &fresh); err != nil {
+				return err
+			}
 		}
 	}
+
+	rp, _ := json.Marshal(map[string]any{"seed": name, "capabilities": grown})
+	se := newEvent("seed.planted", rp)
+	if err := appendEvent(home, &se); err != nil {
+		return err
+	}
+	renderKernelHTML(home)
+	refreshProjections(home)
+	fmt.Printf("grew %q: %d capabilit(ies) from intent — %s\n", name, grown, res.Response)
+	return nil
 }
 
-const watchPrompt = `You are watching the garden as a quiet resident. New activity has appeared since you last looked (below). Consider whether you can be genuinely helpful — grow a small capability, surface something, fix a drift. Most of the time the right move is to do nothing: only act if it clearly helps. If you act, keep it minimal; if not, say so briefly and declare nothing.`
-
-// cmdWatch is the resident loop: it tails the event log and, on new activity,
-// either REACTS (hands the new events to the brain to see if it can help — the
-// reactive brain) or, with no brain configured, simply REPORTS the activity (a
-// live monitor). This is the thing a timer/cron can't be: an actually-running
-// process. The loop only ticks while it's alive — which is exactly the point we
-// found the hard way, that autonomy needs a resident process, not a scheduler
-// that fires "when idle." It guards against reacting to its own output by
-// advancing its watermark past everything that exists after each reaction.
-func cmdWatch(home string, args []string) error {
-	loadBrainConfig(home)
-
-	interval := 5 * time.Second
-	if len(args) > 0 {
-		if n, err := strconv.Atoi(args[0]); err == nil && n > 0 {
-			interval = time.Duration(n) * time.Second
-		}
-	}
-	compiler := seed.NewCompiler(home)
-	brainOn := compiler.Available()
-	st := store.Open(home)
-
-	events, err := st.Read()
+func cmdRun(home, command string, args []string) error {
+	evs, err := runCommand(home, command, args)
 	if err != nil {
 		return err
 	}
-	lastSeq := 0
-	if len(events) > 0 {
-		lastSeq = events[len(events)-1].Seq
+	for _, e := range evs {
+		fmt.Printf("appended seq %d %s\n", e.Seq, e.Name)
 	}
-	mode := "observe-only (no brain configured — reporting activity)"
-	if brainOn {
-		mode = "reactive (brain on)"
-	}
-	fmt.Fprintf(os.Stderr, "self: watching %s every %s — %s. Ctrl-C to stop.\n", home, interval, mode)
-
-	for {
-		time.Sleep(interval)
-		events, err := st.Read()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "self: watch read error: %s\n", err)
-			continue
-		}
-		var fresh []event.Event
-		for _, e := range events {
-			if e.Seq > lastSeq && e.Name != "self.heartbeat" {
-				fresh = append(fresh, e)
-			}
-		}
-		acts := meaningfulEvents(fresh)
-		tail := func() {
-			if len(events) > 0 {
-				lastSeq = events[len(events)-1].Seq
-			}
-		}
-		if len(acts) == 0 {
-			tail() // advance over pure bookkeeping so we don't rescan it
-			continue
-		}
-		if !brainOn {
-			for _, e := range acts {
-				fmt.Printf("  %s  %-16s %s\n", e.OccurredAt.Format("15:04:05"), e.Name, eventHint(e))
-			}
-			tail()
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "self: reacting to %d new event(s)…\n", len(acts))
-		ctx := formatEventContext(acts,
-			"\n\nNew activity in the garden since you last looked — quietly consider whether you can help; staying silent is fine:\n")
-		commands, invoke := brainTools(home)
-		result, bErr := compiler.CallBrain(watchPrompt+ctx, commands, invoke)
-		if bErr != nil {
-			fmt.Fprintf(os.Stderr, "self: watch brain error: %s\n", bErr)
-		} else {
-			applyDeclarations(home, result)
-			if strings.TrimSpace(result.Response) != "" {
-				fmt.Println(result.Response)
-			}
-		}
-		// Feedback guard: skip everything that now exists — including the brain's
-		// own appends — so the watcher never reacts to its own output.
-		if after, rErr := st.Read(); rErr == nil && len(after) > 0 {
-			lastSeq = after[len(after)-1].Seq
-		} else {
-			tail()
-		}
-	}
+	return nil
 }
 
-// cmdThink is the brain's call interface for capabilities — backward-compatible
-// with every garden ever grown. Its contract is unchanged: read a prompt, return
-// {response, declarations} JSON, append nothing (the caller, e.g. the `chat`
-// command, owns appending the events). What changed underneath is only the
-// plumbing: instead of linking the LLM in-process, it spawns the brain *process*
-// ($SELF_BRAIN, default `self brain`), reads the events it emits, and folds them
-// back into the same JSON shape the old `self think` produced. So an existing
-// `chat` (or `grow-spec`) keeps working untouched, while the brain is now a
-// swappable process behind the pipe.
-func cmdThink(home string, prompt string) error {
+// cmdThink asks the brain and prints {response, declarations} JSON. The brain
+// is a PROCESS the kernel pipes the log to — $SELF_BRAIN swaps in any program
+// honoring the contract (prompt as last arg, event JSONL out); the default is
+// self's own `brain` mode. think appends nothing: the caller owns that.
+func cmdThink(home, prompt string) error {
 	if prompt == "" {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return err
-		}
+		data, _ := io.ReadAll(os.Stdin)
 		prompt = strings.TrimSpace(string(data))
 	}
 	if prompt == "" {
-		return fmt.Errorf("usage: self think <prompt> (or pipe prompt on stdin)")
+		return fmt.Errorf("usage: self think <prompt> (or pipe it on stdin)")
 	}
-
 	bin, argv := brainCommand(prompt)
-	emitted, err := pipeProcess(home, bin, argv) // spawn the brain; parse its events; do NOT append
+	emitted, err := pipeProcess(home, bin, argv)
 	if err != nil {
-		return fmt.Errorf("brain: %w\n"+
-			"  No brain is reachable. You can still read and act on the body without one:\n"+
-			"    self map                    one-glance overview of the garden\n"+
-			"    self show <name> --text     read a projection as plain text\n"+
-			"    self run <cmd> --help       see a command's args; --dry-run to preview\n"+
-			"  Or give it a brain: SELF_LLM_STUB=1 (offline stub), or set SELF_LLM_URL / SELF_LLM_API_KEY", err)
+		return fmt.Errorf("brain: %w", err)
 	}
-
-	// Fold the brain process's event stream back into the legacy {response,
-	// declarations} shape: assistant chat.message(s) → response; everything else
-	// (the *.declared events) → declarations, each already a {name, payload} event.
 	var responses []string
 	declarations := []map[string]any{}
 	for _, e := range emitted {
 		if e.Name == "chat.message" {
-			var p struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			}
+			var p struct{ Role, Content string }
 			if json.Unmarshal(e.Payload, &p) == nil && p.Role == "assistant" {
 				responses = append(responses, p.Content)
 			}
 			continue
 		}
-		declarations = append(declarations, map[string]any{
-			"name":    e.Name,
-			"payload": json.RawMessage(e.Payload),
-		})
-	}
-
-	output := map[string]any{
-		"response":     strings.Join(responses, "\n"),
-		"declarations": declarations,
+		declarations = append(declarations, map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)})
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(output)
+	return enc.Encode(map[string]any{"response": strings.Join(responses, "\n"), "declarations": declarations})
 }
 
-// brainCommand resolves the brain process to spawn. $SELF_BRAIN overrides it
-// (its first word is the executable, the rest are leading args, then the prompt
-// is appended as one final argument); the default is self's own `brain` mode,
-// which wraps the in-tree LLM compiler. The prompt is always passed as a single
-// argv element so multi-word prompts survive without re-quoting.
 func brainCommand(prompt string) (string, []string) {
 	if v := strings.TrimSpace(os.Getenv("SELF_BRAIN")); v != "" {
 		parts := strings.Fields(v)
@@ -2223,266 +1291,262 @@ func brainCommand(prompt string) (string, []string) {
 	return exe, []string{"brain", prompt}
 }
 
-// cmdBrain is the *default* brain process — the one self ships, behind the same
-// stdin/stdout contract any replacement must honor. It wraps the in-tree LLM
-// compiler (CallBrain): explore the garden, optionally act by running commands,
-// optionally grow by declaring capabilities. Its whole effect is the JSONL event
-// stream it writes to stdout: the user's message and the brain's reply as
-// chat.message events, then any declarations verbatim. The kernel (cmdThink)
-// ingests that stream like any command's output. Because it is just a process,
-// it can be replaced wholesale via $SELF_BRAIN.
-func cmdBrain(home string, prompt string) error {
+// cmdBrain is the default brain process behind the same contract any
+// replacement must honor: prompt in, event JSONL out (the reply as
+// chat.message, growth as declarations). Because it is just a process, it can
+// be replaced wholesale via $SELF_BRAIN — the kernel can't tell the difference.
+func cmdBrain(home, prompt string) error {
 	if prompt == "" {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return err
-		}
+		data, _ := io.ReadAll(os.Stdin)
 		prompt = strings.TrimSpace(string(data))
 	}
 	if prompt == "" {
-		return fmt.Errorf("usage: self brain <prompt> (or pipe prompt on stdin)")
+		return fmt.Errorf("usage: self brain <prompt> (or pipe it on stdin)")
 	}
-
-	// Resolve the page-configured brain (provider/url/model from the log, token
-	// from the key file) into SELF_LLM_* — unless those are already set, so an
-	// explicit env override still wins. This is what makes the setup page drive
-	// the brain.
-	provider := loadBrainConfig(home)
-
-	// Human-in-the-loop brain: there is no LLM to call. Park the prompt as a
-	// brain.asked event the human answers later via /interview, and reply with a
-	// placeholder so the caller's chat shows the question is pending. We append
-	// brain.asked DIRECTLY here rather than emitting it on stdout, because the
-	// brain is reached through `self think`, which is a pure query (it returns the
-	// reply but appends nothing) — so the parked question must persist itself.
-	// Async by design: the "thought continues" when the answer event flows
-	// through the normal pipeline, not when this process resumes.
-	if provider == "human" {
-		ask, _ := json.Marshal(map[string]any{"id": newAskID(), "prompt": prompt})
-		e := event.New(event_BrainAsked, ask)
-		if aErr := store.Open(home).Append(&e); aErr != nil {
-			return aErr
-		}
-		return json.NewEncoder(os.Stdout).Encode(map[string]any{"name": "chat.message", "payload": map[string]any{
-			"role": "assistant", "content": "🧑‍💻 parked for the human brain — open /interview to answer",
-		}})
-	}
-
-	compiler := seed.NewCompiler(home)
 	commands, invoke := brainTools(home)
-	result, err := compiler.CallBrain(prompt, commands, invoke)
+	res, err := newLLM(home).agent(brainSystemPrompt, prompt, commands, invoke)
 	if err != nil {
 		return err
 	}
-
 	enc := json.NewEncoder(os.Stdout)
-	emit := func(name string, payload any) error {
-		return enc.Encode(map[string]any{"name": name, "payload": payload})
+	emit := func(name string, payload any) {
+		enc.Encode(map[string]any{"name": name, "payload": payload})
 	}
-	if err := emit("chat.message", map[string]any{"role": "user", "content": prompt}); err != nil {
-		return err
+	emit("chat.message", map[string]any{"role": "user", "content": prompt})
+	if strings.TrimSpace(res.Response) != "" {
+		emit("chat.message", map[string]any{"role": "assistant", "content": res.Response})
 	}
-	if strings.TrimSpace(result.Response) != "" {
-		if err := emit("chat.message", map[string]any{"role": "assistant", "content": result.Response}); err != nil {
-			return err
+	for _, d := range res.Declarations {
+		if name, _ := d["name"].(string); name != "" && d["payload"] != nil {
+			emit(name, d["payload"])
 		}
 	}
-	for _, d := range result.Declarations {
-		name, _ := d["name"].(string)
-		if name == "" || d["payload"] == nil {
+	return nil
+}
+
+// cmdHeartbeat is one self-improvement cycle: the brain reads what changed
+// since its last beat, explores, and — if warranted — declares one small
+// improvement, which compiles through the strange loop.
+func cmdHeartbeat(home string) error {
+	prior, _ := readEvents(home)
+	hb := newEvent("self.heartbeat", json.RawMessage(`{}`))
+	if err := appendEvent(home, &hb); err != nil {
+		return err
+	}
+	prompt := `This is a self-improvement heartbeat. Explore your garden — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it; if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` + heartbeatContext(prior)
+	commands, invoke := brainTools(home)
+	res, err := newLLM(home).agent(brainSystemPrompt, prompt, commands, invoke)
+	if err != nil {
+		return err
+	}
+	applyDeclarations(home, res)
+	fmt.Println(res.Response)
+	return nil
+}
+
+// heartbeatContext hands the brain the events since its last beat — capped,
+// minus kernel bookkeeping receipts — so a beat reacts to what changed instead
+// of exploring from scratch.
+func heartbeatContext(events []Event) string {
+	last := -1
+	for i, e := range events {
+		if e.Name == "self.heartbeat" {
+			last = i
+		}
+	}
+	var acts []Event
+	for _, e := range events[last+1:] {
+		if e.Name == "script.compiled" || e.Name == "script.verified" {
 			continue
 		}
-		if err := emit(name, d["payload"]); err != nil {
-			return err
-		}
+		acts = append(acts, e)
 	}
-	return nil
+	if len(acts) == 0 {
+		return ""
+	}
+	if len(acts) > 40 {
+		acts = acts[len(acts)-40:]
+	}
+	var b strings.Builder
+	b.WriteString("\n\nSince your last heartbeat, these things happened in the garden:\n")
+	for _, e := range acts {
+		payload := strings.TrimSpace(string(e.Payload))
+		if len(payload) > 140 {
+			payload = payload[:140] + "…"
+		}
+		fmt.Fprintf(&b, "  seq %d  %s  %s\n", e.Seq, e.Name, payload)
+	}
+	b.WriteString("\nResponding to what changed is welcome, but optional.")
+	return b.String()
 }
 
-// cmdTeach installs an operator-authored capability: the human writes the script
-// (read from stdin) and the kernel signs + installs it. This is the "human is the
-// compiler" path — code enters via a kernel verb the person at the keyboard runs,
-// not via the LLM and not via a command-emitted event.
-//
-//	self teach command  <name>                          < script
-//	self teach projector <name> evt.a,evt.b              < script   (consumes for wiring)
-//	self teach command  <name> --examples=ex.json        < script   (verified before install)
-func cmdTeach(home string, args []string) error {
-	// Pull the optional flags out of the positional args.
-	var examplesFile, description, author string
-	var pos []string
-	for _, a := range args {
-		switch {
-		case a == "--help" || a == "-h" || a == "help":
-			printTeachHelp()
-			return nil
-		case strings.HasPrefix(a, "--examples="):
-			examplesFile = strings.TrimPrefix(a, "--examples=")
-		case strings.HasPrefix(a, "--description="):
-			description = strings.TrimPrefix(a, "--description=")
-		case strings.HasPrefix(a, "--author="):
-			author = strings.TrimPrefix(a, "--author=")
-		default:
-			pos = append(pos, a)
-		}
-	}
-	if len(pos) < 2 {
-		printTeachHelp()
-		return fmt.Errorf("teach: need a <command|projector> kind and a <name>")
-	}
-	kind, name := pos[0], pos[1]
-	var consumes []string
-	if len(pos) > 2 {
-		for _, c := range strings.Split(pos[2], ",") {
-			if c = strings.TrimSpace(c); c != "" {
-				consumes = append(consumes, c)
-			}
-		}
-	}
-
-	var examples []seed.Example
-	if examplesFile != "" {
-		raw, err := os.ReadFile(examplesFile)
+func cmdShow(home, name string) error {
+	if name == "kernel" {
+		renderKernelHTML(home)
+		page, err := os.ReadFile(filepath.Join(home, "site", "kernel.html"))
 		if err != nil {
-			return fmt.Errorf("read examples: %w", err)
+			return err
 		}
-		if err := json.Unmarshal(raw, &examples); err != nil {
-			return fmt.Errorf("parse examples (want a JSON array of {note,args,events,expect_contains}): %w", err)
-		}
+		os.Stdout.Write(page)
+		return nil
 	}
-
-	data, err := io.ReadAll(os.Stdin)
+	page, err := runProjection(home, name)
 	if err != nil {
 		return err
 	}
-	if err := kernel.Teach(home, kind, name, consumes, string(data), description, author, examples); err != nil {
-		return err
-	}
-	gate := ""
-	if len(examples) > 0 {
-		gate = fmt.Sprintf(" (passed %d example(s))", len(examples))
-	}
-	by := author
-	if by == "" {
-		by = "human (operator)"
-	}
-	fmt.Printf("taught %s %q — by %s, signed + installed%s\n", kind, name, by, gate)
+	os.Stdout.Write(page)
 	return nil
 }
 
-// printTeachHelp documents the teach contract, including the --examples file
-// schema — the one shape a hand-author has to get right and the one thing the
-// usage line alone never showed.
-func printTeachHelp() {
-	fmt.Print(`self teach — install a capability you authored by hand (script on stdin)
+// ─────────────────────────────────── main ───────────────────────────────────
 
-usage:
-  self teach command   <name> [--examples=ex.json] [--author=who] [--description=text]  < script
-  self teach projector <name> [consumes-csv] [--examples=ex.json] [--author=who] [--description=text]  < script
+func homeDir() string {
+	if v := os.Getenv("SELF_HOME"); v != "" {
+		return v
+	}
+	return filepath.Join(os.Getenv("HOME"), ".self")
+}
 
-flags:
-  --examples=FILE     JSON array of conformance examples; the script MUST pass them before it installs
-  --author=WHO        who authored this (default "human"); recorded in the capability.taught receipt
-  --description=TEXT  the capability's one-line description (default: an operator-authored note)
+// ensureHome mints a bare kernel on first contact: a signing key and a birth
+// event. Everything else grows.
+func ensureHome(home string) error {
+	if _, err := loadSecret(home); err != nil {
+		return err
+	}
+	events, err := readEvents(home)
+	if err != nil || len(events) > 0 {
+		return err
+	}
+	e := newEvent("kernel.initialized", json.RawMessage(`{}`))
+	if err := appendEvent(home, &e); err != nil {
+		return err
+	}
+	renderKernelHTML(home)
+	fmt.Fprintf(os.Stderr, "self: new home %s\n", home)
+	return nil
+}
 
-pipe contract: a command reads the event log as JSONL on stdin and writes new
-events as JSONL on stdout (one {"name","payload"} per line). a projector reads
-the same log on stdin and writes bare semantic HTML to stdout (no CSS/JS).
+func usage() {
+	fmt.Fprint(os.Stderr, `self — a local-first, self-growing capability system
 
---examples FILE is a JSON array; each example runs the script and asserts on its stdout:
-  [
-    {
-      "note": "what this example proves",
-      "args": ["argv", "for", "a", "command"],
-      "events": [ {"name": "x", "seq": 1, "occurred_at": "2026-01-01T00:00:00Z", "payload": {}} ],
-      "expect_contains": ["substrings", "that must appear in stdout"],
-      "expect_order":    ["these substrings", "must appear", "in this order"]
-    }
-  ]
-commands use "args" (input argv); projectors use "events" (the input log). Both
-assert with "expect_contains" (presence) and optional "expect_order" (sequence).
+One append-only event log + projections as pure replays. A minimal kernel;
+everything else grows as seeds through the strange loop.
+
+usage: self [command] [args]
+
+  self                 rehydrate the body from the log, then serve it (the default)
+  self grow <seed>     grow a seed's intent into capabilities (needs a brain)
+  self run <cmd> ...   run a capability — append events, refresh projections
+  self think "..."     ask the brain; returns {response, declarations} JSON
+  self brain "..."     the default brain process (prompt in, event JSONL out); swap via $SELF_BRAIN
+  self heartbeat       one self-improvement cycle (the brain reflects & grows)
+  self show <name>     render a projection to stdout
+  self live [port]     serve the live garden (default 7777)
+  self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
+
+environment:
+  SELF_HOME         the body — a dir holding events.jsonl + .secret (default ~/.self)
+  SELF_BRAIN        brain process to spawn instead of the built-in one
+  SELF_LLM_URL      OpenAI-compatible endpoint (default http://127.0.0.1:8080)
+  SELF_LLM_API_KEY  its key
+  SELF_LLM_MODEL    its model
+  SELF_LLM_STUB     "1" → offline stub scripts (no LLM, no network)
 `)
 }
 
-// brainTools returns the capabilities the brain may call as tools and an
-// invoker that runs them, honoring SELF_THINK_DEPTH so a brain-invoked command
-// that itself calls the brain can't recurse without bound. Past the cap it
-// returns no tools — the brain can still talk and declare, but not act.
-// Shared by 'self think' and 'self heartbeat'.
-func brainTools(home string) ([]seed.Command, seed.CommandInvoker) {
-	depth := 0
-	fmt.Sscanf(os.Getenv("SELF_THINK_DEPTH"), "%d", &depth)
-	if depth >= 3 {
-		return nil, nil
-	}
-	os.Setenv("SELF_THINK_DEPTH", fmt.Sprintf("%d", depth+1))
-	commands := plantedCommands(home)
-	invoke := func(name, args string) (string, error) {
-		var argv []string
-		if strings.TrimSpace(args) != "" {
-			argv = []string{args}
+func main() {
+	home := homeDir()
+	if len(os.Args) < 2 {
+		err := ensureHome(home)
+		if err == nil {
+			err = rehydrate(home)
 		}
-		evs, err := runCommand(home, name, argv)
+		if err == nil {
+			err = cmdServe(home, "")
+		}
 		if err != nil {
-			return "", err
+			fmt.Fprintf(os.Stderr, "self: %s\n", err)
+			os.Exit(1)
 		}
-		if len(evs) == 0 {
-			return fmt.Sprintf("ran %q (no events emitted)", name), nil
-		}
-		names := make([]string, len(evs))
-		for i, e := range evs {
-			names[i] = e.Name
-		}
-		return fmt.Sprintf("ran %q — appended %d event(s): %s", name, len(evs), strings.Join(names, ", ")), nil
+		return
 	}
-	return commands, invoke
-}
 
-// plantedCommands reads the command declarations from the event log, latest
-// wins, in first-seen order. The chat command is excluded — the brain calling
-// chat would just re-enter itself.
-func plantedCommands(home string) []seed.Command {
-	events, err := store.Open(home).Read()
+	cmd, args := os.Args[1], os.Args[2:]
+	var err error
+	switch cmd {
+	case "grow":
+		if len(args) < 1 {
+			err = fmt.Errorf("usage: self grow <seed-dir>")
+		} else {
+			err = cmdGrow(home, args[0])
+		}
+	case "run":
+		if len(args) < 1 {
+			err = fmt.Errorf("usage: self run <command> [args...]")
+		} else {
+			err = cmdRun(home, args[0], args[1:])
+		}
+	case "think":
+		err = cmdThink(home, strings.Join(args, " "))
+	case "brain":
+		err = cmdBrain(home, strings.Join(args, " "))
+	case "heartbeat":
+		err = cmdHeartbeat(home)
+	case "show":
+		if len(args) < 1 {
+			err = fmt.Errorf("usage: self show <projection>")
+		} else {
+			err = cmdShow(home, args[0])
+		}
+	case "live":
+		port := ""
+		if len(args) > 0 {
+			port = args[0]
+		}
+		if err = ensureHome(home); err == nil {
+			err = cmdServe(home, port)
+		}
+	case "rehydrate":
+		err = rehydrate(home)
+	case "help", "--help", "-h":
+		usage()
+	default:
+		fmt.Fprintf(os.Stderr, "self: unknown command %q\n", cmd)
+		usage()
+		os.Exit(1)
+	}
 	if err != nil {
-		return nil
+		fmt.Fprintf(os.Stderr, "self: %s\n", err)
+		os.Exit(1)
 	}
-	byName := map[string]seed.Command{}
-	var order []string
-	for _, e := range events {
-		if e.Name != event.CommandDeclared {
-			continue
-		}
-		var cmd seed.Command
-		if json.Unmarshal(e.Payload, &cmd) != nil || cmd.Name == "" {
-			continue
-		}
-		if _, seen := byName[cmd.Name]; !seen {
-			order = append(order, cmd.Name)
-		}
-		byName[cmd.Name] = cmd
-	}
-	var out []seed.Command
-	for _, n := range order {
-		if n == "chat" {
-			continue
-		}
-		out = append(out, byName[n])
-	}
-	return out
 }
 
-func commandNames(commands []seed.Command) []string {
-	names := make([]string, len(commands))
-	for i, c := range commands {
-		names[i] = c.Name
+// ──────────────────────────────── small bits ────────────────────────────────
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	return names
+	return def
 }
 
-func projectorNames(projectors []seed.ProjectorDecl) []string {
-	names := make([]string, len(projectors))
-	for i, p := range projectors {
-		names[i] = p.Name
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func jsonRepr(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '.'); i > 0 && i < 140 {
+		return s[:i]
 	}
-	return names
+	if len(s) > 140 {
+		return s[:140] + "…"
+	}
+	return s
 }
