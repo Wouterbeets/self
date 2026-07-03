@@ -76,7 +76,11 @@ SELF_LLM_STUB     "1" → offline stub scripts (no LLM, no network)
 
 - `main.go` — the whole kernel: event log, signed install, pipe orchestrator,
   LLM compiler/brain, web server.
-- `seeds/chat` — the one seed shipped: talk to self and it grows the rest.
+- `seeds/chat` — the front door: talk to self and it grows the rest.
+- `seeds/herd` — meta-context for [herdr](https://herdr.dev), the agent
+  terminal multiplexer: an HTML overview of everything your agents are doing —
+  who's blocked, what each is building, and whether the work coheres per
+  domain — with the memory herdr doesn't keep.
 - `garden/` — a living body (one organism's log + signing key), left exactly as
   its minds committed it. `SELF_HOME=garden ./self` resumes it.
 - `main_test.go` — the spirit, pinned: the log, the strange loop (offline via
