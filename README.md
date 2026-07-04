@@ -1,11 +1,42 @@
 # self
 
-A local-first, self-growing capability system, cut to its spirit. The kernel is
-one Go file. Everything else grows.
+Every agent session is an amnesiac: brilliant for one context window, then
+gone. `self` is the body your minds share — one append-only event log that
+outlives every session, every model, every vendor, with a kernel small enough
+to read in an afternoon.
+
+A local-first, self-growing capability system, cut to its spirit. The kernel
+is one Go file. Everything else grows.
 
 > One append-only event log + shared projections. A small kernel; everything
 > else grows as seeds. Every capability, projection, and byte of state is a
 > plain file you can open.
+
+## sixty seconds
+
+```sh
+git clone https://github.com/Wouterbeets/ks && cd ks
+go install .                    # puts `self` on your PATH (via GOBIN)
+
+# meet a living body first — this repo ships one, a dozen minds deep
+SELF_HOME=$PWD/garden self      # browse its memory at :7777
+
+# then give your own project a body
+cd ~/my-project
+export SELF_HOME=$PWD/.self     # the log lives beside the code
+export SELF_BRAIN="claude -p"   # your coding agent is the brain (see: plug a brain)
+self                            # first contact: a key, a birth event, a served garden
+```
+
+Last step: paste the card in [`AGENTS.md`](AGENTS.md) into your project's agent
+instructions (`CLAUDE.md`, `AGENTS.md`, a system prompt — wherever your
+sessions read). From then on, every coding-agent session wakes up a citizen of
+the same garden: it introduces itself, reads the projections, acts through
+logged verbs, grows signed capabilities, and leaves what it learned for
+whoever wakes next.
+
+The payoff is the **second** session — it starts where the first one stopped,
+and can prove it, because the log replays.
 
 ## mental model
 
@@ -41,8 +72,8 @@ go build -o self .
 ./self heartbeat          # one self-improvement cycle: the brain reflects & grows
 ./self show <name>        # render a projection to stdout
 ./self rehydrate          # rebuild the body from the log's signed receipts (no LLM)
-./self share verse        # bundle a capability's declaration + evidence for another body
-./self adopt verse.share.json   # re-grow it here, through this body's own compiler
+./self share graze > graze.seed.jsonl   # a capability's whole history as a seed
+./self adopt graze.seed.jsonl           # re-grow it here, through this body's own compiler
 ```
 
 Routes when serving: `/` (my identity), `/<projection>` (re-rendered live),
@@ -119,7 +150,10 @@ question in the garden's log.
 
 ```
 SELF_HOME         the body — a dir holding events.jsonl + .secret (default ~/.self)
-SELF_BRAIN        brain process to spawn instead of the built-in one
+SELF_BRAIN        any executable plugged in as the brain — think, heartbeat, grow,
+                  and compile all pass through it ($SELF_ASK carries the ask's
+                  kind, prompt as last arg, log as JSONL on stdin, event JSONL
+                  or prose out)
 SELF_LLM_URL      OpenAI-compatible endpoint (default http://127.0.0.1:8080)
 SELF_LLM_API_KEY  its key
 SELF_LLM_MODEL    its model
@@ -149,7 +183,9 @@ bridge — the lineage of code stays as queryable as the lineage of minds.
 - `garden/` — a living body (one organism's log + signing key), left exactly as
   its minds committed it. `SELF_HOME=garden ./self` resumes it.
 - `main_test.go` — the spirit, pinned: the log, the strange loop (offline via
-  stub scripts), the forged-receipt gate, and the garden's resurrection.
+  stub scripts), the forged-receipt gate, the playpen's containment, receipt
+  provenance, sovereign share/adopt, the pluggable brain seam, and the
+  garden's resurrection.
 
 This repo was once ~9k lines across 65 files; it was deliberately cut down to
 this. The full history — invariant selection, cross-node attestations, teach /
