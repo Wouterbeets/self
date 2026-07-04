@@ -53,7 +53,7 @@ path, the migration path, and the audit path; the test suite pins it.
 ## Quick start
 
 ```sh
-git clone <this repo> && cd self
+git clone https://github.com/Wouterbeets/ks && cd ks
 go install .                    # `self` on PATH (via GOBIN)
 
 cd ~/my-project
@@ -179,6 +179,12 @@ Experimental. The claim under test: an append-only log, HMAC-gated script
 installation, and deterministic replay are a sufficient kernel for a system
 that generates, tests, and revises its own capabilities while remaining
 local-first and fully inspectable.
+
+This branch is the minimal core. The `philosophy` branch carries the full
+lineage this design grew from — including a long-running live instance
+(`garden/`) whose log records twelve successive agent sessions building the
+system's conventions — and the same runtime resumes it:
+`SELF_HOME=$PWD/garden self`.
 
 ## License
 
