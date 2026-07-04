@@ -228,6 +228,8 @@ func rehydrate(home string) error {
 	if err != nil {
 		return err
 	}
+	// Keyed by (type, name): a command and a projector may share a name, and
+	// the latest receipt of each must install — not the latest of either.
 	latest := map[string]receipt{}
 	var order []string
 	for _, e := range events {
@@ -238,13 +240,14 @@ func rehydrate(home string) error {
 		if !ok {
 			continue
 		}
-		if _, seen := latest[r.Name]; !seen {
-			order = append(order, r.Name)
+		key := r.Type + "/" + r.Name
+		if _, seen := latest[key]; !seen {
+			order = append(order, key)
 		}
-		latest[r.Name] = r
+		latest[key] = r
 	}
-	for _, name := range order {
-		r := latest[name]
+	for _, key := range order {
+		r := latest[key]
 		if err := installScript(home, r.Type, r.Name, r.Script); err != nil {
 			return err
 		}
@@ -1273,7 +1276,7 @@ func renderKernelHTML(home string) {
 		case "script.compiled":
 			if secret != nil {
 				if r, ok := verifiedReceipt(secret, e.Payload); ok && r.By != "" {
-					grownBy[r.Name] = r.By
+					grownBy[r.Type+"/"+r.Name] = r.By
 				}
 			}
 		case "command.declared":
@@ -1315,7 +1318,7 @@ func renderKernelHTML(home string) {
 			b.WriteString(" · args " + esc(jsonRepr(d.Params)))
 		}
 		b.WriteString(" · <code>self run " + esc(d.Name) + " …</code>")
-		if by := grownBy[d.Name]; by != "" {
+		if by := grownBy["command/"+d.Name]; by != "" {
 			b.WriteString(" · grown by " + esc(by))
 		}
 		b.WriteString("</p></article>\n")
@@ -1329,7 +1332,7 @@ func renderKernelHTML(home string) {
 		d := projectors[n]
 		b.WriteString("<article class=\"card\"><h3><a href=\"/" + esc(d.Name) + "\">/" + esc(d.Name) + "</a></h3><p>" + esc(d.Description) + "</p>")
 		b.WriteString("<p class=\"muted\">consumes <code>" + esc(strings.Join(d.Consumes, ", ")) + "</code>")
-		if by := grownBy[d.Name]; by != "" {
+		if by := grownBy["projector/"+d.Name]; by != "" {
 			b.WriteString(" · grown by " + esc(by))
 		}
 		b.WriteString("</p></article>\n")

@@ -181,6 +181,35 @@ func TestRehydrateRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRehydrateTypeCollision pins that a command and a projector sharing a
+// name both reconstruct: receipts are keyed by (type, name), not name. The
+// chat seed (a chat command and a chat projector) is the natural collision.
+func TestRehydrateTypeCollision(t *testing.T) {
+	t.Setenv("SELF_LLM_STUB", "1")
+	home := t.TempDir()
+	decls := []Event{
+		newEvent("command.declared", json.RawMessage(
+			`{"name":"chat","description":"say something","event":{"name":"chat.message","fields":{"content":"string"}}}`)),
+		newEvent("projector.declared", json.RawMessage(
+			`{"name":"chat","description":"the conversation","consumes":["chat.message"]}`)),
+	}
+	if err := ingest(home, decls); err != nil {
+		t.Fatal(err)
+	}
+	cmd := filepath.Join(home, "capabilities", "commands", "chat")
+	proj := filepath.Join(home, "capabilities", "projectors", "chat")
+	os.Remove(cmd)
+	os.Remove(proj)
+	if err := rehydrate(home); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{cmd, proj} {
+		if !fileExists(p) {
+			t.Fatalf("%s did not survive rehydration — receipts collided across types", p)
+		}
+	}
+}
+
 // TestPlaypen pins the containment contract of the brain's full-bash jail:
 // real execution inside, with the signing key absent, writes confined, and
 // the network dark. Where the platform cannot jail, the kernel must fall
