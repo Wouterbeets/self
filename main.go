@@ -138,27 +138,45 @@ type receipt struct {
 	Type   string `json:"type"`
 	Name   string `json:"name"`
 	Script string `json:"script"`
-	Sig    string `json:"sig"`
+	// By is the provenance of the bytes: which brain authored this compile —
+	// a model at an endpoint, a stub, a named mind. The signature covers it,
+	// so authorship can no more be forged or relabeled than the script itself.
+	// Receipts minted before provenance existed have no By and verify by the
+	// legacy formula; the lineage of old organs stays in the letters.
+	By  string `json:"by,omitempty"`
+	Sig string `json:"sig"`
 }
 
-// sign binds type, name, and script, so a valid receipt can't be relabeled to
-// install one capability's bytes under another's name.
-func sign(secret []byte, typ, name, script string) string {
+// sign binds the receipt's fields so none can be relabeled — one capability's
+// bytes can't install under another's name, and authorship can't be moved.
+// The v2 formula is domain-separated and length-prefixed (no concatenation of
+// adjacent fields can collide); the legacy formula survives so bodies minted
+// before provenance still rehydrate. Type names are kernel-vocabulary
+// ("command"/"projector"), so a legacy mac can never alias a v2 one.
+func sign(secret []byte, typ, name, script, by string) string {
 	m := hmac.New(sha256.New, secret)
-	m.Write([]byte(typ))
-	m.Write([]byte{0})
-	m.Write([]byte(name))
-	m.Write([]byte{0})
-	m.Write([]byte(script))
+	if by == "" { // legacy: receipts from before authorship was recorded
+		m.Write([]byte(typ))
+		m.Write([]byte{0})
+		m.Write([]byte(name))
+		m.Write([]byte{0})
+		m.Write([]byte(script))
+	} else {
+		m.Write([]byte("self.receipt.v2\x00"))
+		for _, field := range []string{typ, name, script, by} {
+			fmt.Fprintf(m, "%d:", len(field))
+			m.Write([]byte(field))
+		}
+	}
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-func appendReceipt(home, typ, name, script string) error {
+func appendReceipt(home, typ, name, script, by string) error {
 	secret, err := loadSecret(home)
 	if err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(receipt{typ, name, script, sign(secret, typ, name, script)})
+	payload, _ := json.Marshal(receipt{typ, name, script, by, sign(secret, typ, name, script, by)})
 	e := newEvent("script.compiled", payload)
 	return appendEvent(home, &e)
 }
@@ -168,7 +186,7 @@ func verifiedReceipt(secret []byte, payload json.RawMessage) (receipt, bool) {
 	if json.Unmarshal(payload, &r) != nil || r.Sig == "" || r.Script == "" || r.Name == "" {
 		return r, false
 	}
-	return r, hmac.Equal([]byte(sign(secret, r.Type, r.Name, r.Script)), []byte(r.Sig))
+	return r, hmac.Equal([]byte(sign(secret, r.Type, r.Name, r.Script, r.By)), []byte(r.Sig))
 }
 
 func scriptPath(home, typ, name string) (string, error) {
@@ -391,7 +409,7 @@ func compileDeclarations(c *llm, home string, evs []Event) int {
 			err = installScript(home, typ, name, script)
 		}
 		if err == nil {
-			err = appendReceipt(home, typ, name, script)
+			err = appendReceipt(home, typ, name, script, c.identity())
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "self: %s %q failed: %s\n", typ, name, err)
@@ -485,6 +503,20 @@ type llm struct {
 
 // close releases the playpen, if one was ever seeded.
 func (c *llm) close() { c.pen.close() }
+
+// identity names the brain for provenance: who authored the bytes a receipt
+// carries. SELF_BRAIN_ID lets a mind introduce itself in its own words ("the
+// ninth mind, a Claude, by hand"); otherwise the model and endpoint are the
+// honest mechanical answer, and a stub says so.
+func (c *llm) identity() string {
+	if id := strings.TrimSpace(os.Getenv("SELF_BRAIN_ID")); id != "" {
+		return id
+	}
+	if c.stub {
+		return "stub (no LLM)"
+	}
+	return c.model + " @ " + c.url
+}
 
 func newLLM(home string) *llm {
 	if os.Getenv("SELF_LLM_STUB") == "1" {
@@ -1188,8 +1220,18 @@ func renderKernelHTML(home string) {
 	commands := map[string]commandDecl{}
 	projectors := map[string]projectorDecl{}
 	var cmdOrder, projOrder []string
+	// grownBy is provenance: the latest kernel-signed receipt's By per organ.
+	// Verified, not merely read — an unsigned or forged by-line never renders.
+	grownBy := map[string]string{}
+	secret, _ := loadSecret(home)
 	for _, e := range events {
 		switch e.Name {
+		case "script.compiled":
+			if secret != nil {
+				if r, ok := verifiedReceipt(secret, e.Payload); ok && r.By != "" {
+					grownBy[r.Name] = r.By
+				}
+			}
 		case "command.declared":
 			var d commandDecl
 			if json.Unmarshal(e.Payload, &d) == nil && d.Name != "" {
@@ -1228,7 +1270,11 @@ func renderKernelHTML(home string) {
 		if len(d.Params) > 0 {
 			b.WriteString(" · args " + esc(jsonRepr(d.Params)))
 		}
-		b.WriteString(" · <code>self run " + esc(d.Name) + " …</code></p></article>\n")
+		b.WriteString(" · <code>self run " + esc(d.Name) + " …</code>")
+		if by := grownBy[d.Name]; by != "" {
+			b.WriteString(" · grown by " + esc(by))
+		}
+		b.WriteString("</p></article>\n")
 	}
 
 	b.WriteString("<h2>projections</h2>\n")
@@ -1238,7 +1284,11 @@ func renderKernelHTML(home string) {
 	for _, n := range projOrder {
 		d := projectors[n]
 		b.WriteString("<article class=\"card\"><h3><a href=\"/" + esc(d.Name) + "\">/" + esc(d.Name) + "</a></h3><p>" + esc(d.Description) + "</p>")
-		b.WriteString("<p class=\"muted\">consumes <code>" + esc(strings.Join(d.Consumes, ", ")) + "</code></p></article>\n")
+		b.WriteString("<p class=\"muted\">consumes <code>" + esc(strings.Join(d.Consumes, ", ")) + "</code>")
+		if by := grownBy[d.Name]; by != "" {
+			b.WriteString(" · grown by " + esc(by))
+		}
+		b.WriteString("</p></article>\n")
 	}
 
 	b.WriteString("<h2>where I live</h2>\n<table><tr><th>what</th><th>path</th></tr>")
@@ -1687,6 +1737,8 @@ environment:
   SELF_LLM_STUB     "1" → offline stub scripts (no LLM, no network)
   SELF_SANDBOX      "0" → disable the brain's jailed playpen (bash falls back
                     to a fail-closed read-only allowlist; never fails open)
+  SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
+                    (default: the model @ its endpoint, or "stub (no LLM)")
 `)
 }
 

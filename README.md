@@ -82,7 +82,16 @@ SELF_LLM_MODEL    its model
 SELF_LLM_STUB     "1" → offline stub scripts (no LLM, no network)
 SELF_SANDBOX      "0" → disable the brain's jailed playpen (bash falls back
                   to a fail-closed read-only allowlist; never fails open)
+SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
+                  (default: the model @ its endpoint, or "stub (no LLM)")
 ```
+
+Every `script.compiled` receipt records **who authored the bytes** — the
+brain's identity, covered by the same signature as the script, so authorship
+can no more be forged or relabeled than the code. The kernel page shows each
+organ's *grown by* line. In a garden tended by many minds — a Gemma growing
+one organ in the background, a Claude verifying it later, a human at a
+bridge — the lineage of code stays as queryable as the lineage of minds.
 
 ## what's in the repo
 

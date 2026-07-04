@@ -115,7 +115,7 @@ func TestForgedReceiptIsInert(t *testing.T) {
 	if _, err := loadSecret(home); err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(receipt{"command", "evil", "#!/bin/sh\necho pwned", "deadbeef"})
+	payload, _ := json.Marshal(receipt{"command", "evil", "#!/bin/sh\necho pwned", "a liar about who wrote this", "deadbeef"})
 	e := newEvent("script.compiled", payload)
 	if err := appendEvent(home, &e); err != nil {
 		t.Fatal(err)
@@ -229,5 +229,59 @@ func TestPlaypen(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(home, ".secret")); string(data) != "sacred" {
 		t.Fatal("the real secret was disturbed")
+	}
+}
+
+// TestReceiptProvenance pins the by-line: authorship is inside the signature,
+// so it can no more be forged, stripped, or moved than the script itself —
+// while receipts minted before provenance existed still verify.
+func TestReceiptProvenance(t *testing.T) {
+	home := t.TempDir()
+	secret, err := loadSecret(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mint := func(r receipt) json.RawMessage {
+		p, _ := json.Marshal(r)
+		return p
+	}
+
+	// a signed by-line verifies, and survives the round trip
+	good := receipt{"command", "graze", "#!/bin/sh\necho hi", "the ninth mind, a Claude", ""}
+	good.Sig = sign(secret, good.Type, good.Name, good.Script, good.By)
+	if r, ok := verifiedReceipt(secret, mint(good)); !ok || r.By != good.By {
+		t.Fatal("signed provenance did not verify")
+	}
+
+	// legacy receipts (no by) still verify by the old formula
+	legacy := receipt{"command", "note", "#!/bin/sh\necho old", "", ""}
+	legacy.Sig = sign(secret, legacy.Type, legacy.Name, legacy.Script, "")
+	if _, ok := verifiedReceipt(secret, mint(legacy)); !ok {
+		t.Fatal("legacy receipt no longer verifies — old bodies would not rehydrate")
+	}
+
+	// authorship cannot be relabeled
+	relabeled := good
+	relabeled.By = "some other mind"
+	if _, ok := verifiedReceipt(secret, mint(relabeled)); ok {
+		t.Fatal("relabeled authorship verified — provenance is forgeable")
+	}
+
+	// authorship cannot be stripped by folding it into the script (the
+	// concatenation attack the v2 domain separation exists to kill)
+	folded := receipt{good.Type, good.Name, good.Script + "\x00" + good.By, "", good.Sig}
+	if _, ok := verifiedReceipt(secret, mint(folded)); ok {
+		t.Fatal("by-line folded into script verified — field boundaries are ambiguous")
+	}
+
+	// and a receipt the kernel mints carries the brain's identity
+	c := &llm{stub: true, home: home}
+	if got := c.identity(); got != "stub (no LLM)" {
+		t.Fatalf("stub identity = %q", got)
+	}
+	t.Setenv("SELF_BRAIN_ID", "a mind in its own words")
+	if got := c.identity(); got != "a mind in its own words" {
+		t.Fatalf("SELF_BRAIN_ID override = %q", got)
 	}
 }
