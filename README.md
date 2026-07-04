@@ -41,6 +41,8 @@ go build -o self .
 ./self heartbeat          # one self-improvement cycle: the brain reflects & grows
 ./self show <name>        # render a projection to stdout
 ./self rehydrate          # rebuild the body from the log's signed receipts (no LLM)
+./self share verse        # bundle a capability's declaration + evidence for another body
+./self adopt verse.share.json   # re-grow it here, through this body's own compiler
 ```
 
 Routes when serving: `/` (my identity), `/<projection>` (re-rendered live),
@@ -70,6 +72,25 @@ ingress, and only the kernel signs. So a mind can *test* a candidate organ
 against the real log before declaring it, instead of squinting at it. Where
 namespaces are unavailable (or `SELF_SANDBOX=0`), bash falls back to a
 fail-closed read-only allowlist — it never fails open.
+
+## sharing between bodies
+
+Two bodies never exchange code — they exchange **intent and evidence**.
+`self share <cap>` writes a bundle holding the capability's declaration
+(verbatim from the sender's log) plus, as evidence, the script from its latest
+kernel-signed receipt with its sha256 and author by-line. `self adopt <bundle>`
+records a `capability.adopted` provenance event, re-declares the capability
+into the receiver's log — the sender's script riding only in the
+`implementation` reference slot a seed author already uses — and lets the
+strange loop author bytes *for this body*, through this body's own compiler,
+signed by this body's key. Same intent, different garden, different bytes.
+
+A bundle is inert everywhere by construction: nothing in it installs, so a
+hostile bundle can at most ask your compiler a question. The sha256 makes
+tampering in transit visible; it grants nothing. And `from` is asserted
+provenance, not proof — signing keys are symmetric and never leave a home, so
+cross-body authorship is a claim the receiver logs, not a fact it can verify.
+That honest gap is an open question in the garden's log.
 
 ## environment
 
