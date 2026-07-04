@@ -179,3 +179,8 @@ Experimental. The claim under test: an append-only log, HMAC-gated script
 installation, and deterministic replay are a sufficient kernel for a system
 that generates, tests, and revises its own capabilities while remaining
 local-first and fully inspectable.
+
+## License
+
+Apache-2.0. Scripts your instance generates and the events in your log are
+program output — yours, not derivatives of the runtime.
