@@ -1624,7 +1624,13 @@ func cmdShare(home, name string) error {
 }
 
 func cmdAdopt(home, path string) error {
-	data, err := os.ReadFile(path)
+	var data []byte
+	var err error
+	if path == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return err
 	}
@@ -1959,8 +1965,8 @@ usage: self [command] [args]
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
   self share <cap>     print a seed to stdout — the capability's declarations and
                        receipts, a verbatim slice of this log
-  self adopt <seed>    re-grow a shared capability here — this body's own compiler
-                       re-authors it; foreign bytes never install
+  self adopt <seed>    re-grow a shared capability here ("-" reads stdin) — this
+                       body's own compiler re-authors it; foreign bytes never install
 
 environment:
   SELF_HOME         the body — a dir holding events.jsonl + .secret (default ~/.self)

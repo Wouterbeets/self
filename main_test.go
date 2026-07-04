@@ -344,6 +344,24 @@ func TestShareAdopt(t *testing.T) {
 	if _, err := runCommand(receiver, "note", []string{"a", "gift", "regrown"}); err != nil {
 		t.Fatal(err)
 	}
+
+	// adopt also reads a seed from stdin ("-") — the unix path between bodies
+	rp, wp, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = rp
+	go func() { wp.Write(raw); wp.Close() }()
+	second := t.TempDir()
+	adoptErr := cmdAdopt(second, "-")
+	os.Stdin = oldStdin
+	if adoptErr != nil {
+		t.Fatal(adoptErr)
+	}
+	if !fileExists(filepath.Join(second, "capabilities", "commands", "note")) {
+		t.Fatal("adopting a seed from stdin did not install")
+	}
 }
 
 // TestAdoptNeverInstallsForeignBytes pins the sharp edge of federation: a

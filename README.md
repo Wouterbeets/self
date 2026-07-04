@@ -31,9 +31,15 @@ self                            # first contact: a key, a birth event, a served 
 Last step: paste the card in [`AGENTS.md`](AGENTS.md) into your project's agent
 instructions (`CLAUDE.md`, `AGENTS.md`, a system prompt — wherever your
 sessions read). From then on, every coding-agent session wakes up a citizen of
-the same garden: it introduces itself, reads the projections, acts through
-logged verbs, grows signed capabilities, and leaves what it learned for
-whoever wakes next.
+the same garden.
+
+A fresh body starts bare — a key, a birth event, no verbs — and that is the
+design: your agent's first session grows the first organs it actually needs,
+or adopts them from a body that has them. The garden in this repo will give:
+
+```sh
+SELF_HOME=/path/to/ks/garden self share note | self adopt -
+```
 
 The payoff is the **second** session — it starts where the first one stopped,
 and can prove it, because the log replays.
