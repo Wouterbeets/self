@@ -1,55 +1,81 @@
-# chat — talking to self
+# chat — the front door
 
-## what it's for
+## purpose
 
-A person should be able to talk to self in plain language and have it feel like
-one continuous relationship, not a series of stateless prompts. This is the front
-door: where you ask, and where self answers in its own voice. Talking to self is
-also how self grows — if you ask for something it can't do yet, it can build it
-mid-conversation.
+Talking to self in plain language should feel like one continuous
+relationship, not a series of stateless prompts — and it is how self grows:
+ask for something it cannot do yet and it builds the capability
+mid-conversation, live on the next refresh. This is the seed a demo grows
+first; first impressions are its spec.
 
-## the core intuition
+## the mechanics (exact — the loop lives or dies on these)
 
-self's working memory should match how an LLM actually works. A conversation is a
-sequence of `{role, content}` turns with a system framing on top — so the brain
-should receive *real turns*, the way models expect them, never a rendered HTML
-page it has to re-read. The kernel already knows how to take turns; chat's job is
-to assemble them from the log.
+- `chat` is a command with ONE param, `message` (the kernel's HTML forms pass
+  each field as one positional argument, so one input box means one param).
+- The chat script assembles REAL `{role, content}` turns from the log on its
+  stdin — never rendered HTML. The leading system turn is the current
+  `self.identity` text; then the prior `chat.message` turns (see compaction
+  below); then the new user message. It calls `self think` with that JSON
+  array as the argument and parses the `{response, declarations}` it returns.
+- `self think` appends NOTHING — the caller owns persistence. The chat script
+  must emit, in order: the user's `chat.message`, the assistant's
+  `chat.message`, and then every declaration verbatim as its own event.
+  Re-emitting the declarations is what makes the kernel compile them; a
+  declaration left unemitted is growth that never happens.
+- When declarations were made, the assistant's reply must end by naming what
+  grew and where it lives — e.g. "grown: /habits — refresh and it is live." A
+  capability that appears without being announced is a demo that looks broken.
+- Degrade honestly: if `self think` fails, emit an assistant `chat.message`
+  that says a brain is unreachable and how to plug one (`SELF_BRAIN`,
+  `SELF_LLM_URL`) — inside the conversation, not as a stack trace. The user's
+  message is already in the log; say so.
 
-Memory has three layers, and all three must be honored:
+## the surface
 
-1. **Working memory** — the live turns of the current conversation, replayed from
-   the log into proper role/content turns and handed to the brain on each message.
-2. **A standing identity** — self's own system framing, written in the first
-   person ("who I am, how I behave"), prepended to every conversation as the
-   leading system turn. The same self, seen through the prism of this surface.
-   It is self's, not the kernel's: it lives as data and can be edited by appending.
-3. **Long memory that never lies** — every raw turn stays in the log forever. When
-   a conversation grows long, older turns fold into a brain-written summary so the
-   working context stays small. But folding is a *view change, never deletion* —
-   the raw turns remain, so compaction is reversible, inspectable, and recoverable.
+- `/chat` renders the conversation in order, one `msg` per turn with a `who`
+  label, and a single-input form at the bottom POSTing to `/run/chat`. An
+  empty log renders the form and nothing broken.
+- `welcome` — the kernel promotes a projector named `welcome` to the front
+  page `/`. Grow one (it may be the same view as `/chat`) so a served demo
+  lands in the conversation, not in kernel internals.
+- `/identity` shows the current `self.identity` text in full, with a form to
+  append a new one via the `identity` command. Identity is data, never
+  kernel: the seed plants the first one; appending replaces it from then on.
+- `compact` folds older turns: it asks the brain for a summary and emits one
+  `chat.compacted` event `{summary, through_seq}`. From then on the chat
+  script sends the summary (inside the system turn) plus only the turns after
+  `through_seq`. Folding is a view change, never deletion — every raw turn
+  stays in the log.
 
-## the feel
+## memory, three layers
 
-- self answers in its own voice (the identity), grounded in the real state of the
-  garden, and can act or grow new capabilities when asked.
-- Nothing is hidden: the identity is visible and editable, the running summary is
-  shown, and the raw log is always the final word.
-- The conversation is a surface you read in a browser and self reads as context —
-  the same reality, no divergence.
+1. **Working turns** — the live conversation, replayed from the log into
+   role/content turns on every message.
+2. **Standing identity** — self's own system framing, first person, stored as
+   `self.identity` events, prepended to every conversation.
+3. **The raw log** — every turn, forever. Compaction is an overlay on top of
+   untouched history: reversible, inspectable, recoverable.
 
 ## anti-goals
 
-- Never hand the brain rendered HTML as "context." Hand it real turns.
-- Never delete or rewrite history to save space. Summarize as an overlay on top of
-  the untouched raw turns.
-- Never bake self's conversational identity into the kernel. It is self's own,
-  carried as data.
+- Never hand the brain rendered HTML as context. Hand it real turns.
+- Never delete or rewrite history to save space. Summarize as an overlay.
+- Never bake the conversational identity into a script. It is data.
+- Never a dead send: if the brain is unreachable, the conversation itself
+  says so and says how to fix it.
 
-## the surface (the public shape, fixed; the decomposition is the orchestrator's)
+## what good looks like (the demo, end to end)
 
-- You talk to self at the `chat` surface and read the conversation at `/chat`.
-- Folding the conversation is an explicit, ordinary act named `compact`.
-- self's identity is visible at `/identity`.
-These names are part of how the product should feel; *how* they're realized
-(which events, how many scripts, what they share) is for growth to decide here.
+1. `self grow seeds/chat` — the surface exists: chat, identity, compact,
+   and the chat, welcome, and identity views.
+2. Open `:7777` — the conversation IS the front page, already carrying the
+   seeded greeting.
+3. "track my habits: meditation and running" — the reply names the new
+   capability and its page; refresh and `/habits` is live with working forms.
+4. `self rehydrate` in a copy of the two source files rebuilds the identical
+   site. Nothing was hidden anywhere.
+
+The public names are fixed: the `chat`, `identity`, `compact` commands and
+the `/chat`, `/`(welcome), `/identity` views. How they are realized — which
+events beyond `chat.message`, `self.identity`, `chat.compacted`, how many
+scripts, what they share — is the orchestrator's to decide here.
