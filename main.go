@@ -515,6 +515,9 @@ func (c *llm) identity() string {
 	if c.stub {
 		return "stub (no LLM)"
 	}
+	if exe := brainExe(); exe != "" {
+		return exe
+	}
 	return c.model + " @ " + c.url
 }
 
@@ -590,7 +593,7 @@ func (c *llm) doRound(messages, tools []map[string]any) (*assistantMsg, error) {
 // handler ends it (done=true, out as the final result).
 func (c *llm) toolLoop(system string, turns, tools []map[string]any, handle func(name, args string) (out string, done bool)) (string, error) {
 	if !c.available() {
-		return "", fmt.Errorf("no LLM configured (set SELF_LLM_URL / SELF_LLM_API_KEY / SELF_LLM_MODEL)")
+		return "", fmt.Errorf("no brain is plugged in — %s", brainHint)
 	}
 	messages := append([]map[string]any{{"role": "system", "content": system}}, turns...)
 	calls := 0
@@ -962,6 +965,9 @@ func (c *llm) compileCommand(d commandDecl) (string, error) {
 	if c.stub {
 		return stubCommand(d), nil
 	}
+	if brainExe() != "" {
+		return compileViaBrain(c.home, "command", d.Name, jsonRepr(d))
+	}
 	user := fmt.Sprintf("Compile this command declaration into a command script.\n\nCOMMAND: %s\n  description: %s\n  params: %s\n\nEVENT it produces:\n  name: %s\n  fields: %s\n\nIt must produce an event with the declared name, its fields populated from argv.",
 		d.Name, d.Description, jsonRepr(d.Params), d.Event.Name, jsonRepr(d.Event.Fields))
 	return c.compile(commandSystemPrompt, user, d.Implementation)
@@ -971,9 +977,39 @@ func (c *llm) compileProjector(d projectorDecl) (string, error) {
 	if c.stub {
 		return stubProjector(d), nil
 	}
+	if brainExe() != "" {
+		return compileViaBrain(c.home, "projector", d.Name, jsonRepr(d))
+	}
 	user := fmt.Sprintf("Compile this projector declaration into a projector script.\n\nPROJECTOR: %s\n  description: %s\n  consumes: %s\n\nIt must filter events by the consumed names and render HTML.",
 		d.Name, d.Description, jsonRepr(d.Consumes))
 	return c.compile(projectorSystemPrompt, user, d.Implementation)
+}
+
+// compileViaBrain hands a compile ask to the plugged brain through the same
+// seam as every other ask. The declaration (its optional implementation
+// reference included) rides in the prompt; the log rides on stdin; the answer
+// is one script.authored event. The kernel still installs and signs — a brain
+// authors bytes, only the kernel makes them real.
+func compileViaBrain(home, typ, name, decl string) (string, error) {
+	prompt := fmt.Sprintf(`COMPILE one capability for this body. Author a complete executable script (any language with a shebang, standard libraries only) honoring the pipe contract, adapted to this body's log (on your stdin as JSONL).
+
+%s
+
+DECLARATION (%s %q):
+%s
+
+If the declaration carries an "implementation", it is a reference from another body: verify it and adapt it to this garden — never copy it blindly. Verify by execution with your own tools before answering.
+
+Answer with ONE line of JSON and nothing else:
+{"name":"script.authored","payload":{"script":"<the full script>"}}`, pipeContract, typ, name, decl)
+	res, err := pipeBrain(home, "compile", prompt)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(res.Script) == "" {
+		return "", fmt.Errorf("the brain answered a compile ask without a script.authored event")
+	}
+	return res.Script, nil
 }
 
 func (c *llm) compile(system, user, reference string) (string, error) {
@@ -1028,7 +1064,13 @@ func stubProjector(d projectorDecl) string {
 type brainResult struct {
 	Response     string
 	Declarations []map[string]any
+	Script       string // a compile ask's answer, from a script.authored event
 }
+
+// brainExe is the plugged brain, if any: an executable (with optional args)
+// honoring the brain contract — prompt as last arg, log JSONL on stdin, event
+// JSONL (or prose) on stdout.
+func brainExe() string { return strings.TrimSpace(os.Getenv("SELF_BRAIN")) }
 
 // agent runs one brain conversation with the three powers: read (bash), act
 // (run, over the given capability catalog), grow (declare). user may be a JSON
@@ -1460,15 +1502,15 @@ func cmdGrow(home, seedDir string) error {
 		return err
 	}
 
+	fmt.Fprintf(os.Stderr, "self: orchestrating %q from intent…\n", name)
+	res, err := pipeBrain(home, "grow",
+		"Grow the capabilities that realize this product: declare each one (emit command.declared / projector.declared), then summarize in one line.\n\n--- INTENT ---\n"+intent+"\n--- END INTENT ---")
+	if err != nil {
+		return fmt.Errorf("orchestrate %q: %w (growing needs a brain — %s)", name, err, brainHint)
+	}
 	c := newLLM(home)
 	defer c.close()
 	c.intent = intent
-	fmt.Fprintf(os.Stderr, "self: orchestrating %q from intent…\n", name)
-	res, err := c.agent(orchestratorSystemPrompt,
-		"Grow the capabilities that realize this product, then call done with a one-line summary.\n\n--- INTENT ---\n"+intent+"\n--- END INTENT ---", nil, nil)
-	if err != nil {
-		return fmt.Errorf("orchestrate %q: %w (growing needs a brain)", name, err)
-	}
 	if len(res.Declarations) == 0 {
 		return fmt.Errorf("the orchestrator declared nothing for %q", name)
 	}
@@ -1660,27 +1702,86 @@ func cmdThink(home, prompt string) error {
 	if prompt == "" {
 		return fmt.Errorf("usage: self think <prompt> (or pipe it on stdin)")
 	}
-	bin, argv := brainCommand(prompt)
-	emitted, err := pipeProcess(home, bin, argv)
+	res, err := pipeBrain(home, "think", prompt)
 	if err != nil {
 		return fmt.Errorf("brain: %w", err)
 	}
-	var responses []string
-	declarations := []map[string]any{}
-	for _, e := range emitted {
-		if e.Name == "chat.message" {
-			var p struct{ Role, Content string }
-			if json.Unmarshal(e.Payload, &p) == nil && p.Role == "assistant" {
-				responses = append(responses, p.Content)
-			}
-			continue
-		}
-		declarations = append(declarations, map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)})
-	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(map[string]any{"response": strings.Join(responses, "\n"), "declarations": declarations})
+	return enc.Encode(map[string]any{"response": res.Response, "declarations": res.Declarations})
 }
+
+// pipeBrain is the ONE seam through which the kernel asks for intelligence —
+// think, heartbeat, grow, and compile all pass here. It spawns the brain
+// ($SELF_BRAIN, or the built-in `self brain`) with the ask's kind in
+// $SELF_ASK, the prompt as the last argument, and the whole log as JSONL on
+// stdin. The parse is tolerant on purpose: JSON lines with a name are events —
+// script.authored answers a compile, chat.message carries the reply, anything
+// else is a declaration — and bare prose joins the reply. So any mind that can
+// read stdin and print plugs in whole: a local model, an API loop, a coding
+// agent, a human. The kernel cannot tell the difference, by construction.
+func pipeBrain(home, kind, prompt string) (*brainResult, error) {
+	current, err := readEvents(home)
+	if err != nil {
+		return nil, err
+	}
+	bin, argv := brainCommand(prompt)
+	cmd := exec.Command(bin, argv...)
+	cmd.Env = append(os.Environ(), "SELF_HOME="+home, "SELF_ASK="+kind)
+	cmd.Dir = home
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start brain %s: %w (%s)", filepath.Base(bin), err, brainHint)
+	}
+	feedEvents(stdin, current)
+	res := &brainResult{Declarations: []map[string]any{}}
+	var prose []string
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 1024*1024), 8*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var e struct {
+			Name    string          `json:"name"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil || e.Name == "" {
+			prose = append(prose, line)
+			continue
+		}
+		switch e.Name {
+		case "chat.message":
+			var p struct{ Role, Content string }
+			if json.Unmarshal(e.Payload, &p) == nil && p.Role == "assistant" {
+				prose = append(prose, p.Content)
+			}
+		case "script.authored":
+			var p struct{ Script string }
+			if json.Unmarshal(e.Payload, &p) == nil {
+				res.Script = p.Script
+			}
+		default:
+			res.Declarations = append(res.Declarations, map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)})
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("brain %s exited: %w", filepath.Base(bin), err)
+	}
+	res.Response = strings.Join(prose, "\n")
+	return res, nil
+}
+
+const brainHint = `plug a brain: SELF_BRAIN=<any executable, e.g. "claude -p">, or SELF_LLM_URL=<OpenAI-compatible endpoint>, or SELF_LLM_STUB=1 for offline stubs`
 
 func brainCommand(prompt string) (string, []string) {
 	if v := strings.TrimSpace(os.Getenv("SELF_BRAIN")); v != "" {
@@ -1707,9 +1808,13 @@ func cmdBrain(home, prompt string) error {
 		return fmt.Errorf("usage: self brain <prompt> (or pipe it on stdin)")
 	}
 	commands, invoke := brainTools(home)
+	system := brainSystemPrompt
+	if os.Getenv("SELF_ASK") == "grow" {
+		system, commands, invoke = orchestratorSystemPrompt, nil, nil
+	}
 	c := newLLM(home)
 	defer c.close()
-	res, err := c.agent(brainSystemPrompt, prompt, commands, invoke)
+	res, err := c.agent(system, prompt, commands, invoke)
 	if err != nil {
 		return err
 	}
@@ -1738,11 +1843,8 @@ func cmdHeartbeat(home string) error {
 	if err := appendEvent(home, &hb); err != nil {
 		return err
 	}
-	prompt := `This is a self-improvement heartbeat. Explore your garden — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it; if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` + heartbeatContext(prior)
-	commands, invoke := brainTools(home)
-	c := newLLM(home)
-	defer c.close()
-	res, err := c.agent(brainSystemPrompt, prompt, commands, invoke)
+	prompt := `This is a self-improvement heartbeat. Explore your garden — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (emit command.declared / projector.declared); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` + heartbeatContext(prior)
+	res, err := pipeBrain(home, "heartbeat", prompt)
 	if err != nil {
 		return err
 	}
@@ -1809,6 +1911,11 @@ func cmdShow(home, name string) error {
 
 func homeDir() string {
 	if v := os.Getenv("SELF_HOME"); v != "" {
+		// Scripts run with cwd = home, so a relative home would silently break
+		// every exec. Absolute, always.
+		if abs, err := filepath.Abs(v); err == nil {
+			return abs
+		}
 		return v
 	}
 	return filepath.Join(os.Getenv("HOME"), ".self")
@@ -1857,8 +1964,12 @@ usage: self [command] [args]
 
 environment:
   SELF_HOME         the body — a dir holding events.jsonl + .secret (default ~/.self)
-  SELF_BRAIN        brain process to spawn instead of the built-in one
-  SELF_LLM_URL      OpenAI-compatible endpoint (default http://127.0.0.1:8080)
+
+  plug a brain (one seam; think, heartbeat, grow, and compile all pass through it):
+  SELF_BRAIN        any executable, e.g. "claude -p" — it gets the ask's kind in
+                    $SELF_ASK, the prompt as its last argument, and the whole log
+                    as JSONL on stdin; it answers in event JSONL, prose tolerated
+  SELF_LLM_URL      …or an OpenAI-compatible endpoint (default http://127.0.0.1:8080)
   SELF_LLM_API_KEY  its key
   SELF_LLM_MODEL    its model
   SELF_LLM_STUB     "1" → offline stub scripts (no LLM, no network)

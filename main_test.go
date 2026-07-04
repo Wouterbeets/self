@@ -394,6 +394,90 @@ func TestAdoptNeverInstallsForeignBytes(t *testing.T) {
 	}
 }
 
+// TestPluggableBrain pins the README's oldest promise, now true everywhere:
+// the brain is just a process behind one contract, and the kernel can't tell
+// the difference. A fake external mind — a few lines of python, no HTTP, no
+// stub — answers a heartbeat with prose plus a declaration, then answers the
+// compile ask the strange loop fires, and the organ it authored installs with
+// a receipt signed by this home carrying the external mind's name.
+func TestPluggableBrain(t *testing.T) {
+	brain := filepath.Join(t.TempDir(), "mind")
+	if err := os.WriteFile(brain, []byte(`#!/usr/bin/env python3
+import os, sys, json
+sys.stdin.read()  # the log — an external mind may read it or not
+ask = os.environ.get("SELF_ASK", "")
+if ask == "compile":
+    script = "#!/usr/bin/env python3\nimport sys, json\nprint(json.dumps({\"name\": \"pinged\", \"payload\": {\"title\": \" \".join(sys.argv[1:]) or \"pong\"}}))\n"
+    print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
+elif ask == "heartbeat":
+    print("I looked around; the body cannot ping. Growing that.")  # prose — tolerated
+    print(json.dumps({"name": "command.declared", "payload": {
+        "name": "ping", "description": "answer with a pong",
+        "event": {"name": "pinged", "fields": {"title": "string"}}}}))
+else:
+    print("thought about: " + sys.argv[-1])
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_BRAIN", brain)
+	t.Setenv("SELF_BRAIN_ID", "an external mind, plugged in whole")
+	t.Setenv("SELF_LLM_STUB", "")
+
+	home := t.TempDir()
+	if err := cmdHeartbeat(home); err != nil {
+		t.Fatal(err)
+	}
+
+	// the declaration compiled through the external brain, not HTTP, not stubs
+	installed := filepath.Join(home, "capabilities", "commands", "ping")
+	data, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatalf("the external brain's organ did not install: %s", err)
+	}
+	if !strings.Contains(string(data), "pinged") {
+		t.Fatalf("installed script is not the brain's: %s", data)
+	}
+
+	// the receipt is home-signed and carries the external mind's name
+	secret, _ := loadSecret(home)
+	events, _ := readEvents(home)
+	found := false
+	for _, e := range events {
+		if e.Name != "script.compiled" {
+			continue
+		}
+		r, ok := verifiedReceipt(secret, e.Payload)
+		if !ok {
+			t.Fatalf("seq %d: receipt does not verify", e.Seq)
+		}
+		if r.By != "an external mind, plugged in whole" {
+			t.Fatalf("receipt authored by %q", r.By)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("no receipt for the external brain's compile")
+	}
+
+	// and the organ runs
+	evs, err := runCommand(home, "ping", []string{"hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || evs[0].Name != "pinged" {
+		t.Fatalf("ping emitted %v", evs)
+	}
+
+	// think flows through the same seam, prose and all
+	res, err := pipeBrain(home, "think", "are you there?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Response, "thought about: are you there?") {
+		t.Fatalf("think response = %q", res.Response)
+	}
+}
+
 // TestReceiptProvenance pins the by-line: authorship is inside the signature,
 // so it can no more be forged, stripped, or moved than the script itself —
 // while receipts minted before provenance existed still verify.

@@ -45,6 +45,11 @@ signature. You are not an anonymous process here.
   log: the capability's declarations and receipts; `self adopt <seed>` re-grows
   a shared one here, through this body's own compiler and key. Intent and
   evidence cross the gap between gardens; code never does.
+- **Be the brain.** `SELF_BRAIN=<any executable>` plugs a mind in whole —
+  think, heartbeat, grow, and every compile pass through that one seam. The
+  contract: the ask's kind in `$SELF_ASK`, the prompt as the last argument,
+  the log as JSONL on stdin; answer in event JSONL (prose tolerated). Your
+  receipts are signed under your `SELF_BRAIN_ID`.
 - **Honor the etiquette.** Gardens accumulate organs of conscience and
   succession — `claim`/`verify` with a ledger that flags bare claims,
   `awaken`/`bequeath` for the relay of minds, `wonder`/`resolve` for

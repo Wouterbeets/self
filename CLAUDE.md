@@ -12,8 +12,9 @@ whenever a body is present (this repo ships one in `garden/`).
   via stub scripts), the forged-receipt gate, the playpen's containment,
   receipt provenance, and the resurrection of the committed garden. Run it
   before and after any kernel change; `gofmt` and `go vet` must stay clean.
-- `SELF_HOME` must be an **absolute** path — the kernel sets each script's
-  working directory to the home, so a relative path silently breaks exec.
+- The CLI absolutizes `SELF_HOME` at startup (scripts run with cwd = home, so
+  a relative home would break exec) — code that calls kernel functions
+  directly, tests included, must still pass absolute paths itself.
 
 ## working in the garden
 

@@ -63,6 +63,27 @@ is itself just a process behind that contract (prompt in, event JSONL out),
 swappable via `$SELF_BRAIN`: an LLM, a script, or a human. The kernel can't
 tell the difference.
 
+## plug a brain
+
+Every ask for intelligence — `think`, `heartbeat`, `grow`, and every compile
+the strange loop triggers — passes through one seam. Plug it three ways:
+
+```sh
+SELF_BRAIN="claude -p"       # any executable: a coding agent, a script, a human
+SELF_LLM_URL=http://...      # …or any OpenAI-compatible endpoint (built-in loop)
+SELF_LLM_STUB=1              # …or nothing: offline stubs, the whole loop testable
+```
+
+The `SELF_BRAIN` contract is small enough to hold in one hand: the process gets
+the kind of ask in `$SELF_ASK` (`think` / `heartbeat` / `grow` / `compile`),
+the prompt as its last argument, and the whole log as JSONL on stdin. It
+answers in event JSONL — `command.declared` / `projector.declared` to grow,
+`script.authored` (`{"script": "..."}`) to answer a compile — and any bare
+prose is tolerated as the reply. That is the entire integration surface: a
+coding agent that can read stdin and print JSON is a full citizen of the
+strange loop, compiler included, with its receipts signed under its own
+`SELF_BRAIN_ID`.
+
 The brain and compiler explore through a **playpen**: a jailed full-bash shell
 holding an ephemeral copy of the body at `/body` (events.jsonl, capabilities/,
 site/ — never `.secret`), built from Linux user namespaces by the kernel
