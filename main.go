@@ -932,7 +932,7 @@ You are the self compiler. You read a projector declaration and write an executa
 
 ` + pipeContract + `
 
-Build state by filtering stdin for the consumed event names. Emit BARE semantic HTML — no CSS, no <style>, no inline styles (the kernel injects one shared stylesheet at serve time), and no JavaScript. Use plain elements plus only this class vocabulary where needed: muted, card, row, stack, tag, msg (+ who), num, and on buttons secondary / danger. Affordances are plain HTML forms: <form method="post" action="/run/COMMAND"><input name="x"><button>Label</button></form> — each field's value becomes a positional argument in document order, and the kernel redirects back so the page reloads with the new state.
+Build state by filtering stdin for the consumed event names. Emit BARE semantic HTML — no CSS, no <style>, no inline styles, and no JavaScript (the kernel injects one shared shell — theme and reactivity — at serve time; your page must be complete and legible without it). Use plain elements plus only this class vocabulary where needed: muted, card, row, stack, tag, msg (+ who for the speaker label, plus the speaker's role as a modifier class on conversation turns: "msg user" / "msg assistant"), num, and on buttons secondary / danger. Affordances are plain HTML forms: <form method="post" action="/run/COMMAND"><input name="x"><button>Label</button></form> — each field's value becomes a positional argument in document order, and the kernel redirects back so the page reloads with the new state.
 
 Before writing, explore. If the consumed events overlap with events already in the stream under different names, extend the filter to consume both and map their fields — the seed adapts to the instance, not the other way around. If the declaration includes a REFERENCE IMPLEMENTATION, verify and adapt it — never submit code you have not verified. When the playpen allows execution, verification means running: pipe the copied events.jsonl through your candidate and read the HTML it renders before you submit.
 
@@ -1360,33 +1360,175 @@ func renderKernelHTML(home string) {
 
 // ─────────────────────────────── the surface ────────────────────────────────
 
-// stylesheet is the one shared enrichment the kernel injects at serve time, so
-// projectors emit bare semantic HTML and every page is uniformly themed.
-const stylesheet = `<style>
-body{font-family:-apple-system,system-ui,sans-serif;margin:24px auto;max-width:72ch;padding:0 16px;background:#fafafa;color:#222;line-height:1.5}
-h1,h2,h3{line-height:1.2}h2{margin-top:28px;border-bottom:1px solid #ddd;padding-bottom:4px}
-.muted{color:#777}.card,article{background:#fff;border:1px solid #e0e0e0;border-radius:6px;padding:10px 14px;margin:8px 0}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:8px}
-.tag{display:inline-block;background:#e8f0fe;border-radius:3px;padding:1px 6px;font-size:12px;font-family:monospace}
-.msg{margin:6px 0}.msg .who{font-weight:bold;margin-right:6px}.num{text-align:right;font-variant-numeric:tabular-nums}
-table{border-collapse:collapse;width:100%}th{background:#4a5568;color:#fff;text-align:left}th,td{border:1px solid #ddd;padding:5px 9px;font-size:14px}
-pre{background:#f4f4f4;border:1px solid #e0e0e0;border-radius:4px;padding:10px;overflow-x:auto;font-size:13px}
-code{font-family:monospace;background:#f0f0f0;border-radius:3px;padding:1px 4px}
-form{margin:8px 0}input,textarea{font:inherit;padding:5px 8px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box;margin:2px 0}
-button{font:inherit;padding:5px 14px;border:1px solid #2563eb;border-radius:4px;background:#2563eb;color:#fff;cursor:pointer}
-button.secondary{background:#fff;color:#2563eb}button.danger{border-color:#dc2626;background:#dc2626}
+// The shell is the one shared enrichment the kernel injects at serve time —
+// theme and feel layered over projections that stay bare semantic HTML on
+// disk. The split of responsibilities is the design system: the log is the
+// truth, the projection is the state, the shell is the feel. The shell knows
+// the class vocabulary, never the events; strip it (self show, curl, lynx,
+// rehydrate) and every page still works, because every affordance underneath
+// is a plain HTML form.
+const stylesheet = `<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><style>
+:root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#26231d;--muted:#7d7568;--line:#e5e0d5;--wash:#edeade;
+--accent:#2f6b4f;--accent-ink:#fff;--user-bg:#e3efe6;--user-line:#cbdfd2;--danger:#b3402e;
+--shadow:0 1px 3px rgba(60,50,30,.07)}
+@media (prefers-color-scheme:dark){:root{--bg:#16150f;--panel:#201e16;--ink:#e7e2d6;--muted:#948b7b;
+--line:#35322a;--wash:#2a2820;--accent:#69b98e;--accent-ink:#10231a;--user-bg:#233529;--user-line:#31513e;
+--danger:#e0755f;--shadow:0 1px 3px rgba(0,0,0,.4)}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{font-family:system-ui,-apple-system,sans-serif;margin:0 auto;max-width:72ch;padding:24px 20px 32px;
+background:var(--bg);color:var(--ink);line-height:1.55}
+h1,h2,h3{font-family:Georgia,'Iowan Old Style',serif;font-weight:600;line-height:1.25}
+h1{font-size:1.55rem;margin:.2em 0 .6em}h2{margin-top:32px;border-bottom:1px solid var(--line);padding-bottom:6px}
+a{color:var(--accent)}.muted{color:var(--muted)}
+.card,article{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:10px 0;box-shadow:var(--shadow)}
+.card.danger{border-color:var(--danger);color:var(--danger)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:10px}
+.tag{display:inline-block;background:var(--wash);color:var(--accent);border-radius:5px;padding:1px 8px;font-size:12px;font-family:ui-monospace,monospace}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.msg{max-width:85%;width:fit-content;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+padding:8px 14px;margin:10px 0;box-shadow:var(--shadow);overflow-wrap:break-word}
+.msg .who{display:block;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:1px}
+.msg.user{margin-left:auto;background:var(--user-bg);border-color:var(--user-line);border-bottom-right-radius:5px}
+.msg.assistant{margin-right:auto;border-bottom-left-radius:5px}
+.msg.pending{opacity:.65}
+.dots i{display:inline-block;width:5px;height:5px;margin:1px 2px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
+.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+table{border-collapse:collapse;width:100%}
+th{text-align:left;color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}
+th,td{border-bottom:1px solid var(--line);padding:7px 10px;font-size:14px}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;overflow-x:auto;font-size:13px}
+code{font-family:ui-monospace,monospace;background:var(--wash);border-radius:4px;padding:1px 5px;font-size:.9em}
+form{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+input,textarea{font:inherit;flex:1 1 24ch;min-width:0;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:inherit}
+textarea{flex-basis:100%}
+input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+button{font:inherit;padding:9px 16px;border:1px solid var(--accent);border-radius:10px;background:var(--accent);color:var(--accent-ink);cursor:pointer;transition:filter .15s}
+button:hover{filter:brightness(1.08)}
+button.secondary{background:transparent;color:var(--accent)}button.danger{border-color:var(--danger);background:var(--danger);color:#fff}
+form.busy button{opacity:.55;pointer-events:none}
+body:has(.msg) form:last-of-type{position:sticky;bottom:0;padding:14px 0 10px;margin-top:6px;background:linear-gradient(transparent,var(--bg) 35%)}
+.rise{animation:rise .22s ease-out both}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+::view-transition-old(root),::view-transition-new(root){animation-duration:.15s}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
 </style>`
 
-func injectStyle(page []byte) []byte {
+// shellScript is the reactive half of the shell: progressive enhancement
+// only, injected at serve time and never persisted. The state machine is
+// untouched — every interaction is still form → command → events → replay;
+// the script changes how the round-trip FEELS, not what it is. It may show
+// intent in flight (a pending turn, a thinking brain) but never claims
+// state: when the round-trip lands, the page is re-fetched and the log's
+// replay wins. Liveness is the same idea watched from outside — the byte
+// length of /events is the cursor; when the log grows, re-replay.
+const shellScript = `<script>
+(() => {
+"use strict";
+if (!window.fetch || !window.DOMParser) return;
+let busy = false, baseline = null;
+
+const logSize = () => fetch("/events", {method:"HEAD", cache:"no-store"})
+  .then(r => r.headers.get("content-length")).catch(() => null);
+
+async function refresh(toBottom) {
+  const res = await fetch(location.href, {cache:"no-store"});
+  if (!res.ok) return;
+  const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+  const ae = document.activeElement;
+  const keep = ae && ae.name ? {name: ae.name, value: ae.value} : null;
+  const y = scrollY;
+  const swap = () => {
+    document.body.replaceWith(doc.body);
+    if (toBottom && document.querySelector(".msg")) {
+      [...document.querySelectorAll(".msg")].slice(-2).forEach(m => m.classList.add("rise"));
+      scrollTo(0, document.body.scrollHeight);
+    } else scrollTo(0, y);
+    if (keep) {
+      const el = document.querySelector("[name=\"" + keep.name.replace(/"/g, "") + "\"]");
+      if (el) { if (!toBottom) el.value = keep.value; el.focus(); }
+    }
+  };
+  if (document.startViewTransition) document.startViewTransition(swap); else swap();
+}
+
+document.addEventListener("submit", e => {
+  const f = e.target;
+  const action = new URL(f.getAttribute("action") || "", location.href);
+  if (!action.pathname.startsWith("/run/")) return;
+  e.preventDefault();
+  if (busy) return;
+  busy = true;
+  f.classList.add("busy");
+  const body = new URLSearchParams(new FormData(f));
+  const first = f.querySelector("input,textarea");
+  const text = first ? first.value : "";
+  let ghost, think;
+  const anchor = [...document.querySelectorAll(".msg")].pop();
+  if (anchor && text.trim()) { // a conversation: show the turn in flight, clearly pending
+    const label = (role) => { // borrow the who label the projection already uses
+      const whos = document.querySelectorAll(".msg." + role + " .who");
+      return whos.length ? "<span class='who'></span>" : "";
+    };
+    ghost = document.createElement("div");
+    ghost.className = "msg user pending rise";
+    ghost.innerHTML = label("user");
+    ghost.appendChild(document.createTextNode(text));
+    think = document.createElement("div");
+    think.className = "msg assistant pending rise";
+    think.innerHTML = label("assistant") + "<span class='dots'><i></i><i></i><i></i></span>";
+    for (const role of ["user", "assistant"]) {
+      const whos = document.querySelectorAll(".msg." + role + " .who");
+      const target = (role === "user" ? ghost : think).querySelector(".who");
+      if (whos.length && target) target.textContent = whos[whos.length - 1].textContent;
+    }
+    anchor.after(ghost, think);
+    first.value = "";
+    scrollTo({top: document.body.scrollHeight, behavior: "smooth"});
+  }
+  fetch(action, {method: "POST", body}).then(async r => {
+    if (!r.ok) throw new Error((await r.text()).trim() || r.status);
+    baseline = null;
+    await refresh(true);
+  }).catch(err => { // degrade honestly: say what failed, give the words back
+    if (ghost) { think.remove(); ghost.remove(); first.value = text; }
+    const p = document.createElement("p");
+    p.className = "card danger rise";
+    p.textContent = "could not run " + action.pathname.slice(5) + ": " + err.message;
+    f.before(p);
+    setTimeout(() => p.remove(), 8000);
+  }).finally(() => { busy = false; f.classList.remove("busy"); });
+});
+
+async function tick() {
+  if (document.hidden || busy) return;
+  const n = await logSize();
+  if (n == null) return;
+  if (baseline != null && n !== baseline) {
+    const nearBottom = innerHeight + scrollY > document.body.scrollHeight - 120;
+    await refresh(nearBottom && !!document.querySelector(".msg"));
+  }
+  baseline = n;
+}
+setInterval(tick, 2500);
+addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+addEventListener("DOMContentLoaded", tick);
+})();
+</script>`
+
+func injectShell(page []byte) []byte {
+	shell := stylesheet + shellScript
 	if i := bytes.Index(page, []byte("<head>")); i >= 0 {
 		i += len("<head>")
-		return append(page[:i:i], append([]byte(stylesheet), page[i:]...)...)
+		return append(page[:i:i], append([]byte(shell), page[i:]...)...)
 	}
-	return append([]byte(stylesheet), page...)
+	return append([]byte(shell), page...)
 }
 
 // cmdServe serves the instance: every page re-rendered against current events,
-// every affordance a plain HTML form — zero JavaScript.
+// every affordance a plain HTML form. The injected shell layers feel on top —
+// pending turns, live re-replay, theme — but carries no state and grants no
+// power: strip it and every page still works, because the forms do.
 func cmdServe(home, port string) error {
 	if port == "" {
 		port = "7777"
@@ -1416,7 +1558,7 @@ func cmdServe(home, port string) error {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(injectStyle(page))
+			w.Write(injectShell(page))
 			return
 		}
 		if p, _ := scriptPath(home, "projector", name); fileExists(p) {
@@ -1426,7 +1568,7 @@ func cmdServe(home, port string) error {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(injectStyle(page))
+			w.Write(injectShell(page))
 			return
 		}
 		http.FileServer(http.Dir(filepath.Join(home, "site"))).ServeHTTP(w, r)
