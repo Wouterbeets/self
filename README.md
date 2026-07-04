@@ -61,6 +61,16 @@ is itself just a process behind that contract (prompt in, event JSONL out),
 swappable via `$SELF_BRAIN`: an LLM, a script, or a human. The kernel can't
 tell the difference.
 
+The brain and compiler explore through a **playpen**: a jailed full-bash shell
+holding an ephemeral copy of the body at `/body` (events.jsonl, capabilities/,
+site/ — never `.secret`), built from Linux user namespaces by the kernel
+itself. Writes cannot leave the jail, the network namespace has no interfaces,
+and nothing done inside installs anything — declarations remain the only
+ingress, and only the kernel signs. So a mind can *test* a candidate organ
+against the real log before declaring it, instead of squinting at it. Where
+namespaces are unavailable (or `SELF_SANDBOX=0`), bash falls back to a
+fail-closed read-only allowlist — it never fails open.
+
 ## environment
 
 ```
@@ -70,6 +80,8 @@ SELF_LLM_URL      OpenAI-compatible endpoint (default http://127.0.0.1:8080)
 SELF_LLM_API_KEY  its key
 SELF_LLM_MODEL    its model
 SELF_LLM_STUB     "1" → offline stub scripts (no LLM, no network)
+SELF_SANDBOX      "0" → disable the brain's jailed playpen (bash falls back
+                  to a fail-closed read-only allowlist; never fails open)
 ```
 
 ## what's in the repo

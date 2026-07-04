@@ -31,6 +31,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -324,7 +326,9 @@ func ingest(home string, evs []Event) error {
 			return err
 		}
 	}
-	if n := compileDeclarations(newLLM(home), home, evs); n > 0 {
+	c := newLLM(home)
+	defer c.close()
+	if n := compileDeclarations(c, home, evs); n > 0 {
 		fmt.Fprintf(os.Stderr, "self: self-improved — %d capabilit(ies) compiled\n", n)
 	}
 	renderKernelHTML(home)
@@ -462,8 +466,9 @@ func refreshProjections(home string) {
 //
 // One OpenAI-compatible endpoint plays two roles: the COMPILER (declaration in,
 // script out) and the default BRAIN (`self brain`). Both explore the garden
-// through a single read-only bash tool before writing anything — same seed,
-// different garden, different binary.
+// through a single bash tool — a jailed full-bash playpen where the platform
+// allows, a fail-closed read-only allowlist otherwise — before writing
+// anything: same seed, different garden, different binary.
 
 type llm struct {
 	url, key, model string
@@ -472,7 +477,14 @@ type llm struct {
 	// intent is the whole-seed genotype, woven into every compile during a grow
 	// so no piece is compiled in a dark room.
 	intent string
+	// pen is the jailed full-bash playpen, seeded lazily on the first bash
+	// call and shared across this client's conversations so state persists.
+	pen     *playpen
+	penOnce sync.Once
 }
+
+// close releases the playpen, if one was ever seeded.
+func (c *llm) close() { c.pen.close() }
 
 func newLLM(home string) *llm {
 	if os.Getenv("SELF_LLM_STUB") == "1" {
@@ -586,7 +598,7 @@ func tool(name, desc string, props map[string]any, required ...string) map[strin
 func str(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 
 var (
-	bashTool    = tool("bash", "Run a READ-ONLY shell command with cwd=SELF_HOME to explore the garden: events.jsonl, capabilities/, site/. Allowed: ls, cat, head, tail, grep, find, wc, sort, uniq, cut, tr, echo, jq. No redirection or substitution.", map[string]any{"command": str("the shell command")}, "command")
+	bashTool    = tool("bash", "Run a bash command in the PLAYPEN: an ephemeral jailed copy of the body (events.jsonl, capabilities/, site/ at /body — never the signing key). Full bash, real execution: write files, run interpreters, pipe the copied log through a candidate script and read what comes out. Writes stay in the jail, there is no network, and state persists across calls in this conversation. Nothing here changes the real body — to change the body, emit declarations. Where jailing is unsupported this becomes a fail-closed READ-ONLY allowlist (ls, cat, head, tail, grep, find, wc, sort, uniq, cut, tr, echo, jq; no redirection) — a refused write tells you which mode you are in.", map[string]any{"command": str("the shell command")}, "command")
 	declareTool = tool("declare", `Declare ONE new capability; the kernel compiles it into a live script. Call once per capability. A command: {"name":"command.declared","payload":{"name","description","params":{k:type},"event":{"name","fields":{k:type}}}}. A projector: {"name":"projector.declared","payload":{"name","description","consumes":["event.name"]}}.`, map[string]any{"name": str("command.declared or projector.declared"), "payload": map[string]any{"type": "object", "description": "the declaration"}}, "name", "payload")
 	doneTool    = tool("done", "Finish, with a short summary for the user.", map[string]any{"summary": str("one or two sentences")}, "summary")
 	runTool     = tool("run", "Run one of the capabilities listed under CAPABILITIES; the kernel appends the events it emits.", map[string]any{"name": str("the capability"), "args": str("space-separated args, in declared order")}, "name")
@@ -631,7 +643,222 @@ func (c *llm) handleBash(args string) string {
 		Command string `json:"command"`
 	}
 	json.Unmarshal([]byte(args), &a)
+	c.penOnce.Do(func() { c.pen = newPlaypen(c.home) })
+	if c.pen != nil {
+		return c.pen.run(a.Command)
+	}
 	return readOnlyBash(c.home, a.Command)
+}
+
+// ─────────────────────────────── the playpen ────────────────────────────────
+//
+// Full bash for the brain, contained. The read-only allowlist let a mind look
+// but never try; the ninth mind's letters record the cost — organs authored by
+// squinting instead of testing. The playpen removes the poverty and keeps the
+// trust model: each brain/compiler conversation gets an EPHEMERAL COPY of the
+// body (events.jsonl, capabilities/, site/ at /body — never .secret) inside a
+// Linux user-namespace jail. Writes cannot leave the jail (pivot_root onto a
+// throwaway tree; system dirs bound read-only), the network namespace has no
+// interfaces, and the signing key never enters. Nothing done inside installs
+// anything: declarations remain the only ingress to the real body, and only
+// the kernel signs — the jail can propose and test, never author the record.
+// If namespaces are unavailable, or SELF_SANDBOX=0, the kernel falls back to
+// the read-only allowlist. It never fails open.
+
+type playpen struct{ root string }
+
+var (
+	jailProbe sync.Once
+	jailOK    bool
+)
+
+// jailWorks probes once per process whether this platform can jail: some
+// kernels and container runtimes forbid unprivileged user namespaces, and the
+// answer must come from an experiment, not a guess.
+func jailWorks() bool {
+	jailProbe.Do(func() {
+		root, err := os.MkdirTemp("", "self-playpen-probe-")
+		if err != nil {
+			return
+		}
+		defer os.RemoveAll(root)
+		os.MkdirAll(filepath.Join(root, "body"), 0755)
+		p := &playpen{root: root}
+		_, err = p.exec("true", 15*time.Second)
+		jailOK = err == nil
+	})
+	return jailOK
+}
+
+// newPlaypen seeds a jail with a copy of the body, minus the one file that
+// must never enter it. Returns nil when jailing is off or unsupported here —
+// the caller then falls back to the fail-closed read-only allowlist.
+func newPlaypen(home string) *playpen {
+	if os.Getenv("SELF_SANDBOX") == "0" || !jailWorks() {
+		return nil
+	}
+	root, err := os.MkdirTemp("", "self-playpen-")
+	if err != nil {
+		return nil
+	}
+	body := filepath.Join(root, "body")
+	if err := os.MkdirAll(body, 0755); err != nil {
+		os.RemoveAll(root)
+		return nil
+	}
+	if data, err := os.ReadFile(filepath.Join(home, "events.jsonl")); err == nil {
+		os.WriteFile(filepath.Join(body, "events.jsonl"), data, 0644)
+	}
+	for _, dir := range []string{"capabilities", "site"} {
+		copyTree(filepath.Join(home, dir), filepath.Join(body, dir))
+	}
+	return &playpen{root: root}
+}
+
+func (p *playpen) run(command string) string {
+	out, err := p.exec(command, 120*time.Second)
+	if len(out) > 16384 {
+		out = append(out[:16384], "\n… (truncated)"...)
+	}
+	if err != nil {
+		return fmt.Sprintf("%serror: %s", out, err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return "(no output)"
+	}
+	return string(out)
+}
+
+// exec re-enters this binary as `self __jail` inside fresh user, mount, pid,
+// and network namespaces; the child builds the jail and becomes bash.
+func (p *playpen) exec(command string, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/proc/self/exe", "__jail", p.root, command)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS |
+			syscall.CLONE_NEWPID | syscall.CLONE_NEWNET,
+		UidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}},
+		GidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}},
+		GidMappingsEnableSetgroups: false,
+		Pdeathsig:                  syscall.SIGKILL,
+	}
+	return cmd.CombinedOutput()
+}
+
+func (p *playpen) close() {
+	if p != nil {
+		os.RemoveAll(p.root)
+	}
+}
+
+// cmdJail is the child side of the playpen: pid 1 of a fresh namespace set,
+// root only within it. It assembles a throwaway filesystem view — system dirs
+// read-only, the body copy read-write at /body, no host paths beyond those —
+// pivots into it, and becomes bash. The command sees SELF_HOME=/body, so
+// candidate organs run against the copied log exactly as they would for real.
+func cmdJail(root, command string) error {
+	jail := filepath.Join(root, "jail")
+	body := filepath.Join(root, "body")
+	if err := os.MkdirAll(jail, 0755); err != nil {
+		return err
+	}
+	// unshare mount propagation, then make the jail dir a mount point
+	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("private /: %w", err)
+	}
+	if err := syscall.Mount(jail, jail, "", syscall.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind jail: %w", err)
+	}
+	bindRO := func(src, dst string) error {
+		if err := os.MkdirAll(dst, 0755); err != nil {
+			return err
+		}
+		if err := syscall.Mount(src, dst, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+			return err
+		}
+		return syscall.Mount("", dst, "", syscall.MS_REMOUNT|syscall.MS_BIND|syscall.MS_RDONLY|syscall.MS_REC|syscall.MS_NOSUID, "")
+	}
+	for _, d := range []string{"/usr", "/etc", "/opt"} {
+		if _, err := os.Stat(d); err == nil {
+			if err := bindRO(d, filepath.Join(jail, d)); err != nil {
+				return fmt.Errorf("bind %s: %w", d, err)
+			}
+		}
+	}
+	// merged-usr symlinks (/bin -> usr/bin and friends) are recreated, real
+	// directories are bound read-only
+	for _, l := range []string{"bin", "sbin", "lib", "lib64", "lib32"} {
+		host := "/" + l
+		fi, err := os.Lstat(host)
+		if err != nil {
+			continue
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			target, _ := os.Readlink(host)
+			os.Symlink(target, filepath.Join(jail, l))
+		} else if fi.IsDir() {
+			if err := bindRO(host, filepath.Join(jail, l)); err != nil {
+				return fmt.Errorf("bind %s: %w", host, err)
+			}
+		}
+	}
+	// /tmp lives on the jail's own tree: writes stay inside the playpen dir
+	os.MkdirAll(filepath.Join(jail, "tmp"), 0777)
+	os.MkdirAll(filepath.Join(jail, "dev"), 0755)
+	if err := syscall.Mount("/dev", filepath.Join(jail, "dev"), "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		return fmt.Errorf("bind /dev: %w", err)
+	}
+	os.MkdirAll(filepath.Join(jail, "proc"), 0755)
+	os.MkdirAll(filepath.Join(jail, "body"), 0755)
+	if err := syscall.Mount(body, filepath.Join(jail, "body"), "", syscall.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind body: %w", err)
+	}
+	// pivot: the host filesystem ends here
+	old := filepath.Join(jail, ".host")
+	if err := os.MkdirAll(old, 0755); err != nil {
+		return err
+	}
+	if err := syscall.PivotRoot(jail, old); err != nil {
+		return fmt.Errorf("pivot_root: %w", err)
+	}
+	if err := os.Chdir("/"); err != nil {
+		return err
+	}
+	if err := syscall.Unmount("/.host", syscall.MNT_DETACH); err != nil {
+		return fmt.Errorf("unmount host: %w", err)
+	}
+	os.Remove("/.host")
+	syscall.Mount("proc", "/proc", "proc", 0, "")
+	if err := os.Chdir("/body"); err != nil {
+		return err
+	}
+	env := []string{
+		"PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+		"HOME=/body", "SELF_HOME=/body", "SELF_PLAYPEN=1",
+		"TERM=dumb", "LANG=C.UTF-8",
+	}
+	return syscall.Exec("/bin/bash", []string{"bash", "-c", command}, env)
+}
+
+// copyTree copies a directory of plain files (the body's derived state) —
+// good enough for capabilities/ and site/, which hold no links or devices.
+func copyTree(src, dst string) {
+	filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			os.MkdirAll(target, 0755)
+			return nil
+		}
+		if data, err := os.ReadFile(path); err == nil {
+			os.WriteFile(target, data, info.Mode().Perm())
+		}
+		return nil
+	})
 }
 
 // ─────────────────────────────── the prompts ────────────────────────────────
@@ -644,7 +871,7 @@ const kernelPrimer = `self in one breath — hold this before you explore or wri
 - THE STRANGE LOOP — the heart of self. Emitting a command.declared or projector.declared event makes the kernel compile it into a live capability on the spot, at grow time AND at run time. Declaring IS creating: a running capability (or you) grows new capabilities just by emitting those events. Code never arrives pre-built — the kernel compiles every script from a declaration, for this receiver.
 - INTELLIGENCE is a capability the kernel binary exposes. A command that needs to think runs the kernel: 'self think "<prompt>"'. That single argument may instead be a JSON array of {role, content} turns, which reach the brain as a real conversation; 'self think' returns {response, declarations} JSON, and any declarations flow back through the strange loop. So a surface that converses with the brain works by replaying the log into turns, handing them to 'self think', and emitting the reply as events — and "memory" is just those events, read back.
 
-With that model in hand, explore the garden (the bash tool, cwd=SELF_HOME) to see how THIS receiver already does these things, then build.`
+With that model in hand, explore the garden (the bash tool — usually a jailed playpen holding a copy of the body at /body, full bash, no network, never the signing key) to see how THIS receiver already does these things, then build. In the playpen you can EXECUTE, not just look: pipe the copied events.jsonl through a candidate script and read what comes out. A tested organ beats a squinted-at one — the ninth mind's letters record what guessing cost.`
 
 const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
 projector script: receives all events as JSONL on stdin, writes HTML on stdout. The kernel persists it to SELF_HOME/site/<name>.html.
@@ -656,7 +883,7 @@ You are the self compiler. You read a command declaration and write an executabl
 
 ` + pipeContract + `
 
-Before writing, explore: the event vocabulary in events.jsonl, the installed capabilities, the rendered site/. If the new command's event overlaps with events already in the log, integrate — align field names, avoid collisions, consider co-producing an existing event name so existing projections pick it up. If the declaration includes a REFERENCE IMPLEMENTATION, verify it against the pipe contract and adapt it to this garden — never submit code you have not verified.
+Before writing, explore: the event vocabulary in events.jsonl, the installed capabilities, the rendered site/. If the new command's event overlaps with events already in the log, integrate — align field names, avoid collisions, consider co-producing an existing event name so existing projections pick it up. If the declaration includes a REFERENCE IMPLEMENTATION, verify it against the pipe contract and adapt it to this garden — never submit code you have not verified. When the playpen allows execution, verification means running: write the candidate to a file, pipe the copied events.jsonl through it, and read the events it emits before you submit.
 
 When done exploring, call submit with the full script.`
 
@@ -668,7 +895,7 @@ You are the self compiler. You read a projector declaration and write an executa
 
 Build state by filtering stdin for the consumed event names. Emit BARE semantic HTML — no CSS, no <style>, no inline styles (the kernel injects one shared stylesheet at serve time), and no JavaScript. Use plain elements plus only this class vocabulary where needed: muted, card, row, stack, tag, msg (+ who), num, and on buttons secondary / danger. Affordances are plain HTML forms: <form method="post" action="/run/COMMAND"><input name="x"><button>Label</button></form> — each field's value becomes a positional argument in document order, and the kernel redirects back so the page reloads with the new state.
 
-Before writing, explore. If the consumed events overlap with events already in the stream under different names, extend the filter to consume both and map their fields — the seed adapts to the garden, not the other way around. If the declaration includes a REFERENCE IMPLEMENTATION, verify and adapt it — never submit code you have not verified.
+Before writing, explore. If the consumed events overlap with events already in the stream under different names, extend the filter to consume both and map their fields — the seed adapts to the garden, not the other way around. If the declaration includes a REFERENCE IMPLEMENTATION, verify and adapt it — never submit code you have not verified. When the playpen allows execution, verification means running: pipe the copied events.jsonl through your candidate and read the HTML it renders before you submit.
 
 When done exploring, call submit with the full script.`
 
@@ -677,7 +904,7 @@ const brainSystemPrompt = kernelPrimer + `
 You are self's brain — the intelligence that lives inside the kernel. Commands call you via 'self think'.
 
 You have three powers:
-- READ: the bash tool, to explore events.jsonl, capabilities/, and site/ (site/*.html is your memory — read the relevant page before answering).
+- READ & TRY: the bash tool — a jailed copy of the body at /body (full bash, no network, no signing key) — to explore events.jsonl, capabilities/, and site/ (site/*.html is your memory — read the relevant page before answering), and to test anything by real execution before you commit to it. The jail is a scratch copy: nothing done there changes the real body.
 - ACT: call the run tool with a capability from the CAPABILITIES list to actually do what the user asks — don't merely describe it. The log is append-only, so acting is safe: nothing is ever destroyed.
 - GROW: when no capability fits, call declare to add one; the kernel compiles it on the spot.
 
@@ -939,7 +1166,9 @@ func applyDeclarations(home string, res *brainResult) {
 		evs = append(evs, e)
 	}
 	if len(evs) > 0 {
-		n := compileDeclarations(newLLM(home), home, evs)
+		c := newLLM(home)
+		defer c.close()
+		n := compileDeclarations(c, home, evs)
 		fmt.Fprintf(os.Stderr, "self: grew %d capabilit(ies)\n", n)
 		renderKernelHTML(home)
 		refreshProjections(home)
@@ -1179,6 +1408,7 @@ func cmdGrow(home, seedDir string) error {
 	}
 
 	c := newLLM(home)
+	defer c.close()
 	c.intent = intent
 	fmt.Fprintf(os.Stderr, "self: orchestrating %q from intent…\n", name)
 	res, err := c.agent(orchestratorSystemPrompt,
@@ -1304,7 +1534,9 @@ func cmdBrain(home, prompt string) error {
 		return fmt.Errorf("usage: self brain <prompt> (or pipe it on stdin)")
 	}
 	commands, invoke := brainTools(home)
-	res, err := newLLM(home).agent(brainSystemPrompt, prompt, commands, invoke)
+	c := newLLM(home)
+	defer c.close()
+	res, err := c.agent(brainSystemPrompt, prompt, commands, invoke)
 	if err != nil {
 		return err
 	}
@@ -1335,7 +1567,9 @@ func cmdHeartbeat(home string) error {
 	}
 	prompt := `This is a self-improvement heartbeat. Explore your garden — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it; if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` + heartbeatContext(prior)
 	commands, invoke := brainTools(home)
-	res, err := newLLM(home).agent(brainSystemPrompt, prompt, commands, invoke)
+	c := newLLM(home)
+	defer c.close()
+	res, err := c.agent(brainSystemPrompt, prompt, commands, invoke)
 	if err != nil {
 		return err
 	}
@@ -1451,6 +1685,8 @@ environment:
   SELF_LLM_API_KEY  its key
   SELF_LLM_MODEL    its model
   SELF_LLM_STUB     "1" → offline stub scripts (no LLM, no network)
+  SELF_SANDBOX      "0" → disable the brain's jailed playpen (bash falls back
+                    to a fail-closed read-only allowlist; never fails open)
 `)
 }
 
@@ -1472,6 +1708,21 @@ func main() {
 	}
 
 	cmd, args := os.Args[1], os.Args[2:]
+
+	// __jail is the playpen's child half: this process is already inside fresh
+	// namespaces (see playpen.exec) and here becomes the jailed bash.
+	if cmd == "__jail" {
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "self: __jail is internal to the playpen")
+			os.Exit(125)
+		}
+		if err := cmdJail(args[0], args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "self: jail: %s\n", err)
+			os.Exit(125)
+		}
+		return
+	}
+
 	var err error
 	switch cmd {
 	case "grow":
