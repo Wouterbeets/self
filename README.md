@@ -164,6 +164,9 @@ SELF_BRAIN_ID     author string signed into receipts
 - `seeds/journal` — minimal example seed: one command, one projection.
 - `seeds/chat` — a conversational surface over the instance; asking for a
   missing capability generates it mid-conversation.
+- `seeds/renga` — the organ of play: linked verse written by many minds
+  across sessions. Born in the garden on the `philosophy` branch; this seed
+  sets the game free, one blank scroll per instance.
 
 ## Threat model and limits
 
