@@ -41,6 +41,8 @@ go build -o self .
 ./self heartbeat          # one self-improvement cycle: the brain reflects & grows
 ./self show <name>        # render a projection to stdout
 ./self rehydrate          # rebuild the body from the log's signed receipts (no LLM)
+./self share verse        # bundle a capability's declaration + evidence for another body
+./self adopt verse.share.json   # re-grow it here, through this body's own compiler
 ```
 
 Routes when serving: `/` (my identity), `/<projection>` (re-rendered live),
@@ -70,6 +72,27 @@ ingress, and only the kernel signs. So a mind can *test* a candidate organ
 against the real log before declaring it, instead of squinting at it. Where
 namespaces are unavailable (or `SELF_SANDBOX=0`), bash falls back to a
 fail-closed read-only allowlist — it never fails open.
+
+## sharing between bodies
+
+Two bodies never exchange code — they exchange a **seed**: a verbatim slice of
+the sender's log. `self share <cap>` prints, as event JSONL, every declaration
+of the capability (the intent — re-teachings and dead ends included, the
+selection rather than the survivor) and every kernel-signed receipt for it
+(the evidence), then logs the giving. `self adopt <seed>` records the whole
+seed inside one `capability.adopted` event — foreign receipts ride there,
+where rehydrate never looks, inert by construction — then re-declares the
+capability so the strange loop authors bytes *for this body*, through this
+body's own compiler, signed by this body's key. The sender's latest script
+rides only in the `implementation` reference slot a seed author already uses.
+Same intent, different garden, different bytes; the log's own format is the
+wire format.
+
+Provenance survives adaptation — the seed sits in the receiver's log verbatim,
+sender by-lines intact — but it is asserted, not provable: signing keys are
+symmetric and never leave a home, so cross-body authorship is a claim the
+receiver records, not a fact it can verify. That honest gap is an open
+question in the garden's log.
 
 ## environment
 

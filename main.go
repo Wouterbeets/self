@@ -1517,6 +1517,126 @@ func cmdGrow(home, seedDir string) error {
 	return nil
 }
 
+// ────────────────── sharing — intent and evidence between bodies ─────────────
+//
+// A seed is a verbatim slice of the sender's log: every declaration of one
+// capability (the intent, re-teachings and dead ends included) and every
+// kernel-signed receipt for it (the evidence). The log's own format is the
+// wire format. Code never crosses: adopt records the whole seed inside a
+// single capability.adopted event — foreign receipts ride there, where
+// rehydrate never looks, inert by construction — then re-declares the
+// capability so the strange loop authors bytes for THIS body, through its own
+// compiler, signed by its own key. The sender's latest script rides only as
+// the reference a seed author already gets; the compiler adapts, never copies.
+
+// declName returns the capability a declaration event declares, or "".
+func declName(e Event) (typ, name string) {
+	if e.Name != "command.declared" && e.Name != "projector.declared" {
+		return "", ""
+	}
+	var d struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(e.Payload, &d) != nil {
+		return "", ""
+	}
+	return strings.TrimSuffix(e.Name, ".declared"), d.Name
+}
+
+func cmdShare(home, name string) error {
+	events, err := readEvents(home)
+	if err != nil {
+		return err
+	}
+	secret, err := loadSecret(home)
+	if err != nil {
+		return err
+	}
+	var seed []Event
+	hasDecl := false
+	for _, e := range events {
+		if _, n := declName(e); n == name {
+			seed, hasDecl = append(seed, e), true
+		} else if e.Name == "script.compiled" {
+			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Name == name {
+				seed = append(seed, e)
+			}
+		}
+	}
+	if !hasDecl {
+		return fmt.Errorf("no declaration for %q in this log — nothing to share (code never crosses; the declaration is what does)", name)
+	}
+	enc := json.NewEncoder(os.Stdout)
+	for i := range seed {
+		enc.Encode(seed[i])
+	}
+	// The sender remembers giving: if it is not an event, it did not happen.
+	payload, _ := json.Marshal(map[string]any{"name": name, "events": len(seed)})
+	e := newEvent("capability.shared", payload)
+	if err := appendEvent(home, &e); err != nil {
+		return err
+	}
+	refreshProjections(home)
+	fmt.Fprintf(os.Stderr, "self: shared %q — %d event(s) of intent and evidence\n", name, len(seed))
+	return nil
+}
+
+func cmdAdopt(home, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var seed []Event
+	var typ, name string
+	var declPayload json.RawMessage
+	reference := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		var e Event
+		if json.Unmarshal([]byte(line), &e) != nil || e.Name == "" {
+			return fmt.Errorf("not a seed — want event JSONL, one {name, payload} per line")
+		}
+		seed = append(seed, e)
+		if t, n := declName(e); n != "" { // the latest declaration is what grows here
+			typ, name, declPayload = t, n, e.Payload
+		}
+		if e.Name == "script.compiled" { // the latest script is reference, never install
+			var r receipt
+			if json.Unmarshal(e.Payload, &r) == nil && r.Script != "" {
+				reference = r.Script
+			}
+		}
+	}
+	if declPayload == nil {
+		return fmt.Errorf("the seed carries no declaration — nothing can grow from it")
+	}
+	if err := ensureHome(home); err != nil {
+		return err
+	}
+	if reference != "" {
+		var m map[string]any
+		if err := json.Unmarshal(declPayload, &m); err != nil {
+			return fmt.Errorf("the seed's declaration is not an object: %w", err)
+		}
+		m["implementation"] = reference
+		declPayload, _ = json.Marshal(m)
+	}
+	ap, _ := json.Marshal(map[string]any{"type": typ, "name": name, "seed": seed})
+	if err := ingest(home, []Event{
+		newEvent("capability.adopted", ap),
+		newEvent(typ+".declared", declPayload),
+	}); err != nil {
+		return err
+	}
+	if p, _ := scriptPath(home, typ, name); !fileExists(p) {
+		return fmt.Errorf("adopted %q into the log, but no compiler produced a script — wire a brain (or SELF_LLM_STUB=1) and declare it again", name)
+	}
+	fmt.Printf("adopted %q — re-authored by this body's own compiler, signed by its own key\n", name)
+	return nil
+}
+
 func cmdRun(home, command string, args []string) error {
 	evs, err := runCommand(home, command, args)
 	if err != nil {
@@ -1730,6 +1850,10 @@ usage: self [command] [args]
   self show <name>     render a projection to stdout
   self live [port]     serve the live garden (default 7777)
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
+  self share <cap>     print a seed to stdout — the capability's declarations and
+                       receipts, a verbatim slice of this log
+  self adopt <seed>    re-grow a shared capability here — this body's own compiler
+                       re-authors it; foreign bytes never install
 
 environment:
   SELF_HOME         the body — a dir holding events.jsonl + .secret (default ~/.self)
@@ -1814,6 +1938,18 @@ func main() {
 		}
 	case "rehydrate":
 		err = rehydrate(home)
+	case "share":
+		if len(args) != 1 {
+			err = fmt.Errorf("usage: self share <capability>  (the seed prints to stdout)")
+		} else {
+			err = cmdShare(home, args[0])
+		}
+	case "adopt":
+		if len(args) != 1 {
+			err = fmt.Errorf("usage: self adopt <seed.jsonl>")
+		} else {
+			err = cmdAdopt(home, args[0])
+		}
 	case "help", "--help", "-h":
 		usage()
 	default:
