@@ -1,0 +1,7 @@
+# the compiled kernel — `go build -o self .`
+/self
+
+# an instance's DERIVED state — rebuilt by `self rehydrate` from the log's
+# signed receipts (events.jsonl + .secret are the only source of truth)
+**/capabilities/
+**/site/
