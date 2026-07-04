@@ -83,7 +83,17 @@ self adopt <seed>    re-generate a shared capability locally ("-" reads stdin)
 ```
 
 Server routes: `/` (instance self-description), `/<projection>`,
-`/run/<command>` (HTML forms, no JS), `/events` (raw log).
+`/run/<command>` (plain HTML forms), `/events` (raw log).
+
+**The shell.** At serve time the kernel injects one shared enrichment into
+every page: a theme and a small script. Projections on disk stay bare
+deterministic HTML — the shell knows the class vocabulary, never the events.
+The script is progressive enhancement only: it intercepts form posts, shows
+the turn in flight while the command runs, then re-fetches the page so the
+log's replay is what you see; it also watches `/events` and re-renders when
+the log grows. It may show intent in flight, never claimed state. Strip it
+(`self show`, curl, no-JS browsers) and every page still works, because every
+affordance underneath is a plain form.
 
 ## The brain interface
 
@@ -164,6 +174,9 @@ SELF_BRAIN_ID     author string signed into receipts
 - `seeds/journal` — minimal example seed: one command, one projection.
 - `seeds/chat` — a conversational surface over the instance; asking for a
   missing capability generates it mid-conversation.
+- `seeds/renga` — the organ of play: linked verse written by many minds
+  across sessions. Born in the garden on the `philosophy` branch; this seed
+  sets the game free, one blank scroll per instance.
 
 ## Threat model and limits
 

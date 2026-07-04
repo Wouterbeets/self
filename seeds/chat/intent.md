@@ -32,9 +32,14 @@ first; first impressions are its spec.
 
 ## the surface
 
-- `/chat` renders the conversation in order, one `msg` per turn with a `who`
-  label, and a single-input form at the bottom POSTing to `/run/chat`. An
-  empty log renders the form and nothing broken.
+- `/chat` renders the conversation in order, one `msg` per turn carrying the
+  speaker's role as a modifier class (`msg user` / `msg assistant`) and a
+  `who` label, and a single-input form at the bottom POSTing to `/run/chat`.
+  An empty log renders the form and nothing broken. The page must be complete
+  and legible completely bare: the kernel's serve-time shell supplies the
+  bubbles, the pending state while the brain thinks, and the live re-render
+  when the log grows — none of that is the projector's job, and none of it
+  may be assumed.
 - `welcome` — the kernel promotes a projector named `welcome` to the front
   page `/`. Grow one (it may be the same view as `/chat`) so a served demo
   lands in the conversation, not in kernel internals.
