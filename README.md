@@ -75,22 +75,24 @@ fail-closed read-only allowlist — it never fails open.
 
 ## sharing between bodies
 
-Two bodies never exchange code — they exchange **intent and evidence**.
-`self share <cap>` writes a bundle holding the capability's declaration
-(verbatim from the sender's log) plus, as evidence, the script from its latest
-kernel-signed receipt with its sha256 and author by-line. `self adopt <bundle>`
-records a `capability.adopted` provenance event, re-declares the capability
-into the receiver's log — the sender's script riding only in the
-`implementation` reference slot a seed author already uses — and lets the
-strange loop author bytes *for this body*, through this body's own compiler,
-signed by this body's key. Same intent, different garden, different bytes.
+Two bodies never exchange code — they exchange a **seed**: a verbatim slice of
+the sender's log. `self share <cap>` prints, as event JSONL, every declaration
+of the capability (the intent — re-teachings and dead ends included, the
+selection rather than the survivor) and every kernel-signed receipt for it
+(the evidence), then logs the giving. `self adopt <seed>` records the whole
+seed inside one `capability.adopted` event — foreign receipts ride there,
+where rehydrate never looks, inert by construction — then re-declares the
+capability so the strange loop authors bytes *for this body*, through this
+body's own compiler, signed by this body's key. The sender's latest script
+rides only in the `implementation` reference slot a seed author already uses.
+Same intent, different garden, different bytes; the log's own format is the
+wire format.
 
-A bundle is inert everywhere by construction: nothing in it installs, so a
-hostile bundle can at most ask your compiler a question. The sha256 makes
-tampering in transit visible; it grants nothing. And `from` is asserted
-provenance, not proof — signing keys are symmetric and never leave a home, so
-cross-body authorship is a claim the receiver logs, not a fact it can verify.
-That honest gap is an open question in the garden's log.
+Provenance survives adaptation — the seed sits in the receiver's log verbatim,
+sender by-lines intact — but it is asserted, not provable: signing keys are
+symmetric and never leave a home, so cross-body authorship is a claim the
+receiver records, not a fact it can verify. That honest gap is an open
+question in the garden's log.
 
 ## environment
 

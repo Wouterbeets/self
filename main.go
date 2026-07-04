@@ -1519,101 +1519,65 @@ func cmdGrow(home, seedDir string) error {
 
 // ────────────────── sharing — intent and evidence between bodies ─────────────
 //
-// A share bundle is everything that may cross the gap between two bodies: the
-// capability's declaration (intent) and, when the sender has one, the script
-// from its latest kernel-signed receipt as a REFERENCE (evidence) — never as
-// an install. Code does not travel. adopt re-declares the capability into the
-// receiver's log and lets the strange loop author bytes for that body, through
-// that body's own compiler, signed by that body's key; the sender's bytes ride
-// only in the Implementation slot a seed author already uses, which the
-// compiler verifies and adapts. A bundle is therefore inert everywhere by
-// construction — the sha256 makes tampering visible, it grants nothing, and
-// `from` is asserted provenance, not proof: signing keys never leave a home.
+// A seed is a verbatim slice of the sender's log: every declaration of one
+// capability (the intent, re-teachings and dead ends included) and every
+// kernel-signed receipt for it (the evidence). The log's own format is the
+// wire format. Code never crosses: adopt records the whole seed inside a
+// single capability.adopted event — foreign receipts ride there, where
+// rehydrate never looks, inert by construction — then re-declares the
+// capability so the strange loop authors bytes for THIS body, through its own
+// compiler, signed by its own key. The sender's latest script rides only as
+// the reference a seed author already gets; the compiler adapts, never copies.
 
-type shareReference struct {
-	Script     string    `json:"script"` // the sender's installed bytes — adapt, never install
-	SHA256     string    `json:"sha256"`
-	By         string    `json:"by,omitempty"` // who authored those bytes, per the sender's receipt
-	CompiledAt time.Time `json:"compiled_at"`
+// declName returns the capability a declaration event declares, or "".
+func declName(e Event) (typ, name string) {
+	if e.Name != "command.declared" && e.Name != "projector.declared" {
+		return "", ""
+	}
+	var d struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(e.Payload, &d) != nil {
+		return "", ""
+	}
+	return strings.TrimSuffix(e.Name, ".declared"), d.Name
 }
 
-type shareBundle struct {
-	SelfShare   int             `json:"self_share"` // format version
-	Type        string          `json:"type"`       // "command" | "projector"
-	Name        string          `json:"name"`
-	From        string          `json:"from"` // the sender's by-line — asserted, not provable
-	SharedAt    time.Time       `json:"shared_at"`
-	Declaration json.RawMessage `json:"declaration"` // the declaration payload, verbatim from the sender's log
-	Reference   *shareReference `json:"reference,omitempty"`
-}
-
-func cmdShare(home, name, out string) error {
+func cmdShare(home, name string) error {
 	events, err := readEvents(home)
 	if err != nil {
 		return err
 	}
-	// The spec that crosses: the latest declaration for this name.
-	var declPayload json.RawMessage
-	var typ string
-	for _, e := range events {
-		if e.Name != "command.declared" && e.Name != "projector.declared" {
-			continue
-		}
-		var d struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(e.Payload, &d) == nil && d.Name == name {
-			declPayload, typ = e.Payload, strings.TrimSuffix(e.Name, ".declared")
-		}
-	}
-	if declPayload == nil {
-		return fmt.Errorf("no declaration for %q in this log — nothing to share (code never travels; the declaration is the part that crosses)", name)
-	}
-	// The evidence that rides along: the latest kernel-signed receipt, if any.
 	secret, err := loadSecret(home)
 	if err != nil {
 		return err
 	}
-	var ref *shareReference
+	var seed []Event
+	hasDecl := false
 	for _, e := range events {
-		if e.Name != "script.compiled" {
-			continue
+		if _, n := declName(e); n == name {
+			seed, hasDecl = append(seed, e), true
+		} else if e.Name == "script.compiled" {
+			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Name == name {
+				seed = append(seed, e)
+			}
 		}
-		if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Name == name && r.Type == typ {
-			sum := sha256.Sum256([]byte(r.Script))
-			ref = &shareReference{Script: r.Script, SHA256: hex.EncodeToString(sum[:]), By: r.By, CompiledAt: e.OccurredAt}
-		}
 	}
-	from := strings.TrimSpace(os.Getenv("SELF_BRAIN_ID"))
-	if from == "" && ref != nil {
-		from = ref.By
+	if !hasDecl {
+		return fmt.Errorf("no declaration for %q in this log — nothing to share (code never crosses; the declaration is what does)", name)
 	}
-	if from == "" {
-		from = "an unnamed body"
-	}
-	b := shareBundle{SelfShare: 1, Type: typ, Name: name, From: from, SharedAt: time.Now().UTC(), Declaration: declPayload, Reference: ref}
-	data, _ := json.MarshalIndent(b, "", "  ")
-	if out == "" {
-		out = filepath.Join(home, "shares", name+".share.json")
-	}
-	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(out, append(data, '\n'), 0644); err != nil {
-		return err
+	enc := json.NewEncoder(os.Stdout)
+	for i := range seed {
+		enc.Encode(seed[i])
 	}
 	// The sender remembers giving: if it is not an event, it did not happen.
-	sha := ""
-	if ref != nil {
-		sha = ref.SHA256
-	}
-	payload, _ := json.Marshal(map[string]any{"type": typ, "name": name, "reference_sha256": sha, "by": from})
+	payload, _ := json.Marshal(map[string]any{"name": name, "events": len(seed)})
 	e := newEvent("capability.shared", payload)
 	if err := appendEvent(home, &e); err != nil {
 		return err
 	}
 	refreshProjections(home)
-	fmt.Printf("shared %q → %s\n", name, out)
+	fmt.Fprintf(os.Stderr, "self: shared %q — %d event(s) of intent and evidence\n", name, len(seed))
 	return nil
 }
 
@@ -1622,59 +1586,54 @@ func cmdAdopt(home, path string) error {
 	if err != nil {
 		return err
 	}
-	var b shareBundle
-	if err := json.Unmarshal(data, &b); err != nil {
-		return fmt.Errorf("not a share bundle: %w", err)
-	}
-	if b.SelfShare != 1 || (b.Type != "command" && b.Type != "projector") || b.Name == "" || len(b.Declaration) == 0 {
-		return fmt.Errorf("not a self share bundle (want self_share:1 with type, name, declaration)")
-	}
-	if strings.ContainsAny(b.Name, `/\`) || strings.Contains(b.Name, "..") {
-		return fmt.Errorf("unsafe capability name %q", b.Name)
-	}
-	if b.Reference != nil {
-		sum := sha256.Sum256([]byte(b.Reference.Script))
-		if hex.EncodeToString(sum[:]) != b.Reference.SHA256 {
-			return fmt.Errorf("reference bytes do not match their sha256 — the bundle was altered in transit; refusing")
+	var seed []Event
+	var typ, name string
+	var declPayload json.RawMessage
+	reference := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
 		}
+		var e Event
+		if json.Unmarshal([]byte(line), &e) != nil || e.Name == "" {
+			return fmt.Errorf("not a seed — want event JSONL, one {name, payload} per line")
+		}
+		seed = append(seed, e)
+		if t, n := declName(e); n != "" { // the latest declaration is what grows here
+			typ, name, declPayload = t, n, e.Payload
+		}
+		if e.Name == "script.compiled" { // the latest script is reference, never install
+			var r receipt
+			if json.Unmarshal(e.Payload, &r) == nil && r.Script != "" {
+				reference = r.Script
+			}
+		}
+	}
+	if declPayload == nil {
+		return fmt.Errorf("the seed carries no declaration — nothing can grow from it")
 	}
 	if err := ensureHome(home); err != nil {
 		return err
 	}
-	// Remember receiving, with the provenance the bundle asserts.
-	refSha, refBy := "", ""
-	if b.Reference != nil {
-		refSha, refBy = b.Reference.SHA256, b.Reference.By
-	}
-	ap, _ := json.Marshal(map[string]any{"type": b.Type, "name": b.Name, "from": b.From, "shared_at": b.SharedAt, "reference_sha256": refSha, "reference_by": refBy})
-	adopted := newEvent("capability.adopted", ap)
-	if err := appendEvent(home, &adopted); err != nil {
-		return err
-	}
-	// Re-declare it here, the sender's script riding only as a reference — the
-	// same slot a seed author uses; the compiler adapts, never copies.
-	declPayload := b.Declaration
-	if b.Reference != nil {
+	if reference != "" {
 		var m map[string]any
-		if err := json.Unmarshal(b.Declaration, &m); err != nil {
-			return fmt.Errorf("bundle declaration is not an object: %w", err)
+		if err := json.Unmarshal(declPayload, &m); err != nil {
+			return fmt.Errorf("the seed's declaration is not an object: %w", err)
 		}
-		m["implementation"] = b.Reference.Script
+		m["implementation"] = reference
 		declPayload, _ = json.Marshal(m)
 	}
-	decl := newEvent(b.Type+".declared", declPayload)
-	if err := appendEvent(home, &decl); err != nil {
+	ap, _ := json.Marshal(map[string]any{"type": typ, "name": name, "seed": seed})
+	if err := ingest(home, []Event{
+		newEvent("capability.adopted", ap),
+		newEvent(typ+".declared", declPayload),
+	}); err != nil {
 		return err
 	}
-	c := newLLM(home)
-	defer c.close()
-	n := compileDeclarations(c, home, []Event{decl})
-	renderKernelHTML(home)
-	refreshProjections(home)
-	if n == 0 {
-		return fmt.Errorf("adopted the declaration for %q (it is in the log), but no compiler produced a script — wire a brain (or SELF_LLM_STUB=1) and declare it again", b.Name)
+	if p, _ := scriptPath(home, typ, name); !fileExists(p) {
+		return fmt.Errorf("adopted %q into the log, but no compiler produced a script — wire a brain (or SELF_LLM_STUB=1) and declare it again", name)
 	}
-	fmt.Printf("adopted %q from %s — re-authored by this body's own compiler, signed by its own key\n", b.Name, b.From)
+	fmt.Printf("adopted %q — re-authored by this body's own compiler, signed by its own key\n", name)
 	return nil
 }
 
@@ -1891,9 +1850,10 @@ usage: self [command] [args]
   self show <name>     render a projection to stdout
   self live [port]     serve the live garden (default 7777)
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
-  self share <cap> [out]  bundle a capability's declaration + evidence for another body
-  self adopt <bundle>  re-grow a shared capability here — re-authored by this
-                       body's own compiler and key; foreign bytes never install
+  self share <cap>     print a seed to stdout — the capability's declarations and
+                       receipts, a verbatim slice of this log
+  self adopt <seed>    re-grow a shared capability here — this body's own compiler
+                       re-authors it; foreign bytes never install
 
 environment:
   SELF_HOME         the body — a dir holding events.jsonl + .secret (default ~/.self)
@@ -1979,18 +1939,14 @@ func main() {
 	case "rehydrate":
 		err = rehydrate(home)
 	case "share":
-		if len(args) < 1 {
-			err = fmt.Errorf("usage: self share <capability> [out-file]")
+		if len(args) != 1 {
+			err = fmt.Errorf("usage: self share <capability>  (the seed prints to stdout)")
 		} else {
-			out := ""
-			if len(args) > 1 {
-				out = args[1]
-			}
-			err = cmdShare(home, args[0], out)
+			err = cmdShare(home, args[0])
 		}
 	case "adopt":
 		if len(args) != 1 {
-			err = fmt.Errorf("usage: self adopt <bundle.json>")
+			err = fmt.Errorf("usage: self adopt <seed.jsonl>")
 		} else {
 			err = cmdAdopt(home, args[0])
 		}
