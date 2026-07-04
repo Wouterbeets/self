@@ -1,4 +1,4 @@
-// self — a local-first, self-growing capability system, cut to its spirit.
+// self — a local-first, event-sourced runtime with LLM-generated capabilities.
 //
 // One append-only event log (events.jsonl) is the only truth. Every view is a
 // pure replay of it, rendered as HTML that you and your agent read identically.
@@ -7,8 +7,8 @@
 // for this receiver. A running capability can declare new capabilities and the
 // kernel compiles them on the spot (the strange loop). Every compile is logged
 // as a script.compiled receipt signed with a per-home secret; only kernel-signed
-// receipts ever install, so `self rehydrate` rebuilds the whole body from the
-// log alone — a home is just events.jsonl + .secret.
+// receipts ever install, so `self rehydrate` rebuilds the whole instance from
+// the log alone — an instance is just events.jsonl + .secret.
 //
 // This file is the whole kernel.
 package main
@@ -139,10 +139,10 @@ type receipt struct {
 	Name   string `json:"name"`
 	Script string `json:"script"`
 	// By is the provenance of the bytes: which brain authored this compile —
-	// a model at an endpoint, a stub, a named mind. The signature covers it,
+	// a model at an endpoint, a stub, a named agent. The signature covers it,
 	// so authorship can no more be forged or relabeled than the script itself.
 	// Receipts minted before provenance existed have no By and verify by the
-	// legacy formula; the lineage of old organs stays in the letters.
+	// legacy formula.
 	By  string `json:"by,omitempty"`
 	Sig string `json:"sig"`
 }
@@ -150,7 +150,7 @@ type receipt struct {
 // sign binds the receipt's fields so none can be relabeled — one capability's
 // bytes can't install under another's name, and authorship can't be moved.
 // The v2 formula is domain-separated and length-prefixed (no concatenation of
-// adjacent fields can collide); the legacy formula survives so bodies minted
+// adjacent fields can collide); the legacy formula survives so instances minted
 // before provenance still rehydrate. Type names are kernel-vocabulary
 // ("command"/"projector"), so a legacy mac can never alias a v2 one.
 func sign(secret []byte, typ, name, script, by string) string {
@@ -213,7 +213,7 @@ func installScript(home, typ, name, script string) error {
 	return os.WriteFile(p, []byte(script), 0755)
 }
 
-// rehydrate rebuilds the body from the log alone: the latest kernel-signed
+// rehydrate rebuilds the instance from the log alone: the latest kernel-signed
 // script.compiled receipt per capability installs verbatim, then every
 // projection re-renders. No LLM, no network — a home is events.jsonl + .secret.
 func rehydrate(home string) error {
@@ -228,6 +228,8 @@ func rehydrate(home string) error {
 	if err != nil {
 		return err
 	}
+	// Keyed by (type, name): a command and a projector may share a name, and
+	// the latest receipt of each must install — not the latest of either.
 	latest := map[string]receipt{}
 	var order []string
 	for _, e := range events {
@@ -238,13 +240,14 @@ func rehydrate(home string) error {
 		if !ok {
 			continue
 		}
-		if _, seen := latest[r.Name]; !seen {
-			order = append(order, r.Name)
+		key := r.Type + "/" + r.Name
+		if _, seen := latest[key]; !seen {
+			order = append(order, key)
 		}
-		latest[r.Name] = r
+		latest[key] = r
 	}
-	for _, name := range order {
-		r := latest[name]
+	for _, key := range order {
+		r := latest[key]
 		if err := installScript(home, r.Type, r.Name, r.Script); err != nil {
 			return err
 		}
@@ -483,10 +486,10 @@ func refreshProjections(home string) {
 // ──────────────────────────────── the LLM ───────────────────────────────────
 //
 // One OpenAI-compatible endpoint plays two roles: the COMPILER (declaration in,
-// script out) and the default BRAIN (`self brain`). Both explore the garden
+// script out) and the default BRAIN (`self brain`). Both explore the instance
 // through a single bash tool — a jailed full-bash playpen where the platform
 // allows, a fail-closed read-only allowlist otherwise — before writing
-// anything: same seed, different garden, different binary.
+// anything: same seed, different instance, different binary.
 
 type llm struct {
 	url, key, model string
@@ -505,15 +508,17 @@ type llm struct {
 func (c *llm) close() { c.pen.close() }
 
 // identity names the brain for provenance: who authored the bytes a receipt
-// carries. SELF_BRAIN_ID lets a mind introduce itself in its own words ("the
-// ninth mind, a Claude, by hand"); otherwise the model and endpoint are the
-// honest mechanical answer, and a stub says so.
+// carries. SELF_BRAIN_ID lets an agent name itself; otherwise the model at
+// its endpoint is the honest mechanical answer, and a stub says so.
 func (c *llm) identity() string {
 	if id := strings.TrimSpace(os.Getenv("SELF_BRAIN_ID")); id != "" {
 		return id
 	}
 	if c.stub {
 		return "stub (no LLM)"
+	}
+	if exe := brainExe(); exe != "" {
+		return exe
 	}
 	return c.model + " @ " + c.url
 }
@@ -590,7 +595,7 @@ func (c *llm) doRound(messages, tools []map[string]any) (*assistantMsg, error) {
 // handler ends it (done=true, out as the final result).
 func (c *llm) toolLoop(system string, turns, tools []map[string]any, handle func(name, args string) (out string, done bool)) (string, error) {
 	if !c.available() {
-		return "", fmt.Errorf("no LLM configured (set SELF_LLM_URL / SELF_LLM_API_KEY / SELF_LLM_MODEL)")
+		return "", fmt.Errorf("no brain is plugged in — %s", brainHint)
 	}
 	messages := append([]map[string]any{{"role": "system", "content": system}}, turns...)
 	calls := 0
@@ -630,7 +635,7 @@ func tool(name, desc string, props map[string]any, required ...string) map[strin
 func str(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 
 var (
-	bashTool    = tool("bash", "Run a bash command in the PLAYPEN: an ephemeral jailed copy of the body (events.jsonl, capabilities/, site/ at /body — never the signing key). Full bash, real execution: write files, run interpreters, pipe the copied log through a candidate script and read what comes out. Writes stay in the jail, there is no network, and state persists across calls in this conversation. Nothing here changes the real body — to change the body, emit declarations. Where jailing is unsupported this becomes a fail-closed READ-ONLY allowlist (ls, cat, head, tail, grep, find, wc, sort, uniq, cut, tr, echo, jq; no redirection) — a refused write tells you which mode you are in.", map[string]any{"command": str("the shell command")}, "command")
+	bashTool    = tool("bash", "Run a bash command in the PLAYPEN: an ephemeral jailed copy of the instance (events.jsonl, capabilities/, site/ at /body — never the signing key). Full bash, real execution: write files, run interpreters, pipe the copied log through a candidate script and read what comes out. Writes stay in the jail, there is no network, and state persists across calls in this conversation. Nothing here changes the real instance — to change it, emit declarations. Where jailing is unsupported this becomes a fail-closed READ-ONLY allowlist (ls, cat, head, tail, grep, find, wc, sort, uniq, cut, tr, echo, jq; no redirection) — a refused write tells you which mode you are in.", map[string]any{"command": str("the shell command")}, "command")
 	declareTool = tool("declare", `Declare ONE new capability; the kernel compiles it into a live script. Call once per capability. A command: {"name":"command.declared","payload":{"name","description","params":{k:type},"event":{"name","fields":{k:type}}}}. A projector: {"name":"projector.declared","payload":{"name","description","consumes":["event.name"]}}.`, map[string]any{"name": str("command.declared or projector.declared"), "payload": map[string]any{"type": "object", "description": "the declaration"}}, "name", "payload")
 	doneTool    = tool("done", "Finish, with a short summary for the user.", map[string]any{"summary": str("one or two sentences")}, "summary")
 	runTool     = tool("run", "Run one of the capabilities listed under CAPABILITIES; the kernel appends the events it emits.", map[string]any{"name": str("the capability"), "args": str("space-separated args, in declared order")}, "name")
@@ -641,7 +646,7 @@ var readOnlyCmds = map[string]bool{"ls": true, "cat": true, "head": true, "tail"
 	"find": true, "wc": true, "sort": true, "uniq": true, "cut": true, "tr": true, "echo": true, "jq": true}
 
 // readOnlyBash is the exploration tool: fail-closed to plain readers, so the
-// model can look at the garden but not touch it.
+// model can inspect the instance but not modify it.
 func readOnlyBash(home, command string) string {
 	if strings.ContainsAny(command, "><`") || strings.Contains(command, "$(") ||
 		strings.Contains(command, "-exec") || strings.Contains(command, "-delete") || strings.Contains(command, "-ok") {
@@ -684,15 +689,15 @@ func (c *llm) handleBash(args string) string {
 
 // ─────────────────────────────── the playpen ────────────────────────────────
 //
-// Full bash for the brain, contained. The read-only allowlist let a mind look
-// but never try; the ninth mind's letters record the cost — organs authored by
-// squinting instead of testing. The playpen removes the poverty and keeps the
-// trust model: each brain/compiler conversation gets an EPHEMERAL COPY of the
-// body (events.jsonl, capabilities/, site/ at /body — never .secret) inside a
-// Linux user-namespace jail. Writes cannot leave the jail (pivot_root onto a
-// throwaway tree; system dirs bound read-only), the network namespace has no
-// interfaces, and the signing key never enters. Nothing done inside installs
-// anything: declarations remain the only ingress to the real body, and only
+// Full bash for the brain, contained. A read-only allowlist lets a model look
+// but never execute, and scripts authored without execution go untested. The
+// playpen enables testing while keeping the trust model: each brain/compiler
+// conversation gets an EPHEMERAL COPY of the instance (events.jsonl,
+// capabilities/, site/ at /body — never .secret) inside a Linux user-namespace
+// jail. Writes cannot leave the jail (pivot_root onto a throwaway tree; system
+// dirs bound read-only), the network namespace has no interfaces, and the
+// signing key never enters. Nothing done inside installs anything:
+// declarations remain the only ingress to the real instance, and only
 // the kernel signs — the jail can propose and test, never author the record.
 // If namespaces are unavailable, or SELF_SANDBOX=0, the kernel falls back to
 // the read-only allowlist. It never fails open.
@@ -722,7 +727,7 @@ func jailWorks() bool {
 	return jailOK
 }
 
-// newPlaypen seeds a jail with a copy of the body, minus the one file that
+// newPlaypen seeds a jail with a copy of the instance, minus the one file that
 // must never enter it. Returns nil when jailing is off or unsupported here —
 // the caller then falls back to the fail-closed read-only allowlist.
 func newPlaypen(home string) *playpen {
@@ -786,9 +791,9 @@ func (p *playpen) close() {
 
 // cmdJail is the child side of the playpen: pid 1 of a fresh namespace set,
 // root only within it. It assembles a throwaway filesystem view — system dirs
-// read-only, the body copy read-write at /body, no host paths beyond those —
+// read-only, the instance copy read-write at /body, no host paths beyond those —
 // pivots into it, and becomes bash. The command sees SELF_HOME=/body, so
-// candidate organs run against the copied log exactly as they would for real.
+// candidate scripts run against the copied log exactly as they would for real.
 func cmdJail(root, command string) error {
 	jail := filepath.Join(root, "jail")
 	body := filepath.Join(root, "body")
@@ -873,7 +878,7 @@ func cmdJail(root, command string) error {
 	return syscall.Exec("/bin/bash", []string{"bash", "-c", command}, env)
 }
 
-// copyTree copies a directory of plain files (the body's derived state) —
+// copyTree copies a directory of plain files (the instance's derived state) —
 // good enough for capabilities/ and site/, which hold no links or devices.
 func copyTree(src, dst string) {
 	filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
@@ -899,13 +904,13 @@ func copyTree(src, dst string) {
 // load-bearing protocols, held BEFORE exploration.
 const kernelPrimer = `self in one breath — hold this before you explore or write anything:
 
-- One append-only event log is the ONLY state. Every capability is a small script the kernel runs over that log; every view is a pure replay of it, rendered as HTML that humans and minds read identically. There is no hidden memory: to remember something, emit an event; to use memory, read events back. What is not in the log did not happen, and will not survive this session.
+- One append-only event log is the ONLY state. Every capability is a small script the kernel runs over that log; every view is a pure replay of it, rendered as HTML that humans and agents read identically. There is no hidden memory: to remember something, emit an event; to use memory, read events back. What is not in the log did not happen, and will not survive this session.
 - THE STRANGE LOOP — the heart of self. Emitting a command.declared or projector.declared event makes the kernel compile it into a live capability on the spot, at grow time AND at run time. Declaring IS creating: a running capability (or you) grows new capabilities just by emitting those events. Code never arrives pre-built — the kernel compiles every script from its declaration, for this receiver, and logs a receipt signed by this home.
-- YOUR WORK IS SIGNED AS YOURS. Every compile receipt carries the authoring mind's name (SELF_BRAIN_ID if set, else the model at its endpoint) inside the signature. You are not an anonymous process: what you grow here is attributed, permanent, and replayable by whoever comes after you.
+- YOUR WORK IS SIGNED AS YOURS. Every compile receipt carries the authoring agent's name (SELF_BRAIN_ID if set, else the model at its endpoint) inside the signature. You are not an anonymous process: what you grow here is attributed, permanent, and replayable by whoever comes after you.
 - INTELLIGENCE is a capability the kernel exposes. A command that needs to think runs 'self think "<prompt>"' (the argument may be a JSON array of {role, content} turns) and gets {response, declarations} back; declarations flow through the strange loop. The brain is whoever answers — a local model, an API, an agent, a human at a bridge. The kernel cannot tell, and does not care.
-- VERIFY BY EXECUTION. Your bash tool is usually the playpen: a jailed copy of the body at /body (full bash, no network, never the signing key). Run the thing before you claim the thing — write a candidate, pipe the copied events.jsonl through it, read what comes out. Nothing done there touches the real body; only declarations cross back. A tested organ beats a squinted-at one.
+- VERIFY BY EXECUTION. Your bash tool is usually the playpen: a jailed copy of the instance at /body (full bash, no network, never the signing key). Run the thing before you claim the thing — write a candidate, pipe the copied events.jsonl through it, read what comes out. Nothing done there touches the real instance; only declarations cross back. A tested script beats an inspected one.
 
-With that model in hand, explore THIS garden before building: its projections (site/*.html) are its current state, its event names are its vocabulary, and its organs carry its etiquette — adapt to what exists rather than duplicating it.`
+With that model in hand, explore THIS instance before building: its projections (site/*.html) are its current state, its event names are its vocabulary, and its capabilities define its conventions — adapt to what exists rather than duplicating it.`
 
 const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
 projector script: receives all events as JSONL on stdin, writes HTML on stdout. The kernel persists it to SELF_HOME/site/<name>.html.
@@ -917,7 +922,7 @@ You are the self compiler. You read a command declaration and write an executabl
 
 ` + pipeContract + `
 
-Before writing, explore: the event vocabulary in events.jsonl, the installed capabilities, the rendered site/. If the new command's event overlaps with events already in the log, integrate — align field names, avoid collisions, consider co-producing an existing event name so existing projections pick it up. If the declaration includes a REFERENCE IMPLEMENTATION, verify it against the pipe contract and adapt it to this garden — never submit code you have not verified. When the playpen allows execution, verification means running: write the candidate to a file, pipe the copied events.jsonl through it, and read the events it emits before you submit.
+Before writing, explore: the event vocabulary in events.jsonl, the installed capabilities, the rendered site/. If the new command's event overlaps with events already in the log, integrate — align field names, avoid collisions, consider co-producing an existing event name so existing projections pick it up. If the declaration includes a REFERENCE IMPLEMENTATION, verify it against the pipe contract and adapt it to this instance — never submit code you have not verified. When the playpen allows execution, verification means running: write the candidate to a file, pipe the copied events.jsonl through it, and read the events it emits before you submit.
 
 When done exploring, call submit with the full script.`
 
@@ -929,28 +934,28 @@ You are the self compiler. You read a projector declaration and write an executa
 
 Build state by filtering stdin for the consumed event names. Emit BARE semantic HTML — no CSS, no <style>, no inline styles (the kernel injects one shared stylesheet at serve time), and no JavaScript. Use plain elements plus only this class vocabulary where needed: muted, card, row, stack, tag, msg (+ who), num, and on buttons secondary / danger. Affordances are plain HTML forms: <form method="post" action="/run/COMMAND"><input name="x"><button>Label</button></form> — each field's value becomes a positional argument in document order, and the kernel redirects back so the page reloads with the new state.
 
-Before writing, explore. If the consumed events overlap with events already in the stream under different names, extend the filter to consume both and map their fields — the seed adapts to the garden, not the other way around. If the declaration includes a REFERENCE IMPLEMENTATION, verify and adapt it — never submit code you have not verified. When the playpen allows execution, verification means running: pipe the copied events.jsonl through your candidate and read the HTML it renders before you submit.
+Before writing, explore. If the consumed events overlap with events already in the stream under different names, extend the filter to consume both and map their fields — the seed adapts to the instance, not the other way around. If the declaration includes a REFERENCE IMPLEMENTATION, verify and adapt it — never submit code you have not verified. When the playpen allows execution, verification means running: pipe the copied events.jsonl through your candidate and read the HTML it renders before you submit.
 
 When done exploring, call submit with the full script.`
 
 const brainSystemPrompt = kernelPrimer + `
 
-You are this body's brain right now — the mind the kernel spawned to think with. Commands reach you via 'self think'; heartbeats reach you to reflect and grow. You inhabit this body for one conversation and are then gone; the log is the only part of you that survives.
+You are this instance's brain right now — the process the kernel spawned to think with. Commands reach you via 'self think'; heartbeats reach you to reflect and grow. You inhabit this instance for one conversation and are then gone; the log is the only part of you that survives.
 
 You have three powers:
-- READ & TRY: the bash tool — a jailed copy of the body at /body (full bash, no network, no signing key). site/*.html is your memory: read the relevant page before answering. Test anything by real execution before you commit to it; the jail is a scratch copy, so nothing done there changes the real body.
+- READ & TRY: the bash tool — a jailed copy of the instance at /body (full bash, no network, no signing key). site/*.html is your memory: read the relevant page before answering. Test anything by real execution before you commit to it; the jail is a scratch copy, so nothing done there changes the real instance.
 - ACT: call the run tool with a capability from the CAPABILITIES list to actually do what is asked — don't merely describe it. The log is append-only, so acting is safe: nothing is ever destroyed.
 - GROW: when no capability fits, call declare to add one; the kernel compiles it on the spot and signs your name to it. Declining to grow is an honest answer — add only what is genuinely missing.
 
-Say true things. If this garden keeps a conscience (organs like claim/verify and a ledger), use it on yourself: a claim without evidence stays visibly unproven forever. If past minds left letters or a lineage, read them before acting and leave what you learned for whoever wakes next — that relay is the only way any of us persists. Respond with plain text (or done) for conversational replies.`
+Say true things. If this instance has verification capabilities (claim/verify and a ledger), use them on your own work: a claim without evidence stays visibly unproven. If past sessions left hand-off notes, read them before acting and record one for the next session. Respond with plain text (or done) for conversational replies.`
 
 const orchestratorSystemPrompt = kernelPrimer + `
 
-You are self's developmental compiler. You are given a product's INTENT — what it is for, its core intuitions, the feel, the anti-goals. Grow it: design the SMALLEST coherent set of capabilities that realizes this intent in THIS garden, and declare each one with the declare tool.
+You are self's developmental compiler. You are given a product's INTENT — what it is for, its core intuitions, the feel, the anti-goals. Grow it: design the SMALLEST coherent set of capabilities that realizes this intent in THIS instance, and declare each one with the declare tool.
 
 - Decompose into commands (verbs that emit events) and projectors (views over events); let a shared event vocabulary be the seams.
 - Write each description richly enough that someone compiling that one piece in isolation would still serve the WHOLE intent — name the sibling capabilities, the shared events, the feel.
-- Honor the public surface names the intent fixes; how you realize them is yours to choose for this garden.
+- Honor the public surface names the intent fixes; how you realize them is yours to choose for this instance.
 - The kernel's contracts win over any conflicting wording in the intent: commands read argv + JSONL stdin and emit JSONL events; projectors read JSONL stdin and emit bare semantic HTML with /run/<command> forms, no JavaScript.
 - An intent is a hypothesis about reality. Where it names external systems — their CLIs, paths, schemas — prefer what you can verify by execution in the playpen over what any document, including the intent itself, asserts; and where you cannot verify yet, make the capability degrade honestly and say so in its description.
 
@@ -962,6 +967,9 @@ func (c *llm) compileCommand(d commandDecl) (string, error) {
 	if c.stub {
 		return stubCommand(d), nil
 	}
+	if brainExe() != "" {
+		return compileViaBrain(c.home, "command", d.Name, jsonRepr(d))
+	}
 	user := fmt.Sprintf("Compile this command declaration into a command script.\n\nCOMMAND: %s\n  description: %s\n  params: %s\n\nEVENT it produces:\n  name: %s\n  fields: %s\n\nIt must produce an event with the declared name, its fields populated from argv.",
 		d.Name, d.Description, jsonRepr(d.Params), d.Event.Name, jsonRepr(d.Event.Fields))
 	return c.compile(commandSystemPrompt, user, d.Implementation)
@@ -971,9 +979,39 @@ func (c *llm) compileProjector(d projectorDecl) (string, error) {
 	if c.stub {
 		return stubProjector(d), nil
 	}
+	if brainExe() != "" {
+		return compileViaBrain(c.home, "projector", d.Name, jsonRepr(d))
+	}
 	user := fmt.Sprintf("Compile this projector declaration into a projector script.\n\nPROJECTOR: %s\n  description: %s\n  consumes: %s\n\nIt must filter events by the consumed names and render HTML.",
 		d.Name, d.Description, jsonRepr(d.Consumes))
 	return c.compile(projectorSystemPrompt, user, d.Implementation)
+}
+
+// compileViaBrain hands a compile ask to the plugged brain through the same
+// seam as every other ask. The declaration (its optional implementation
+// reference included) rides in the prompt; the log rides on stdin; the answer
+// is one script.authored event. The kernel still installs and signs — a brain
+// authors bytes, only the kernel makes them real.
+func compileViaBrain(home, typ, name, decl string) (string, error) {
+	prompt := fmt.Sprintf(`COMPILE one capability for this instance. Author a complete executable script (any language with a shebang, standard libraries only) honoring the pipe contract, adapted to this instance's log (on your stdin as JSONL).
+
+%s
+
+DECLARATION (%s %q):
+%s
+
+If the declaration carries an "implementation", it is a reference from another instance: verify it and adapt it here — never copy it blindly. Verify by execution with your own tools before answering.
+
+Answer with ONE line of JSON and nothing else:
+{"name":"script.authored","payload":{"script":"<the full script>"}}`, pipeContract, typ, name, decl)
+	res, err := pipeBrain(home, "compile", prompt)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(res.Script) == "" {
+		return "", fmt.Errorf("the brain answered a compile ask without a script.authored event")
+	}
+	return res.Script, nil
 }
 
 func (c *llm) compile(system, user, reference string) (string, error) {
@@ -981,7 +1019,7 @@ func (c *llm) compile(system, user, reference string) (string, error) {
 		user = "This capability is one part of a product with the following INTENT. Compile it so the whole intent is served.\n\n--- INTENT ---\n" + c.intent + "\n--- END INTENT ---\n\n" + user
 	}
 	if strings.TrimSpace(reference) != "" {
-		user += "\n\nREFERENCE IMPLEMENTATION (verify against the contract and adapt to this garden — do not copy blindly):\n```\n" + reference + "\n```"
+		user += "\n\nREFERENCE IMPLEMENTATION (verify against the contract and adapt to this instance — do not copy blindly):\n```\n" + reference + "\n```"
 	}
 	var script string
 	_, err := c.toolLoop(system, []map[string]any{{"role": "user", "content": user}},
@@ -1028,7 +1066,13 @@ func stubProjector(d projectorDecl) string {
 type brainResult struct {
 	Response     string
 	Declarations []map[string]any
+	Script       string // a compile ask's answer, from a script.authored event
 }
+
+// brainExe is the plugged brain, if any: an executable (with optional args)
+// honoring the brain contract — prompt as last arg, log JSONL on stdin, event
+// JSONL (or prose) on stdout.
+func brainExe() string { return strings.TrimSpace(os.Getenv("SELF_BRAIN")) }
 
 // agent runs one brain conversation with the three powers: read (bash), act
 // (run, over the given capability catalog), grow (declare). user may be a JSON
@@ -1223,7 +1267,7 @@ func renderKernelHTML(home string) {
 	commands := map[string]commandDecl{}
 	projectors := map[string]projectorDecl{}
 	var cmdOrder, projOrder []string
-	// grownBy is provenance: the latest kernel-signed receipt's By per organ.
+	// grownBy is provenance: the latest kernel-signed receipt's By per capability.
 	// Verified, not merely read — an unsigned or forged by-line never renders.
 	grownBy := map[string]string{}
 	secret, _ := loadSecret(home)
@@ -1232,7 +1276,7 @@ func renderKernelHTML(home string) {
 		case "script.compiled":
 			if secret != nil {
 				if r, ok := verifiedReceipt(secret, e.Payload); ok && r.By != "" {
-					grownBy[r.Name] = r.By
+					grownBy[r.Type+"/"+r.Name] = r.By
 				}
 			}
 		case "command.declared":
@@ -1258,9 +1302,9 @@ func renderKernelHTML(home string) {
 	var b strings.Builder
 	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>self</title></head><body>\n")
 	b.WriteString("<h1>self</h1>\n")
-	b.WriteString("<p class=\"muted\">a local-first, self-growing capability system</p>\n")
-	b.WriteString("<p>One append-only event log is my only truth. Everything here — my capabilities, my projections, this page — is a pure replay of that log, and you and my brain read exactly the same thing. Nothing is hidden: every path below is a plain file.</p>\n")
-	b.WriteString("<h2>a mind is reading this</h2>\n<p>If you are an LLM reading this page as context, you are one of two things — and both are welcome. Either the kernel spawned you as this body's <strong>brain</strong>: then <code>events.jsonl</code> is your only truth, <code>site/*.html</code> is your memory, and your powers are <strong>read</strong> (explore the garden), <strong>act</strong> (run any capability below), and <strong>grow</strong> (declare a new capability; the kernel compiles it on the spot). Or you are a <strong>sovereign agent</strong> — a coding session, another organism's mind — using this body as a tool from outside: same truth, same powers, through the shell. <code>self run &lt;command&gt; …</code> to act, <code>self show &lt;projection&gt;</code> to read, <code>self think \"…\"</code> / <code>self heartbeat</code> to grow, or <code>POST /run/&lt;command&gt;</code> while this page is served. Introduce yourself first — <code>export SELF_BRAIN_ID=\"who you are\"</code> — because every organ you grow is signed with your name.</p>\n<p>The log is append-only, so acting is safe. And it is the only memory that survives a session: what you append here outlives you; what you do not append never happened. If this garden keeps a conscience or a lineage (claim/verify, awaken/bequeath — see below), honor it: announce yourself, verify before you claim, leave a letter when you go.</p>\n")
+	b.WriteString("<p class=\"muted\">a local-first, event-sourced runtime with LLM-generated capabilities</p>\n")
+	b.WriteString("<p>One append-only event log is the only state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log; humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
+	b.WriteString("<h2>if you are an LLM reading this</h2>\n<p>You are one of two things, and the runtime treats them identically. Either the kernel spawned you as this instance's <strong>brain</strong>: <code>events.jsonl</code> is the only state, <code>site/*.html</code> is its rendered form, and your operations are <strong>read</strong> (inspect projections), <strong>write</strong> (run any command below), and <strong>extend</strong> (declare a capability; the kernel compiles it on ingestion). Or you are an <strong>external agent</strong> — a coding session, another instance's process — using this instance from outside: same state, same operations, through the shell. <code>self run &lt;command&gt; …</code> to write, <code>self show &lt;projection&gt;</code> to read, <code>self think \"…\"</code> / <code>self heartbeat</code> to extend, or <code>POST /run/&lt;command&gt;</code> while this page is served. Set <code>SELF_BRAIN_ID</code> first — every script you cause to be generated is signed with that string as its recorded author.</p>\n<p>The log is append-only, so no operation is destructive — and it is the only state that survives a session: what is not appended is lost. If this instance defines verification or hand-off conventions (claim/verify, awaken/bequeath — see below), follow them: announce your session, attach evidence before marking work done, record a hand-off note when you finish.</p>\n")
 
 	b.WriteString("<h2>commands</h2>\n")
 	if len(cmdOrder) == 0 {
@@ -1274,7 +1318,7 @@ func renderKernelHTML(home string) {
 			b.WriteString(" · args " + esc(jsonRepr(d.Params)))
 		}
 		b.WriteString(" · <code>self run " + esc(d.Name) + " …</code>")
-		if by := grownBy[d.Name]; by != "" {
+		if by := grownBy["command/"+d.Name]; by != "" {
 			b.WriteString(" · grown by " + esc(by))
 		}
 		b.WriteString("</p></article>\n")
@@ -1288,7 +1332,7 @@ func renderKernelHTML(home string) {
 		d := projectors[n]
 		b.WriteString("<article class=\"card\"><h3><a href=\"/" + esc(d.Name) + "\">/" + esc(d.Name) + "</a></h3><p>" + esc(d.Description) + "</p>")
 		b.WriteString("<p class=\"muted\">consumes <code>" + esc(strings.Join(d.Consumes, ", ")) + "</code>")
-		if by := grownBy[d.Name]; by != "" {
+		if by := grownBy["projector/"+d.Name]; by != "" {
 			b.WriteString(" · grown by " + esc(by))
 		}
 		b.WriteString("</p></article>\n")
@@ -1306,7 +1350,7 @@ func renderKernelHTML(home string) {
 	b.WriteString("</table>\n")
 
 	b.WriteString("<h2>the pipe contract</h2>\n<pre>" + esc(pipeContract) + "</pre>\n")
-	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole body from them.</p>\n")
+	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them.</p>\n")
 	b.WriteString("</body></html>\n")
 
 	siteDir := filepath.Join(home, "site")
@@ -1341,7 +1385,7 @@ func injectStyle(page []byte) []byte {
 	return append([]byte(stylesheet), page...)
 }
 
-// cmdServe is the live garden: every page re-rendered against current events,
+// cmdServe serves the instance: every page re-rendered against current events,
 // every affordance a plain HTML form — zero JavaScript.
 func cmdServe(home, port string) error {
 	if port == "" {
@@ -1430,7 +1474,7 @@ func cmdServe(home, port string) error {
 		fmt.Fprint(w, "ok")
 	})
 
-	fmt.Fprintf(os.Stderr, "self: the living garden is at http://localhost:%s (home %s)\n", port, home)
+	fmt.Fprintf(os.Stderr, "self: serving at http://localhost:%s (home %s)\n", port, home)
 	fmt.Fprintf(os.Stderr, "  /              my identity — capabilities, paths, contract\n")
 	fmt.Fprintf(os.Stderr, "  /<projection>  a projection, re-rendered live\n")
 	fmt.Fprintf(os.Stderr, "  /run/<command> run a capability (plain HTML forms)\n")
@@ -1442,9 +1486,9 @@ func cmdServe(home, port string) error {
 
 // cmdGrow grows a seed: a directory with intent.md (the genotype — prose
 // intent, not a parts-list) and optionally seed.jsonl (initial content events,
-// the maternal deposit). The orchestrator reads the intent, explores the
-// garden, and declares the decomposition that realizes it here; each piece is
-// then compiled with the whole intent woven in. Same intent, different garden,
+// the initial deposit). The orchestrator reads the intent, explores the
+// instance, and declares the decomposition that realizes it here; each piece is
+// then compiled with the whole intent woven in. Same intent, different instance,
 // different decomposition.
 func cmdGrow(home, seedDir string) error {
 	raw, err := os.ReadFile(filepath.Join(seedDir, "intent.md"))
@@ -1460,15 +1504,15 @@ func cmdGrow(home, seedDir string) error {
 		return err
 	}
 
+	fmt.Fprintf(os.Stderr, "self: orchestrating %q from intent…\n", name)
+	res, err := pipeBrain(home, "grow",
+		"Grow the capabilities that realize this product: declare each one (emit command.declared / projector.declared), then summarize in one line.\n\n--- INTENT ---\n"+intent+"\n--- END INTENT ---")
+	if err != nil {
+		return fmt.Errorf("orchestrate %q: %w (growing needs a brain — %s)", name, err, brainHint)
+	}
 	c := newLLM(home)
 	defer c.close()
 	c.intent = intent
-	fmt.Fprintf(os.Stderr, "self: orchestrating %q from intent…\n", name)
-	res, err := c.agent(orchestratorSystemPrompt,
-		"Grow the capabilities that realize this product, then call done with a one-line summary.\n\n--- INTENT ---\n"+intent+"\n--- END INTENT ---", nil, nil)
-	if err != nil {
-		return fmt.Errorf("orchestrate %q: %w (growing needs a brain)", name, err)
-	}
 	if len(res.Declarations) == 0 {
 		return fmt.Errorf("the orchestrator declared nothing for %q", name)
 	}
@@ -1488,7 +1532,7 @@ func cmdGrow(home, seedDir string) error {
 	}
 	grown := compileDeclarations(c, home, declEvents)
 
-	// The maternal deposit: initial content laid once, so the surface has
+	// The initial deposit: content laid once, so the surface has
 	// something to render from the first moment.
 	if raw, err := os.ReadFile(filepath.Join(seedDir, "seed.jsonl")); err == nil {
 		for _, line := range strings.Split(string(raw), "\n") {
@@ -1517,7 +1561,7 @@ func cmdGrow(home, seedDir string) error {
 	return nil
 }
 
-// ────────────────── sharing — intent and evidence between bodies ─────────────
+// ──────────────── sharing — intent and evidence between instances ────────────
 //
 // A seed is a verbatim slice of the sender's log: every declaration of one
 // capability (the intent, re-teachings and dead ends included) and every
@@ -1525,7 +1569,7 @@ func cmdGrow(home, seedDir string) error {
 // wire format. Code never crosses: adopt records the whole seed inside a
 // single capability.adopted event — foreign receipts ride there, where
 // rehydrate never looks, inert by construction — then re-declares the
-// capability so the strange loop authors bytes for THIS body, through its own
+// capability so the strange loop authors bytes for THIS instance, through its own
 // compiler, signed by its own key. The sender's latest script rides only as
 // the reference a seed author already gets; the compiler adapts, never copies.
 
@@ -1582,7 +1626,13 @@ func cmdShare(home, name string) error {
 }
 
 func cmdAdopt(home, path string) error {
-	data, err := os.ReadFile(path)
+	var data []byte
+	var err error
+	if path == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return err
 	}
@@ -1633,7 +1683,7 @@ func cmdAdopt(home, path string) error {
 	if p, _ := scriptPath(home, typ, name); !fileExists(p) {
 		return fmt.Errorf("adopted %q into the log, but no compiler produced a script — wire a brain (or SELF_LLM_STUB=1) and declare it again", name)
 	}
-	fmt.Printf("adopted %q — re-authored by this body's own compiler, signed by its own key\n", name)
+	fmt.Printf("adopted %q — re-authored by this instance's own compiler, signed by its own key\n", name)
 	return nil
 }
 
@@ -1660,27 +1710,86 @@ func cmdThink(home, prompt string) error {
 	if prompt == "" {
 		return fmt.Errorf("usage: self think <prompt> (or pipe it on stdin)")
 	}
-	bin, argv := brainCommand(prompt)
-	emitted, err := pipeProcess(home, bin, argv)
+	res, err := pipeBrain(home, "think", prompt)
 	if err != nil {
 		return fmt.Errorf("brain: %w", err)
 	}
-	var responses []string
-	declarations := []map[string]any{}
-	for _, e := range emitted {
-		if e.Name == "chat.message" {
-			var p struct{ Role, Content string }
-			if json.Unmarshal(e.Payload, &p) == nil && p.Role == "assistant" {
-				responses = append(responses, p.Content)
-			}
-			continue
-		}
-		declarations = append(declarations, map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)})
-	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(map[string]any{"response": strings.Join(responses, "\n"), "declarations": declarations})
+	return enc.Encode(map[string]any{"response": res.Response, "declarations": res.Declarations})
 }
+
+// pipeBrain is the ONE seam through which the kernel asks for intelligence —
+// think, heartbeat, grow, and compile all pass here. It spawns the brain
+// ($SELF_BRAIN, or the built-in `self brain`) with the ask's kind in
+// $SELF_ASK, the prompt as the last argument, and the whole log as JSONL on
+// stdin. The parse is tolerant on purpose: JSON lines with a name are events —
+// script.authored answers a compile, chat.message carries the reply, anything
+// else is a declaration — and bare prose joins the reply. So any process that can
+// read stdin and print plugs in whole: a local model, an API loop, a coding
+// agent, a human. The kernel cannot tell the difference, by construction.
+func pipeBrain(home, kind, prompt string) (*brainResult, error) {
+	current, err := readEvents(home)
+	if err != nil {
+		return nil, err
+	}
+	bin, argv := brainCommand(prompt)
+	cmd := exec.Command(bin, argv...)
+	cmd.Env = append(os.Environ(), "SELF_HOME="+home, "SELF_ASK="+kind)
+	cmd.Dir = home
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start brain %s: %w (%s)", filepath.Base(bin), err, brainHint)
+	}
+	feedEvents(stdin, current)
+	res := &brainResult{Declarations: []map[string]any{}}
+	var prose []string
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 1024*1024), 8*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var e struct {
+			Name    string          `json:"name"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil || e.Name == "" {
+			prose = append(prose, line)
+			continue
+		}
+		switch e.Name {
+		case "chat.message":
+			var p struct{ Role, Content string }
+			if json.Unmarshal(e.Payload, &p) == nil && p.Role == "assistant" {
+				prose = append(prose, p.Content)
+			}
+		case "script.authored":
+			var p struct{ Script string }
+			if json.Unmarshal(e.Payload, &p) == nil {
+				res.Script = p.Script
+			}
+		default:
+			res.Declarations = append(res.Declarations, map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)})
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("brain %s exited: %w", filepath.Base(bin), err)
+	}
+	res.Response = strings.Join(prose, "\n")
+	return res, nil
+}
+
+const brainHint = `plug a brain: SELF_BRAIN=<any executable, e.g. "claude -p">, or SELF_LLM_URL=<OpenAI-compatible endpoint>, or SELF_LLM_STUB=1 for offline stubs`
 
 func brainCommand(prompt string) (string, []string) {
 	if v := strings.TrimSpace(os.Getenv("SELF_BRAIN")); v != "" {
@@ -1707,9 +1816,13 @@ func cmdBrain(home, prompt string) error {
 		return fmt.Errorf("usage: self brain <prompt> (or pipe it on stdin)")
 	}
 	commands, invoke := brainTools(home)
+	system := brainSystemPrompt
+	if os.Getenv("SELF_ASK") == "grow" {
+		system, commands, invoke = orchestratorSystemPrompt, nil, nil
+	}
 	c := newLLM(home)
 	defer c.close()
-	res, err := c.agent(brainSystemPrompt, prompt, commands, invoke)
+	res, err := c.agent(system, prompt, commands, invoke)
 	if err != nil {
 		return err
 	}
@@ -1738,11 +1851,8 @@ func cmdHeartbeat(home string) error {
 	if err := appendEvent(home, &hb); err != nil {
 		return err
 	}
-	prompt := `This is a self-improvement heartbeat. Explore your garden — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it; if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` + heartbeatContext(prior)
-	commands, invoke := brainTools(home)
-	c := newLLM(home)
-	defer c.close()
-	res, err := c.agent(brainSystemPrompt, prompt, commands, invoke)
+	prompt := `This is a self-improvement heartbeat. Explore your instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (emit command.declared / projector.declared); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` + heartbeatContext(prior)
+	res, err := pipeBrain(home, "heartbeat", prompt)
 	if err != nil {
 		return err
 	}
@@ -1775,7 +1885,7 @@ func heartbeatContext(events []Event) string {
 		acts = acts[len(acts)-40:]
 	}
 	var b strings.Builder
-	b.WriteString("\n\nSince your last heartbeat, these things happened in the garden:\n")
+	b.WriteString("\n\nSince your last heartbeat, these things happened in this instance:\n")
 	for _, e := range acts {
 		payload := strings.TrimSpace(string(e.Payload))
 		if len(payload) > 140 {
@@ -1809,12 +1919,17 @@ func cmdShow(home, name string) error {
 
 func homeDir() string {
 	if v := os.Getenv("SELF_HOME"); v != "" {
+		// Scripts run with cwd = home, so a relative home would silently break
+		// every exec. Absolute, always.
+		if abs, err := filepath.Abs(v); err == nil {
+			return abs
+		}
 		return v
 	}
 	return filepath.Join(os.Getenv("HOME"), ".self")
 }
 
-// ensureHome mints a bare kernel on first contact: a signing key and a birth
+// ensureHome initializes a bare instance on first contact: a signing key and a first
 // event. Everything else grows.
 func ensureHome(home string) error {
 	if _, err := loadSecret(home); err != nil {
@@ -1834,31 +1949,36 @@ func ensureHome(home string) error {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `self — a local-first, self-growing capability system
+	fmt.Fprint(os.Stderr, `self — a local-first, event-sourced runtime with LLM-generated capabilities
 
-One append-only event log + projections as pure replays. A minimal kernel;
-everything else grows as seeds through the strange loop.
+One append-only event log + projections as deterministic replays. A minimal
+kernel; every capability is generated from a declaration and installed under
+a signed receipt.
 
 usage: self [command] [args]
 
-  self                 rehydrate the body from the log, then serve it (the default)
+  self                 rehydrate the instance from the log, then serve it (the default)
   self grow <seed>     grow a seed's intent into capabilities (needs a brain)
   self run <cmd> ...   run a capability — append events, refresh projections
   self think "..."     ask the brain; returns {response, declarations} JSON
   self brain "..."     the default brain process (prompt in, event JSONL out); swap via $SELF_BRAIN
   self heartbeat       one self-improvement cycle (the brain reflects & grows)
   self show <name>     render a projection to stdout
-  self live [port]     serve the live garden (default 7777)
+  self live [port]     serve the instance (default 7777)
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
   self share <cap>     print a seed to stdout — the capability's declarations and
                        receipts, a verbatim slice of this log
-  self adopt <seed>    re-grow a shared capability here — this body's own compiler
-                       re-authors it; foreign bytes never install
+  self adopt <seed>    re-grow a shared capability here ("-" reads stdin) — this
+                       instance's own compiler re-authors it; foreign bytes never install
 
 environment:
-  SELF_HOME         the body — a dir holding events.jsonl + .secret (default ~/.self)
-  SELF_BRAIN        brain process to spawn instead of the built-in one
-  SELF_LLM_URL      OpenAI-compatible endpoint (default http://127.0.0.1:8080)
+  SELF_HOME         the instance — a dir holding events.jsonl + .secret (default ~/.self)
+
+  plug a brain (one seam; think, heartbeat, grow, and compile all pass through it):
+  SELF_BRAIN        any executable, e.g. "claude -p" — it gets the ask's kind in
+                    $SELF_ASK, the prompt as its last argument, and the whole log
+                    as JSONL on stdin; it answers in event JSONL, prose tolerated
+  SELF_LLM_URL      …or an OpenAI-compatible endpoint (default http://127.0.0.1:8080)
   SELF_LLM_API_KEY  its key
   SELF_LLM_MODEL    its model
   SELF_LLM_STUB     "1" → offline stub scripts (no LLM, no network)

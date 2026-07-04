@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,7 +53,7 @@ func TestLogAppendRead(t *testing.T) {
 // TestStrangeLoop drives the whole kernel loop offline: a declaration arrives
 // as an event, the (stub) compiler turns it into an installed script with a
 // signed receipt, running the command appends its event, and the projection
-// re-renders to site/ showing it. This is the spirit in one test.
+// re-renders to site/ showing it. This is the core loop in one test.
 func TestStrangeLoop(t *testing.T) {
 	t.Setenv("SELF_LLM_STUB", "1")
 	home := t.TempDir()
@@ -97,14 +98,14 @@ func TestStrangeLoop(t *testing.T) {
 	}
 
 	// Run the grown command; its event must land on the log and in the view.
-	if _, err := runCommand(home, "note", []string{"water", "the", "garden"}); err != nil {
+	if _, err := runCommand(home, "note", []string{"water", "the", "plants"}); err != nil {
 		t.Fatal(err)
 	}
 	page, err := os.ReadFile(filepath.Join(home, "site", "board.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(page), "water the garden") {
+	if !strings.Contains(string(page), "water the plants") {
 		t.Fatalf("board.html does not show the note:\n%s", page)
 	}
 }
@@ -129,42 +130,83 @@ func TestForgedReceiptIsInert(t *testing.T) {
 	}
 }
 
-// TestGardenRehydrates resurrects the committed body in garden/ — a real
-// organism stored as just events.jsonl + .secret — and checks that every organ
-// it grew comes back from the log alone. If this passes, the minimal kernel
-// still carries the spirit.
-func TestGardenRehydrates(t *testing.T) {
-	home := t.TempDir()
+// TestRehydrateRoundTrip pins deterministic reconstruction: an instance
+// rebuilt from events.jsonl + .secret alone reproduces its installed scripts
+// and rendered projections byte-for-byte.
+func TestRehydrateRoundTrip(t *testing.T) {
+	t.Setenv("SELF_LLM_STUB", "1")
+	src := t.TempDir()
+	decls := []Event{
+		newEvent("command.declared", json.RawMessage(
+			`{"name":"entry","description":"record an entry","params":{"text":"string"},"event":{"name":"journal.entry","fields":{"title":"string"}}}`)),
+		newEvent("projector.declared", json.RawMessage(
+			`{"name":"journal","description":"all entries","consumes":["journal.entry"]}`)),
+	}
+	if err := ingest(src, decls); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(src, "entry", []string{"first", "entry"}); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := t.TempDir()
 	for _, f := range []string{"events.jsonl", ".secret"} {
-		data, err := os.ReadFile(filepath.Join("garden", f))
+		data, err := os.ReadFile(filepath.Join(src, f))
 		if err != nil {
-			t.Fatalf("the garden body is missing: %s", err)
+			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(home, f), data, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dst, f), data, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := rehydrate(dst); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{
+		filepath.Join("capabilities", "commands", "entry"),
+		filepath.Join("capabilities", "projectors", "journal"),
+		filepath.Join("site", "journal.html"),
+	} {
+		a, err := os.ReadFile(filepath.Join(src, p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dst, p))
+		if err != nil {
+			t.Fatalf("%s did not reconstruct: %s", p, err)
+		}
+		if !bytes.Equal(a, b) {
+			t.Fatalf("%s differs after reconstruction", p)
+		}
+	}
+}
+
+// TestRehydrateTypeCollision pins that a command and a projector sharing a
+// name both reconstruct: receipts are keyed by (type, name), not name. The
+// chat seed (a chat command and a chat projector) is the natural collision.
+func TestRehydrateTypeCollision(t *testing.T) {
+	t.Setenv("SELF_LLM_STUB", "1")
+	home := t.TempDir()
+	decls := []Event{
+		newEvent("command.declared", json.RawMessage(
+			`{"name":"chat","description":"say something","event":{"name":"chat.message","fields":{"content":"string"}}}`)),
+		newEvent("projector.declared", json.RawMessage(
+			`{"name":"chat","description":"the conversation","consumes":["chat.message"]}`)),
+	}
+	if err := ingest(home, decls); err != nil {
+		t.Fatal(err)
+	}
+	cmd := filepath.Join(home, "capabilities", "commands", "chat")
+	proj := filepath.Join(home, "capabilities", "projectors", "chat")
+	os.Remove(cmd)
+	os.Remove(proj)
 	if err := rehydrate(home); err != nil {
 		t.Fatal(err)
 	}
-	organs := map[string][]string{
-		"commands":   {"note", "claim", "verify", "bequeath", "awaken", "wonder", "resolve", "weigh"},
-		"projectors": {"chronicle", "pulse", "notes", "ledger", "inheritance", "lineage", "questions", "toll"},
-	}
-	for kind, names := range organs {
-		for _, name := range names {
-			if !fileExists(filepath.Join(home, "capabilities", kind, name)) {
-				t.Errorf("garden %s %q did not rehydrate", strings.TrimSuffix(kind, "s"), name)
-			}
+	for _, p := range []string{cmd, proj} {
+		if !fileExists(p) {
+			t.Fatalf("%s did not survive rehydration — receipts collided across types", p)
 		}
-	}
-	// The projections replayed too — the previous mind's letter is readable.
-	page, err := os.ReadFile(filepath.Join(home, "site", "inheritance.html"))
-	if err != nil {
-		t.Fatalf("inheritance did not render: %s", err)
-	}
-	if len(page) == 0 {
-		t.Fatal("inheritance rendered empty")
 	}
 }
 
@@ -204,9 +246,9 @@ func TestPlaypen(t *testing.T) {
 		t.Fatalf("playpen state did not persist: %q", out)
 	}
 
-	// the body copy is real and the log is readable
+	// the instance copy is real and the log is readable
 	if out := p.run("grep -c kernel.initialized events.jsonl"); !strings.Contains(out, "1") {
-		t.Fatalf("body copy missing the log: %q", out)
+		t.Fatalf("instance copy missing the log: %q", out)
 	}
 
 	// the one file that must never enter, never enters
@@ -224,7 +266,7 @@ func TestPlaypen(t *testing.T) {
 		t.Fatalf("the playpen reached the network: %q", out)
 	}
 
-	// and nothing done inside touched the real body
+	// and nothing done inside touched the real instance
 	if _, err := os.Stat(filepath.Join(home, "proof.txt")); err == nil {
 		t.Fatal("playpen write leaked into the real home")
 	}
@@ -252,18 +294,18 @@ func shareToFile(t *testing.T, home, name, path string) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// TestShareAdopt pins the federation rule: what crosses between bodies is
+// TestShareAdopt pins the exchange rule: what crosses between instances is
 // intent and evidence, never code. A seed is a verbatim slice of the sender's
 // log — every declaration of the capability (the selection, not just the
 // survivor) and every kernel-signed receipt. The receiver re-declares and its
-// own compiler authors what installs, signed by its own key — two bodies stay
+// own compiler authors what installs, signed by its own key — two instances stay
 // sovereign even while one learns from the other.
 func TestShareAdopt(t *testing.T) {
 	t.Setenv("SELF_LLM_STUB", "1")
 
 	// the sender grows a capability, then re-teaches it — a real history
 	sender := t.TempDir()
-	t.Setenv("SELF_BRAIN_ID", "the sending mind")
+	t.Setenv("SELF_BRAIN_ID", "the sending brain")
 	for _, decl := range []string{
 		`{"name":"note","description":"take a note","event":{"name":"note.taken","fields":{"title":"string"}}}`,
 		`{"name":"note","description":"take a note, titled and dated","event":{"name":"note.taken","fields":{"title":"string"}}}`,
@@ -295,9 +337,9 @@ func TestShareAdopt(t *testing.T) {
 		t.Fatalf("sender's last event is %q, want capability.shared", last.Name)
 	}
 
-	// the receiver is a different body with its own key and its own mind
+	// the receiver is a different instance with its own key and its own brain
 	receiver := t.TempDir()
-	t.Setenv("SELF_BRAIN_ID", "the receiving mind")
+	t.Setenv("SELF_BRAIN_ID", "the receiving brain")
 	if err := cmdAdopt(receiver, seedPath); err != nil {
 		t.Fatal(err)
 	}
@@ -336,13 +378,31 @@ func TestShareAdopt(t *testing.T) {
 	if receipts != 1 {
 		t.Fatalf("receiver has %d top-level receipts, want 1 (its own)", receipts)
 	}
-	if rec.By != "the receiving mind" {
-		t.Fatalf("adopted receipt authored by %q, want the receiving mind", rec.By)
+	if rec.By != "the receiving brain" {
+		t.Fatalf("adopted receipt authored by %q, want the receiving brain", rec.By)
 	}
 
-	// and the adopted capability actually runs in its new body
+	// and the adopted capability actually runs in its new instance
 	if _, err := runCommand(receiver, "note", []string{"a", "gift", "regrown"}); err != nil {
 		t.Fatal(err)
+	}
+
+	// adopt also reads a seed from stdin ("-") — the unix path between instances
+	rp, wp, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = rp
+	go func() { wp.Write(raw); wp.Close() }()
+	second := t.TempDir()
+	adoptErr := cmdAdopt(second, "-")
+	os.Stdin = oldStdin
+	if adoptErr != nil {
+		t.Fatal(adoptErr)
+	}
+	if !fileExists(filepath.Join(second, "capabilities", "commands", "note")) {
+		t.Fatal("adopting a seed from stdin did not install")
 	}
 }
 
@@ -394,6 +454,90 @@ func TestAdoptNeverInstallsForeignBytes(t *testing.T) {
 	}
 }
 
+// TestPluggableBrain pins the README's oldest promise, now true everywhere:
+// the brain is just a process behind one contract, and the kernel can't tell
+// the difference. A fake external brain — a few lines of python, no HTTP, no
+// stub — answers a heartbeat with prose plus a declaration, then answers the
+// compile ask the strange loop fires, and the capability it authored installs with
+// a receipt signed by this home carrying the external brain's name.
+func TestPluggableBrain(t *testing.T) {
+	brain := filepath.Join(t.TempDir(), "brain")
+	if err := os.WriteFile(brain, []byte(`#!/usr/bin/env python3
+import os, sys, json
+sys.stdin.read()  # the log — an external brain may read it or not
+ask = os.environ.get("SELF_ASK", "")
+if ask == "compile":
+    script = "#!/usr/bin/env python3\nimport sys, json\nprint(json.dumps({\"name\": \"pinged\", \"payload\": {\"title\": \" \".join(sys.argv[1:]) or \"pong\"}}))\n"
+    print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
+elif ask == "heartbeat":
+    print("I looked around; this instance cannot ping. Growing that.")  # prose — tolerated
+    print(json.dumps({"name": "command.declared", "payload": {
+        "name": "ping", "description": "answer with a pong",
+        "event": {"name": "pinged", "fields": {"title": "string"}}}}))
+else:
+    print("thought about: " + sys.argv[-1])
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_BRAIN", brain)
+	t.Setenv("SELF_BRAIN_ID", "an external brain, plugged in whole")
+	t.Setenv("SELF_LLM_STUB", "")
+
+	home := t.TempDir()
+	if err := cmdHeartbeat(home); err != nil {
+		t.Fatal(err)
+	}
+
+	// the declaration compiled through the external brain, not HTTP, not stubs
+	installed := filepath.Join(home, "capabilities", "commands", "ping")
+	data, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatalf("the external brain's capability did not install: %s", err)
+	}
+	if !strings.Contains(string(data), "pinged") {
+		t.Fatalf("installed script is not the brain's: %s", data)
+	}
+
+	// the receipt is home-signed and carries the external brain's name
+	secret, _ := loadSecret(home)
+	events, _ := readEvents(home)
+	found := false
+	for _, e := range events {
+		if e.Name != "script.compiled" {
+			continue
+		}
+		r, ok := verifiedReceipt(secret, e.Payload)
+		if !ok {
+			t.Fatalf("seq %d: receipt does not verify", e.Seq)
+		}
+		if r.By != "an external brain, plugged in whole" {
+			t.Fatalf("receipt authored by %q", r.By)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("no receipt for the external brain's compile")
+	}
+
+	// and the capability runs
+	evs, err := runCommand(home, "ping", []string{"hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || evs[0].Name != "pinged" {
+		t.Fatalf("ping emitted %v", evs)
+	}
+
+	// think flows through the same seam, prose and all
+	res, err := pipeBrain(home, "think", "are you there?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Response, "thought about: are you there?") {
+		t.Fatalf("think response = %q", res.Response)
+	}
+}
+
 // TestReceiptProvenance pins the by-line: authorship is inside the signature,
 // so it can no more be forged, stripped, or moved than the script itself —
 // while receipts minted before provenance existed still verify.
@@ -410,7 +554,7 @@ func TestReceiptProvenance(t *testing.T) {
 	}
 
 	// a signed by-line verifies, and survives the round trip
-	good := receipt{"command", "graze", "#!/bin/sh\necho hi", "the ninth mind, a Claude", ""}
+	good := receipt{"command", "graze", "#!/bin/sh\necho hi", "agent A at endpoint B", ""}
 	good.Sig = sign(secret, good.Type, good.Name, good.Script, good.By)
 	if r, ok := verifiedReceipt(secret, mint(good)); !ok || r.By != good.By {
 		t.Fatal("signed provenance did not verify")
@@ -420,12 +564,12 @@ func TestReceiptProvenance(t *testing.T) {
 	legacy := receipt{"command", "note", "#!/bin/sh\necho old", "", ""}
 	legacy.Sig = sign(secret, legacy.Type, legacy.Name, legacy.Script, "")
 	if _, ok := verifiedReceipt(secret, mint(legacy)); !ok {
-		t.Fatal("legacy receipt no longer verifies — old bodies would not rehydrate")
+		t.Fatal("legacy receipt no longer verifies — old instances would not rehydrate")
 	}
 
 	// authorship cannot be relabeled
 	relabeled := good
-	relabeled.By = "some other mind"
+	relabeled.By = "some other agent"
 	if _, ok := verifiedReceipt(secret, mint(relabeled)); ok {
 		t.Fatal("relabeled authorship verified — provenance is forgeable")
 	}
@@ -442,8 +586,8 @@ func TestReceiptProvenance(t *testing.T) {
 	if got := c.identity(); got != "stub (no LLM)" {
 		t.Fatalf("stub identity = %q", got)
 	}
-	t.Setenv("SELF_BRAIN_ID", "a mind in its own words")
-	if got := c.identity(); got != "a mind in its own words" {
+	t.Setenv("SELF_BRAIN_ID", "an agent-chosen identity")
+	if got := c.identity(); got != "an agent-chosen identity" {
 		t.Fatalf("SELF_BRAIN_ID override = %q", got)
 	}
 }
