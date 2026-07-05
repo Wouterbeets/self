@@ -600,3 +600,43 @@ func TestReceiptProvenance(t *testing.T) {
 		t.Fatalf("SELF_BRAIN_ID override = %q", got)
 	}
 }
+
+func TestProtocolHelpIsVisibleFromCLI(t *testing.T) {
+	protocol := protocolText()
+	for _, want := range []string{
+		"SELF_ASK     request kind: think | heartbeat | grow | compile",
+		"command.declared",
+		"projector.declared",
+		"script.authored",
+		"command script",
+		"projector script",
+	} {
+		if !strings.Contains(protocol, want) {
+			t.Fatalf("protocol help missing %q:\n%s", want, protocol)
+		}
+	}
+
+	usage := usageText()
+	if !strings.Contains(usage, "self protocol") {
+		t.Fatalf("usage does not advertise protocol help:\n%s", usage)
+	}
+	if got, ok := commandHelp("protocol"); !ok || got != protocol {
+		t.Fatalf("help protocol did not return protocol text")
+	}
+}
+
+func TestCommandHelpTreatsFlagsAsHelp(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"help"}} {
+		if !wantsHelp(args) {
+			t.Fatalf("wantsHelp(%v) = false", args)
+		}
+	}
+
+	runHelp, ok := commandHelp("run")
+	if !ok {
+		t.Fatal("run help missing")
+	}
+	if !strings.Contains(runHelp, "usage: self run <command> [args...]") {
+		t.Fatalf("run help is not command usage:\n%s", runHelp)
+	}
+}

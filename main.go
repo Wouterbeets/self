@@ -2003,7 +2003,11 @@ func ensureHome(home string) error {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `self — a local-first, event-sourced runtime with LLM-generated capabilities
+	fmt.Fprint(os.Stderr, usageText())
+}
+
+func usageText() string {
+	return `self — a local-first, event-sourced runtime with LLM-generated capabilities
 
 One append-only event log + projections as deterministic replays. A minimal
 kernel; every capability is generated from a declaration and installed under
@@ -2024,6 +2028,7 @@ usage: self [command] [args]
                        receipts, a verbatim slice of this log
   self adopt <seed>    re-grow a shared capability here ("-" reads stdin) — this
                        instance's own compiler re-authors it; foreign bytes never install
+  self protocol        print the brain + capability wire protocol
 
 environment:
   SELF_HOME         the instance — a dir holding events.jsonl + .secret (default ~/.self)
@@ -2040,7 +2045,89 @@ environment:
                     to a fail-closed read-only allowlist; never fails open)
   SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
                     (default: the model @ its endpoint, or "stub (no LLM)")
-`)
+`
+}
+
+func protocolText() string {
+	return `self protocol — the wire contracts
+
+Brain process contract
+
+  The same seam handles think, heartbeat, grow, and compile.
+
+  SELF_BRAIN   executable to spawn, optionally with args, for example "claude -p"
+  SELF_ASK     request kind: think | heartbeat | grow | compile
+  argv         the prompt is passed as the last argument
+  stdin        the full event log as JSONL: {id, seq, name, occurred_at, payload}
+  stdout       event JSONL; non-JSON lines are tolerated as prose reply text
+
+Brain reply events
+
+  chat.message        prose reply for think/brain:
+                      {"name":"chat.message","payload":{"role":"assistant","content":"..."}}
+
+  command.declared    declare a command capability; the kernel compiles it:
+                      {"name":"command.declared","payload":{"name":"note","description":"...","params":{"text":"string"},"event":{"name":"note.added","fields":{"text":"string"}}}}
+
+  projector.declared  declare a projection; the kernel compiles it:
+                      {"name":"projector.declared","payload":{"name":"notes","description":"...","consumes":["note.added"]}}
+
+  script.authored     answer to SELF_ASK=compile only:
+                      {"name":"script.authored","payload":{"script":"#!/bin/sh\n..."}}
+
+Compiled capability contract
+
+  command script      argv are command args; stdin is the current event log JSONL;
+                      stdout is new event JSONL: {"name":"event.name","payload":{...}}
+                      the kernel assigns id, seq, and occurred_at, appends the
+                      events, then re-renders all projections.
+
+  projector script    stdin is the full event log JSONL; stdout is HTML.
+                      The kernel writes it to SELF_HOME/site/<name>.html.
+
+  environment         SELF_HOME is set for every compiled script.
+
+Declarations cross instance boundaries; runnable code does not. A generated
+script installs only after the local kernel signs a script.compiled receipt with
+SELF_HOME/.secret and the current SELF_BRAIN_ID.
+`
+}
+
+func commandHelp(cmd string) (string, bool) {
+	switch cmd {
+	case "grow":
+		return "usage: self grow <seed-dir>\n\nRead <seed-dir>/intent.md, ask the brain to declare capabilities, compile them, and install signed receipts.\n", true
+	case "run":
+		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then projections re-render.\n", true
+	case "think":
+		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, declarations} JSON and appends nothing.\n", true
+	case "brain":
+		return "usage: self brain <prompt>\n       self brain < prompt.txt\n\nRun the built-in brain process. It implements the same protocol expected from SELF_BRAIN.\n", true
+	case "heartbeat":
+		return "usage: self heartbeat\n\nAppend a heartbeat event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
+	case "show":
+		return "usage: self show <projection>\n\nRender a projection to stdout by replaying the current log. Use 'kernel' for the instance index.\n", true
+	case "live":
+		return "usage: self live [port]\n\nServe the instance on 127.0.0.1 (or SELF_BIND) with /, /<projection>, /run/<command>, and /events.\n", true
+	case "rehydrate":
+		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a brain.\n", true
+	case "share":
+		return "usage: self share <capability>\n\nPrint the capability's declarations and receipts as a JSONL seed.\n", true
+	case "adopt":
+		return "usage: self adopt <seed.jsonl>\n       self adopt - < seed.jsonl\n\nRecord a shared seed and re-generate its capability locally; foreign code never installs.\n", true
+	case "protocol":
+		return protocolText(), true
+	}
+	return "", false
+}
+
+func wantsHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" || arg == "help" {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
@@ -2077,6 +2164,13 @@ func main() {
 	}
 
 	var err error
+	if cmd != "help" && wantsHelp(args) {
+		if text, ok := commandHelp(cmd); ok {
+			fmt.Fprint(os.Stdout, text)
+			return
+		}
+	}
+
 	switch cmd {
 	case "grow":
 		if len(args) < 1 {
@@ -2124,8 +2218,16 @@ func main() {
 		} else {
 			err = cmdAdopt(home, args[0])
 		}
+	case "protocol":
+		fmt.Fprint(os.Stdout, protocolText())
 	case "help", "--help", "-h":
-		usage()
+		if len(args) == 0 {
+			usage()
+		} else if text, ok := commandHelp(args[0]); ok {
+			fmt.Fprint(os.Stdout, text)
+		} else {
+			err = fmt.Errorf("unknown help topic %q", args[0])
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "self: unknown command %q\n", cmd)
 		usage()
