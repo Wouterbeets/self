@@ -50,10 +50,11 @@ self grow seeds/chat                 # generate a capability set from its intent
 self                                 # rebuild from the log, then serve at :7777
 ```
 
-`grow` needs a brain; the demo above does not. To make every coding-agent
-session in a project use one instance as shared persistent state, paste the
-card in [`AGENTS.md`](AGENTS.md) into the project's agent instructions. To write
-your own capability sets, see [`SEEDS.md`](SEEDS.md).
+`grow` needs a brain; `SELF_LLM_STUB=1` supplies a deterministic offline one for
+mechanical tests and demos, while real capabilities need a real model or agent.
+To make every coding-agent session in a project use one instance as shared
+persistent state, paste the card in [`AGENTS.md`](AGENTS.md) into the project's
+agent instructions. To write your own capability sets, see [`SEEDS.md`](SEEDS.md).
 
 ## How it works
 
@@ -133,6 +134,11 @@ SELF_BRAIN="claude -p"     # any executable (agent CLI, script, human shim)
 SELF_LLM_URL=http://...    # or any OpenAI-compatible endpoint (built-in loop)
 SELF_LLM_STUB=1            # or deterministic offline stubs (testing, demos)
 ```
+
+The stub path is deliberately dumb, but complete enough to exercise the seam:
+`think` returns a deterministic prose reply, `grow` declares a minimal command +
+projection from obvious names in `intent.md`, and compile emits stub scripts that
+honor the pipe contract. It proves the machinery, not the intelligence.
 
 The `SELF_BRAIN` process contract:
 

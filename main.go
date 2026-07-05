@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -959,14 +960,165 @@ func (c *llm) compile(system, user, reference string) (string, error) {
 
 // Stub scripts (SELF_LLM_STUB=1) keep the whole loop testable offline: no LLM,
 // no network, real pipe-contract binaries.
+func payloadField(fields map[string]string) string {
+	if _, ok := fields["title"]; ok {
+		return "title"
+	}
+	if _, ok := fields["text"]; ok {
+		return "text"
+	}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		if strings.TrimSpace(k) != "" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > 0 {
+		return keys[0]
+	}
+	return "title"
+}
+
 func stubCommand(d commandDecl) string {
-	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nprint(json.dumps({\"name\": %q, \"payload\": {\"title\": \" \".join(sys.argv[1:]) or \"(untitled)\"}}))\n",
-		d.Description, d.Event.Name)
+	eventName := d.Event.Name
+	if strings.TrimSpace(eventName) == "" {
+		eventName = d.Name + ".ran"
+	}
+	field := payloadField(d.Event.Fields)
+	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nprint(json.dumps({\"name\": %q, \"payload\": {%q: \" \".join(sys.argv[1:]) or \"(untitled)\"}}))\n",
+		d.Description, eventName, field)
 }
 
 func stubProjector(d projectorDecl) string {
-	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nfrom html import escape\nprint(\"<h1>%s</h1><ul>\")\nfor line in sys.stdin:\n    line = line.strip()\n    if not line:\n        continue\n    e = json.loads(line)\n    if e.get(\"name\") in %s:\n        print(f\"<li>{escape(str(e.get('payload', {}).get('title', '(untitled)')))}</li>\")\nprint(\"</ul>\")\n",
-		d.Name, d.Name, jsonRepr(d.Consumes))
+	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nfrom html import escape\nconsumes = %s\nprint(\"<h1>%s</h1><ul>\")\nfor line in sys.stdin:\n    line = line.strip()\n    if not line:\n        continue\n    e = json.loads(line)\n    if not consumes or e.get(\"name\") in consumes:\n        payload = e.get('payload', {}) or {}\n        value = payload.get('title', payload.get('text'))\n        if value is None and payload:\n            value = payload[sorted(payload)[0]]\n        print(f\"<li>{escape(str(value if value is not None else '(untitled)'))}</li>\")\nprint(\"</ul>\")\n",
+		d.Description, jsonRepr(d.Consumes), d.Name)
+}
+
+func stubBrain(home, kind, prompt string) (*brainResult, error) {
+	res := &brainResult{Declarations: []map[string]any{}}
+	switch kind {
+	case "think":
+		res.Response = "stub thought about: " + prompt
+	case "heartbeat":
+		res.Response = "stub heartbeat: no changes"
+	case "grow":
+		name, intent := latestIntent(home)
+		if intent == "" {
+			intent = prompt
+		}
+		command := firstCommandName(intent)
+		if command == "" {
+			command = sanitizeCapabilityName(name)
+		}
+		if command == "" {
+			command = "entry"
+		}
+		projector := firstProjectionName(intent)
+		if projector == "" {
+			projector = command + "s"
+		}
+		event := firstEventName(intent)
+		if event == "" {
+			event = command + ".recorded"
+		}
+		res.Declarations = []map[string]any{
+			{"name": "command.declared", "payload": map[string]any{"name": command, "description": "offline stub command grown from " + name, "params": map[string]string{"text": "string"}, "event": map[string]any{"name": event, "fields": map[string]string{"text": "string"}}}},
+			{"name": "projector.declared", "payload": map[string]any{"name": projector, "description": "offline stub projection grown from " + name, "consumes": []string{event}}},
+		}
+		res.Response = fmt.Sprintf("stub declared %q and %q", command, projector)
+	case "compile":
+		return nil, fmt.Errorf("stub compile is handled by the built-in stub compiler, not the brain process")
+	default:
+		res.Response = "stub received " + kind
+	}
+	return res, nil
+}
+
+func latestIntent(home string) (name, intent string) {
+	events, err := readEvents(home)
+	if err != nil {
+		return "", ""
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Name != "intent.declared" {
+			continue
+		}
+		var p struct {
+			Name   string `json:"name"`
+			Intent string `json:"intent"`
+		}
+		if json.Unmarshal(events[i].Payload, &p) == nil {
+			return p.Name, p.Intent
+		}
+	}
+	return "", ""
+}
+
+func backticked(s string) []string {
+	var out []string
+	for {
+		start := strings.IndexByte(s, '`')
+		if start < 0 {
+			return out
+		}
+		s = s[start+1:]
+		end := strings.IndexByte(s, '`')
+		if end < 0 {
+			return out
+		}
+		out = append(out, s[:end])
+		s = s[end+1:]
+	}
+}
+
+func firstCommandName(intent string) string {
+	for _, token := range backticked(intent) {
+		if rest, ok := strings.CutPrefix(token, "self run "); ok {
+			if fields := strings.Fields(rest); len(fields) > 0 {
+				return sanitizeCapabilityName(fields[0])
+			}
+		}
+	}
+	return ""
+}
+
+func firstProjectionName(intent string) string {
+	for _, token := range backticked(intent) {
+		if strings.HasPrefix(token, "/") && len(token) > 1 {
+			return sanitizeCapabilityName(strings.TrimPrefix(token, "/"))
+		}
+	}
+	return ""
+}
+
+func firstEventName(intent string) string {
+	for _, token := range backticked(intent) {
+		if strings.Contains(token, ".") && !strings.Contains(token, " ") && !strings.HasPrefix(token, "/") {
+			return token
+		}
+	}
+	return ""
+}
+
+func sanitizeCapabilityName(s string) string {
+	s = strings.TrimSpace(strings.TrimPrefix(s, "self-seed-"))
+	s = strings.TrimSuffix(s, "-seed")
+	s = strings.Trim(s, "`/ <>.,:;()[]{}\t\n")
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // ──────────────────────────────── the brain ─────────────────────────────────
@@ -1783,6 +1935,9 @@ func cmdThink(home, prompt string) error {
 // read stdin and print plugs in whole: a local model, an API loop, a coding
 // agent, a human. The kernel cannot tell the difference, by construction.
 func pipeBrain(home, kind, prompt string) (*brainResult, error) {
+	if os.Getenv("SELF_LLM_STUB") == "1" && brainExe() == "" {
+		return stubBrain(home, kind, prompt)
+	}
 	current, err := readEvents(home)
 	if err != nil {
 		return nil, err

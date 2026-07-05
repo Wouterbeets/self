@@ -546,6 +546,72 @@ else:
 	}
 }
 
+func TestStubBrainCoversThinkAndGrow(t *testing.T) {
+	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", "")
+	home := t.TempDir()
+
+	res, err := pipeBrain(home, "think", "are you there?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Response, "stub thought about: are you there?") {
+		t.Fatalf("stub think response = %q", res.Response)
+	}
+
+	seed := filepath.Join(t.TempDir(), "journal")
+	if err := os.Mkdir(seed, 0755); err != nil {
+		t.Fatal(err)
+	}
+	intent := "`self run entry <text>` appends one `journal.entry` event. `/journal` renders entries."
+	if err := os.WriteFile(filepath.Join(seed, "intent.md"), []byte(intent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdGrow(home, seed); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(filepath.Join(home, "capabilities", "commands", "entry")) {
+		t.Fatal("stub grow did not install the declared command")
+	}
+	if !fileExists(filepath.Join(home, "capabilities", "projectors", "journal")) {
+		t.Fatal("stub grow did not install the declared projector")
+	}
+	if _, err := runCommand(home, "entry", []string{"hello", "offline", "world"}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := runProjection(home, "journal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), "hello offline world") {
+		t.Fatalf("stub-grown projection did not show entry:\n%s", page)
+	}
+}
+
+func TestStubCommandHonorsDeclaredField(t *testing.T) {
+	t.Setenv("SELF_LLM_STUB", "1")
+	home := t.TempDir()
+	decl := newEvent("command.declared", json.RawMessage(
+		`{"name":"memo","description":"record a memo","event":{"name":"memo.added","fields":{"text":"string"}}}`))
+	if err := ingest(home, []Event{decl}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := runCommand(home, "memo", []string{"uses", "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Name != "memo.added" {
+		t.Fatalf("stub command emitted %v", events)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["text"] != "uses text" {
+		t.Fatalf("stub command ignored declared field: %s", events[0].Payload)
+	}
+}
+
 // TestReceiptProvenance pins the by-line: authorship is inside the signature,
 // so it can no more be forged, stripped, or moved than the script itself —
 // while receipts minted before provenance existed still verify.
