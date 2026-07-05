@@ -15,6 +15,7 @@ root="$(cd "$(dirname "$0")" && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 export SELF_LLM_STUB=1
+export SELF_BRAIN_ID="stub (no LLM)"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 

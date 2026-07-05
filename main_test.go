@@ -591,6 +591,7 @@ func TestReceiptProvenance(t *testing.T) {
 
 	// and a receipt the kernel mints carries the brain's identity
 	c := &llm{stub: true, home: home}
+	t.Setenv("SELF_BRAIN_ID", "")
 	if got := c.identity(); got != "stub (no LLM)" {
 		t.Fatalf("stub identity = %q", got)
 	}
