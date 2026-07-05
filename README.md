@@ -115,14 +115,13 @@ Server routes: `/` (instance self-description), `/<projection>`,
 `127.0.0.1` by default; set `SELF_BIND=0.0.0.0` to expose it (see
 [Limits](#limits-and-threat-model)).
 
-**The shell.** When serving, the kernel adds one shared enhancement to every
-page: a stylesheet and a small script. Projections on disk stay plain HTML — the
-shell knows the CSS class names, never the events. The script is progressive
-enhancement only: it intercepts form posts, shows the request in flight, then
-re-fetches the page so what you see is the log's replay; it also watches
-`/events` and re-renders when the log grows. Strip it (`self show`, curl, a
-no-JS browser) and every page still works, because every action underneath is a
-plain HTML form.
+**The shell.** When serving, the kernel adds one shared stylesheet and a small
+script to every page; projections on disk stay plain HTML, and the shell knows
+only the CSS class names, never the events. The script is progressive
+enhancement: it intercepts form posts, shows the request in flight, re-fetches
+so what you see is the log's replay, and re-renders when `/events` grows. Strip
+it (`self show`, curl, a no-JS browser) and every page still works, because
+every action underneath is a plain HTML form.
 
 ## The brain
 
@@ -135,24 +134,40 @@ SELF_LLM_URL=http://...    # or any OpenAI-compatible endpoint (built-in loop)
 SELF_LLM_STUB=1            # or deterministic offline stubs (testing, demos)
 ```
 
-The stub path is deliberately dumb, but complete enough to exercise the seam:
-`think` returns a deterministic prose reply, `grow` declares a minimal command +
-projection from obvious names in `intent.md`, and compile emits stub scripts that
-honor the pipe contract. It proves the machinery, not the intelligence.
+The stub path is deliberately dumb but complete: `think` returns a fixed reply,
+`grow` declares a minimal command + projection from names in `intent.md`, and
+compile emits scripts that honor the pipe contract. It proves the machinery, not
+the intelligence.
 
 The `SELF_BRAIN` process contract:
 
 | channel     | content                                                       |
 |-------------|---------------------------------------------------------------|
 | `$SELF_ASK` | request kind: `think` \| `heartbeat` \| `grow` \| `compile`   |
-| last argv   | the prompt                                                     |
+| last argv   | the prompt (for `compile`, it carries the declaration to build)|
 | stdin       | the full event log, JSONL                                      |
 | stdout      | event JSONL; non-JSON lines are collected as the text reply    |
 
-Reply events: `command.declared` / `projector.declared` add capabilities;
-`script.authored` (`{"script": "..."}`) answers a `compile` request. Any process
-that reads stdin and prints JSON is a complete brain, compiler included; its
-receipts are signed with `SELF_BRAIN_ID` as the recorded author.
+So a whole brain is any program that switches on `$SELF_ASK` and prints events:
+
+```python
+#!/usr/bin/env python3
+import os, sys, json
+log    = sys.stdin.read()          # the event log, JSONL — read it or not
+ask    = os.environ["SELF_ASK"]    # think | heartbeat | grow | compile
+prompt = sys.argv[-1]              # for compile, this is the declaration to build
+
+if ask == "compile":               # author the script the declaration asked for
+    script = "#!/bin/sh\necho '{\"name\":\"pinged\",\"payload\":{}}'\n"
+    print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
+else:                              # think/heartbeat/grow: prose + optional declarations
+    print("looked at the log; nothing to add.")   # non-JSON line → the text reply
+```
+
+`command.declared` / `projector.declared` add capabilities; `script.authored`
+answers a `compile`. Any process that reads stdin and prints JSON is a complete
+brain, compiler included; its receipts are signed with `SELF_BRAIN_ID` as the
+recorded author. `claude -p` is the same shape with a real model behind it.
 
 ## Capability exchange
 
@@ -175,14 +190,14 @@ because the keys are symmetric and never leave an instance.
 
 While generating, the brain has a bash tool for exploration. Where the platform
 supports it, that tool runs in a jail built from Linux user namespaces: an
-ephemeral copy of the instance at `/body` (never `.secret`), no network
-interfaces, and writes confined to the jail. Nothing run there installs anything
-— declarations remain the only way in. Where namespaces are unavailable (or with
-`SELF_SANDBOX=0`), the tool falls back to a read-only command allowlist that also
-runs against a copy without `.secret`. It never fails open.
+ephemeral copy of the instance at `/body` (never `.secret`), no network, writes
+confined to the jail. Nothing run there installs anything — declarations remain
+the only way in. Where namespaces are unavailable (or `SELF_SANDBOX=0`), it falls
+back to a read-only command allowlist against the same secret-less copy. It never
+fails open.
 
-This sandbox is for the brain's *exploration during generation*. Installed
-capability scripts run without a sandbox — see below.
+This jail is for the brain's *exploration during generation*. Installed
+capability scripts run without a sandbox — see Limits.
 
 ## Environment
 
