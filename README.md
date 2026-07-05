@@ -28,7 +28,7 @@ It is experimental. See [Limits](#limits-and-threat-model) before you rely on it
 ### 1. See the machinery with no LLM (about 10 seconds)
 
 ```sh
-git clone https://github.com/wouterbeets/ks && cd ks
+git clone https://github.com/wouterbeets/self && cd self
 ./demo.sh
 ```
 
