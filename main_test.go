@@ -232,6 +232,14 @@ func TestPlaypen(t *testing.T) {
 	if out := readOnlyBash(home, "rm events.jsonl"); !strings.Contains(out, "not on the read-only allowlist") {
 		t.Fatalf("fallback failed open: %q", out)
 	}
+	// and the signing key must not be readable through the fallback either:
+	// like the jail, it runs against a sanitized copy where .secret never is.
+	if out := readOnlyBash(home, "cat .secret"); strings.Contains(out, "sacred") {
+		t.Fatalf("fallback leaked the signing key: %q", out)
+	}
+	if out := readOnlyBash(home, "ls -a"); strings.Contains(out, ".secret") {
+		t.Fatalf("fallback exposed .secret in the working tree: %q", out)
+	}
 	t.Setenv("SELF_SANDBOX", "")
 
 	p := newPlaypen(home)

@@ -646,7 +646,10 @@ var readOnlyCmds = map[string]bool{"ls": true, "cat": true, "head": true, "tail"
 	"find": true, "wc": true, "sort": true, "uniq": true, "cut": true, "tr": true, "echo": true, "jq": true}
 
 // readOnlyBash is the exploration tool: fail-closed to plain readers, so the
-// model can inspect the instance but not modify it.
+// model can inspect the instance but not modify it. Like the jail, it runs
+// against a sanitized COPY of the instance (events.jsonl, capabilities/, site/
+// — never .secret), so the signing key is simply not present to read. The
+// fallback must not be a weaker door than the jail it stands in for.
 func readOnlyBash(home, command string) string {
 	if strings.ContainsAny(command, "><`") || strings.Contains(command, "$(") ||
 		strings.Contains(command, "-exec") || strings.Contains(command, "-delete") || strings.Contains(command, "-ok") {
@@ -658,10 +661,22 @@ func readOnlyBash(home, command string) string {
 			return fmt.Sprintf("error: %q is not on the read-only allowlist", f[0])
 		}
 	}
+	work, err := os.MkdirTemp("", "self-ro-")
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	defer os.RemoveAll(work)
+	if data, err := os.ReadFile(filepath.Join(home, "events.jsonl")); err == nil {
+		os.WriteFile(filepath.Join(work, "events.jsonl"), data, 0644)
+	}
+	for _, dir := range []string{"capabilities", "site"} {
+		copyTree(filepath.Join(home, dir), filepath.Join(work, dir))
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
-	cmd.Dir = home
+	cmd.Dir = work
+	cmd.Env = append(os.Environ(), "SELF_HOME="+work)
 	out, err := cmd.CombinedOutput()
 	if len(out) > 16384 {
 		out = append(out[:16384], "\n… (truncated)"...)
@@ -1616,12 +1631,16 @@ func cmdServe(home, port string) error {
 		fmt.Fprint(w, "ok")
 	})
 
-	fmt.Fprintf(os.Stderr, "self: serving at http://localhost:%s (home %s)\n", port, home)
+	// Loopback by default: the write path (/run/<command>) has no auth, and
+	// local-first means local. SELF_BIND=0.0.0.0 opens it to the network for
+	// anyone who knowingly wants that.
+	addr := envOr("SELF_BIND", "127.0.0.1") + ":" + port
+	fmt.Fprintf(os.Stderr, "self: serving at http://%s (home %s)\n", addr, home)
 	fmt.Fprintf(os.Stderr, "  /              my identity — capabilities, paths, contract\n")
 	fmt.Fprintf(os.Stderr, "  /<projection>  a projection, re-rendered live\n")
 	fmt.Fprintf(os.Stderr, "  /run/<command> run a capability (plain HTML forms)\n")
 	fmt.Fprintf(os.Stderr, "  /events        the raw event log\n")
-	return http.ListenAndServe(":"+port, mux)
+	return http.ListenAndServe(addr, mux)
 }
 
 // ────────────────────────────── the commands ────────────────────────────────

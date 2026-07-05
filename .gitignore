@@ -5,3 +5,10 @@
 # signed receipts (events.jsonl + .secret are the only source of truth)
 **/capabilities/
 **/site/
+
+# an instance's SOURCE state — never commit these. .secret is the signing key;
+# events.jsonl is a live log. Running `self` with SELF_HOME=. would create them
+# right here, and one `git add .` would publish your key. Guard against that.
+.secret
+events.jsonl
+.self/
