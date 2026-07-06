@@ -588,6 +588,30 @@ func mustEvents(t *testing.T, decls []map[string]any) []Event {
 	return evs
 }
 
+// A capable brain (claude -p) will otherwise try to persist its own work —
+// write events.jsonl, run the CLI, install a script — and emit Markdown. Every
+// event-expecting ask must tell it the answer channel is stdout only, plain
+// JSON, one line each. This pins that guidance into the prompts the brain sees.
+func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
+	must := func(where, prompt string, needles ...string) {
+		low := strings.ToLower(prompt)
+		for _, n := range needles {
+			if !strings.Contains(low, n) {
+				t.Errorf("%s prompt is missing guidance %q", where, n)
+			}
+		}
+	}
+	// grow and heartbeat expect declarations: answer on stdout, plain JSON.
+	must("grow", growPrompt("some intent"), "stdout", "events.jsonl", "no markdown", "one line")
+	must("answer contract", brainAnswerContract, "stdout", "cannot write the log", "no code fences")
+	// compile: the brain may test with its tools, but must not install or persist.
+	must("compile", compilePrompt("", "command", "note", `{"name":"note"}`),
+		"do not install", "events.jsonl", "no code fence")
+	// the intent-woven variant keeps the same guidance.
+	must("compile+intent", compilePrompt("a product", "command", "note", `{"name":"note"}`),
+		"do not install", "no code fence")
+}
+
 func TestStubBrainCoversThinkAndGrow(t *testing.T) {
 	t.Setenv("SELF_LLM_STUB", "1")
 	t.Setenv("SELF_BRAIN", "")
