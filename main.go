@@ -1427,43 +1427,138 @@ func renderKernelHTML(home string) {
 // the class vocabulary, never the events; strip it (self show, curl, lynx,
 // rehydrate) and every page still works, because every affordance underneath
 // is a plain HTML form.
-const stylesheet = `<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><style>
-:root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#26231d;--muted:#7d7568;--line:#e5e0d5;--wash:#edeade;
+//
+// The feel is swappable. What is fixed is the class vocabulary and the
+// structural rules below — the contract the projections and shellScript are
+// written against. A *theme* changes none of that: it is only a skin, a set of
+// CSS custom properties (palette, fonts, radii, border weight, shadow) that the
+// structural layer reads through var(). So switching designs never renames a
+// class or rewrites a rule; every projection keeps working unchanged and only
+// the feel moves. Themes are picked at serve time and carry no state into the
+// log — presentation, like prefers-color-scheme; the bare HTML on disk stays
+// theme-agnostic, so rehydrate and self show are untouched.
+
+const shellMeta = `<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">`
+
+const defaultTheme = "grove"
+
+// themeOrder fixes how the picker lists designs; themes is the lookup. To add a
+// design, add one entry here — nothing structural changes.
+var themeOrder = []string{"grove", "micro", "paper", "spec"}
+
+// A theme is a skin plus, optionally, a block of extra rules. The skin is
+// variables only — the interchangeable core, and all most designs need. The
+// rules block is the escape hatch for a design whose feel is more than a
+// palette (letter-spacing, uppercase labels, decorative pseudo-elements): it
+// still styles only the fixed class vocabulary, never the events, and only the
+// active theme's rules are ever injected, so they need no scoping. It changes
+// how the same markup looks, never what a projection must emit.
+var themes = map[string]struct {
+	label string // the name shown in the picker
+	skin  string // :root (and dark-media) variable definitions
+	rules string // optional extra rules layered after the structural CSS
+}{
+	// grove — the original: warm paper, serif headings, soft rounded cards.
+	"grove": {label: "Grove", skin: `:root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#26231d;--muted:#7d7568;--line:#e5e0d5;--wash:#edeade;
 --accent:#2f6b4f;--accent-ink:#fff;--user-bg:#e3efe6;--user-line:#cbdfd2;--danger:#b3402e;
---shadow:0 1px 3px rgba(60,50,30,.07)}
+--shadow:0 1px 3px rgba(60,50,30,.07);
+--font:system-ui,-apple-system,sans-serif;--head-font:Georgia,'Iowan Old Style',serif;--mono:ui-monospace,monospace;
+--radius:10px;--radius-sm:5px;--radius-msg:14px;--line-w:1px}
 @media (prefers-color-scheme:dark){:root{--bg:#16150f;--panel:#201e16;--ink:#e7e2d6;--muted:#948b7b;
 --line:#35322a;--wash:#2a2820;--accent:#69b98e;--accent-ink:#10231a;--user-bg:#233529;--user-line:#31513e;
---danger:#e0755f;--shadow:0 1px 3px rgba(0,0,0,.4)}}
-*{box-sizing:border-box}html{scroll-behavior:smooth}
-body{font-family:system-ui,-apple-system,sans-serif;margin:0 auto;max-width:72ch;padding:24px 20px 32px;
+--danger:#e0755f;--shadow:0 1px 3px rgba(0,0,0,.4)}}`},
+
+	// micro — micrographics: monospace throughout, zero radius, thick hard
+	// borders and a solid offset drop shadow. A crisp, bitmap-poster feel.
+	"micro": {label: "Micro", skin: `:root{--bg:#e8e6df;--panel:#fbfbf7;--ink:#161512;--muted:#6d6a60;--line:#161512;--wash:#dedbcf;
+--accent:#c8361f;--accent-ink:#fff;--user-bg:#e3e0d4;--user-line:#161512;--danger:#c8361f;
+--shadow:3px 3px 0 var(--line);
+--font:'Courier New',ui-monospace,'DejaVu Sans Mono',monospace;--head-font:'Courier New',ui-monospace,monospace;--mono:'Courier New',ui-monospace,monospace;
+--radius:0;--radius-sm:0;--radius-msg:0;--line-w:2px}
+@media (prefers-color-scheme:dark){:root{--bg:#0d0d0b;--panel:#161613;--ink:#eae8dd;--muted:#8f8b7d;
+--line:#eae8dd;--wash:#232320;--accent:#ff5a3c;--accent-ink:#0d0d0b;--user-bg:#1d1d19;--user-line:#eae8dd;
+--danger:#ff5a3c;--shadow:3px 3px 0 var(--line)}}`},
+
+	// paper — clean and modern: sans throughout, thin hairlines, no shadow,
+	// gentle radii. The low-chrome option.
+	"paper": {label: "Paper", skin: `:root{--bg:#ffffff;--panel:#ffffff;--ink:#1a1a1a;--muted:#8a8a8a;--line:#e6e6e6;--wash:#f4f4f4;
+--accent:#2b59c3;--accent-ink:#fff;--user-bg:#eef2fb;--user-line:#dbe3f6;--danger:#c0392b;
+--shadow:none;
+--font:system-ui,-apple-system,sans-serif;--head-font:system-ui,-apple-system,sans-serif;--mono:ui-monospace,monospace;
+--radius:6px;--radius-sm:4px;--radius-msg:10px;--line-w:1px}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--panel:#151821;--ink:#e6e8ee;--muted:#8b90a0;
+--line:#242836;--wash:#1b1f2a;--accent:#6f9bff;--accent-ink:#0f1115;--user-bg:#1a2233;--user-line:#2a3550;
+--danger:#ff7a6b;--shadow:none}}`},
+
+	// spec — technical-label / spec-sheet: monochrome ink-on-paper, monospace,
+	// letter-spaced uppercase labels, hairline frames, and decorative
+	// registration marks + a barcode strip under the title. The rules block
+	// carries the feel that variables alone can't (tracking, uppercasing, the
+	// pseudo-element micro-graphics); it still touches only the shared classes.
+	"spec": {label: "Spec", skin: `:root{--bg:#e9e7df;--panel:#f6f5ef;--ink:#17150f;--muted:#8f897b;--line:#17150f;--wash:#dedbd0;
+--accent:#17150f;--accent-ink:#f6f5ef;--user-bg:#17150f;--user-line:#17150f;--danger:#a8341f;
+--shadow:none;
+--font:ui-monospace,'SFMono-Regular','DejaVu Sans Mono',monospace;--head-font:ui-monospace,'SFMono-Regular',monospace;--mono:ui-monospace,'SFMono-Regular','DejaVu Sans Mono',monospace;
+--radius:0;--radius-sm:0;--radius-msg:0;--line-w:1px}
+@media (prefers-color-scheme:dark){:root{--bg:#0c0c0a;--panel:#141310;--ink:#e9e6da;--muted:#8f897b;
+--line:#e9e6da;--wash:#1c1b17;--accent:#e9e6da;--accent-ink:#0c0c0a;--user-bg:#e9e6da;--user-line:#e9e6da;
+--danger:#e0755f}}`, rules: `
+body{letter-spacing:.02em}
+h1,h2,h3{text-transform:uppercase;letter-spacing:.16em;font-weight:700}
+h1{font-size:1.7rem;letter-spacing:.22em;border-bottom:var(--line-w) solid var(--line);padding-bottom:10px;margin-bottom:.5em}
+h1::after{content:"";display:block;height:20px;max-width:240px;margin-top:9px;
+background:repeating-linear-gradient(90deg,var(--ink) 0 2px,transparent 2px 4px,var(--ink) 4px 5px,transparent 5px 9px,var(--ink) 9px 12px,transparent 12px 13px,var(--ink) 13px 16px,transparent 16px 18px)}
+.muted{letter-spacing:.08em}
+.who{letter-spacing:.2em}
+.who::before{content:"▍"}
+.tag{background:transparent;border:var(--line-w) solid var(--line);color:var(--ink);text-transform:uppercase;letter-spacing:.14em;padding:0 6px}
+th{letter-spacing:.14em}
+button{text-transform:uppercase;letter-spacing:.14em}
+input::placeholder,textarea::placeholder{text-transform:uppercase;letter-spacing:.14em;font-size:.85em}
+.dots i{border-radius:0}
+.msg.user{color:var(--accent-ink)}
+.msg.user .who{color:var(--accent-ink);opacity:.75}
+.card,article,.msg{position:relative}
+.card::before,article::before,.msg::before{content:"";position:absolute;top:-1px;left:-1px;width:7px;height:7px;color:inherit;
+background:linear-gradient(currentColor,currentColor) 0 0/7px 1px no-repeat,linear-gradient(currentColor,currentColor) 0 0/1px 7px no-repeat}
+.card::after,article::after,.msg::after{content:"";position:absolute;bottom:-1px;right:-1px;width:7px;height:7px;color:inherit;
+background:linear-gradient(currentColor,currentColor) right bottom/7px 1px no-repeat,linear-gradient(currentColor,currentColor) right bottom/1px 7px no-repeat}`},
+}
+
+// structuralCSS is the fixed half of the shell: the class vocabulary and every
+// layout rule, written entirely against var()s a theme supplies. It never
+// mentions a literal color, font, or radius — that is what makes the skins
+// above interchangeable.
+const structuralCSS = `*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{font-family:var(--font);margin:0 auto;max-width:72ch;padding:24px 20px 32px;
 background:var(--bg);color:var(--ink);line-height:1.55}
-h1,h2,h3{font-family:Georgia,'Iowan Old Style',serif;font-weight:600;line-height:1.25}
-h1{font-size:1.55rem;margin:.2em 0 .6em}h2{margin-top:32px;border-bottom:1px solid var(--line);padding-bottom:6px}
+h1,h2,h3{font-family:var(--head-font);font-weight:600;line-height:1.25}
+h1{font-size:1.55rem;margin:.2em 0 .6em}h2{margin-top:32px;border-bottom:var(--line-w) solid var(--line);padding-bottom:6px}
 a{color:var(--accent)}.muted{color:var(--muted)}
-.card,article{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:10px 0;box-shadow:var(--shadow)}
+.card,article{background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius);padding:12px 16px;margin:10px 0;box-shadow:var(--shadow)}
 .card.danger{border-color:var(--danger);color:var(--danger)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:10px}
-.tag{display:inline-block;background:var(--wash);color:var(--accent);border-radius:5px;padding:1px 8px;font-size:12px;font-family:ui-monospace,monospace}
+.tag{display:inline-block;background:var(--wash);color:var(--accent);border-radius:var(--radius-sm);padding:1px 8px;font-size:12px;font-family:var(--mono)}
 .num{text-align:right;font-variant-numeric:tabular-nums}
-.msg{max-width:85%;width:fit-content;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+.msg{max-width:85%;width:fit-content;background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius-msg);
 padding:8px 14px;margin:10px 0;box-shadow:var(--shadow);overflow-wrap:break-word}
 .msg .who{display:block;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:1px}
-.msg.user{margin-left:auto;background:var(--user-bg);border-color:var(--user-line);border-bottom-right-radius:5px}
-.msg.assistant{margin-right:auto;border-bottom-left-radius:5px}
+.msg.user{margin-left:auto;background:var(--user-bg);border-color:var(--user-line);border-bottom-right-radius:var(--radius-sm)}
+.msg.assistant{margin-right:auto;border-bottom-left-radius:var(--radius-sm)}
 .msg.pending{opacity:.65}
 .dots i{display:inline-block;width:5px;height:5px;margin:1px 2px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
 .dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
 @keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
 table{border-collapse:collapse;width:100%}
 th{text-align:left;color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}
-th,td{border-bottom:1px solid var(--line);padding:7px 10px;font-size:14px}
-pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;overflow-x:auto;font-size:13px}
-code{font-family:ui-monospace,monospace;background:var(--wash);border-radius:4px;padding:1px 5px;font-size:.9em}
+th,td{border-bottom:var(--line-w) solid var(--line);padding:7px 10px;font-size:14px}
+pre{background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius);padding:12px;overflow-x:auto;font-size:13px}
+code{font-family:var(--mono);background:var(--wash);border-radius:var(--radius-sm);padding:1px 5px;font-size:.9em}
 form{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
-input,textarea{font:inherit;flex:1 1 24ch;min-width:0;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:inherit}
+input,textarea{font:inherit;flex:1 1 24ch;min-width:0;padding:9px 12px;border:var(--line-w) solid var(--line);border-radius:var(--radius);background:var(--panel);color:inherit}
 textarea{flex-basis:100%}
 input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
-button{font:inherit;padding:9px 16px;border:1px solid var(--accent);border-radius:10px;background:var(--accent);color:var(--accent-ink);cursor:pointer;transition:filter .15s}
+button{font:inherit;padding:9px 16px;border:var(--line-w) solid var(--accent);border-radius:var(--radius);background:var(--accent);color:var(--accent-ink);cursor:pointer;transition:filter .15s}
 button:hover{filter:brightness(1.08)}
 button.secondary{background:transparent;color:var(--accent)}button.danger{border-color:var(--danger);background:var(--danger);color:#fff}
 form.busy button{opacity:.55;pointer-events:none}
@@ -1472,7 +1567,61 @@ body:has(.msg) form:last-of-type{position:sticky;bottom:0;padding:14px 0 10px;ma
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 ::view-transition-old(root),::view-transition-new(root){animation-duration:.15s}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
-</style>`
+.self-themes{position:fixed;right:10px;bottom:10px;z-index:9;display:flex;gap:4px;padding:4px;
+background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius-sm);box-shadow:var(--shadow);font-family:var(--mono);font-size:11px}
+.self-themes a{padding:2px 7px;border-radius:var(--radius-sm);color:var(--muted);text-decoration:none;line-height:1.4}
+.self-themes a[aria-current]{background:var(--accent);color:var(--accent-ink)}
+@media print{.self-themes{display:none}}`
+
+// validTheme reports whether name is a known design; selection paths accept
+// only known names, so the injected picker links and cookie can never smuggle
+// arbitrary CSS in.
+func validTheme(name string) bool { _, ok := themes[name]; return ok }
+
+// themeCSS assembles the full <style> for one design: the skin's variables, the
+// shared structural rules, then the theme's own rules (if any) so they layer on
+// top. Unknown names fall back to default.
+func themeCSS(name string) string {
+	t, ok := themes[name]
+	if !ok {
+		t = themes[defaultTheme]
+	}
+	return shellMeta + "<style>" + t.skin + "\n" + structuralCSS + t.rules + "\n</style>"
+}
+
+// pickTheme resolves the design for one request, most specific first: an
+// explicit ?theme= wins (and the handler remembers it in a cookie), then the
+// cookie, then the SELF_THEME instance default, then the built-in default.
+func pickTheme(r *http.Request) string {
+	if t := r.URL.Query().Get("theme"); validTheme(t) {
+		return t
+	}
+	if c, err := r.Cookie("self_theme"); err == nil && validTheme(c.Value) {
+		return c.Value
+	}
+	if t := strings.TrimSpace(os.Getenv("SELF_THEME")); validTheme(t) {
+		return t
+	}
+	return defaultTheme
+}
+
+// themePicker is the one bit of DOM the shell adds to the body: a small fixed
+// switcher of plain links. It works with no JS (each link is a GET that the
+// server themes and remembers), and it is styled by the active theme itself, so
+// it always matches the page it sits on.
+func themePicker(current string) string {
+	var b strings.Builder
+	b.WriteString(`<nav class="self-themes" aria-label="page design">`)
+	for _, name := range themeOrder {
+		if name == current {
+			b.WriteString(`<a href="?theme=` + name + `" aria-current="true">` + themes[name].label + `</a>`)
+		} else {
+			b.WriteString(`<a href="?theme=` + name + `">` + themes[name].label + `</a>`)
+		}
+	}
+	b.WriteString(`</nav>`)
+	return b.String()
+}
 
 // shellScript is the reactive half of the shell: progressive enhancement
 // only, injected at serve time and never persisted. The state machine is
@@ -1576,13 +1725,32 @@ addEventListener("DOMContentLoaded", tick);
 })();
 </script>`
 
-func injectShell(page []byte) []byte {
-	shell := stylesheet + shellScript
+func injectShell(page []byte, theme string) []byte {
+	head := themeCSS(theme) + shellScript
 	if i := bytes.Index(page, []byte("<head>")); i >= 0 {
 		i += len("<head>")
-		return append(page[:i:i], append([]byte(shell), page[i:]...)...)
+		page = append(page[:i:i], append([]byte(head), page[i:]...)...)
+	} else {
+		page = append([]byte(head), page...)
 	}
-	return append([]byte(shell), page...)
+	picker := themePicker(theme)
+	if j := bytes.LastIndex(page, []byte("</body>")); j >= 0 {
+		return append(page[:j:j], append([]byte(picker), page[j:]...)...)
+	}
+	return append(page, []byte(picker)...)
+}
+
+// writePage sends an on-disk projection through the shell for one request:
+// resolve the design, remember an explicit choice in a cookie so it persists
+// across pages, and inject theme + script + picker. This is the only place a
+// theme touches a response; nothing is written back to the log or to disk.
+func writePage(w http.ResponseWriter, r *http.Request, page []byte) {
+	theme := pickTheme(r)
+	if q := r.URL.Query().Get("theme"); validTheme(q) {
+		http.SetCookie(w, &http.Cookie{Name: "self_theme", Value: q, Path: "/", MaxAge: 31536000, SameSite: http.SameSiteLaxMode})
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(injectShell(page, theme))
 }
 
 // cmdServe serves the instance: every page re-rendered against current events,
@@ -1617,8 +1785,7 @@ func cmdServe(home, port string) error {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(injectShell(page))
+			writePage(w, r, page)
 			return
 		}
 		if p, _ := scriptPath(home, "projector", name); fileExists(p) {
@@ -1627,8 +1794,7 @@ func cmdServe(home, port string) error {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(injectShell(page))
+			writePage(w, r, page)
 			return
 		}
 		http.FileServer(http.Dir(filepath.Join(home, "site"))).ServeHTTP(w, r)
@@ -2200,6 +2366,9 @@ environment:
                     to a fail-closed read-only allowlist; never fails open)
   SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
                     (default: the model @ its endpoint, or "stub (no LLM)")
+  SELF_THEME        default page design when serving: grove | micro | paper |
+                    spec (default grove); a ?theme= link or the on-page picker
+                    overrides it per viewer. Presentation only — never logged.
 `
 }
 
