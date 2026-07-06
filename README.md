@@ -46,18 +46,27 @@ go install .                        # `self` on PATH (via GOBIN)
 make run                            # or: self
 ```
 
-Open <http://127.0.0.1:7777>. A new home starts with a first-run page: install
-the bundled settings seed, configure a brain from the browser, then grow chat or
-notes from their visible `intent.md` prompts. The settings seed is reviewed code
-shipped with the kernel so it can run before any brain exists; normal seeds still
-grow through the configured brain and leave signed receipts in the log.
+Open <http://127.0.0.1:7777>. By default the current working directory is the
+instance home, so a clone is immediately inspectable: `events.jsonl`, `.secret`,
+`capabilities/`, and `site/` appear right beside the code. A new home starts with
+a first-run page: install the bundled settings seed, configure a brain from the
+browser, then grow chat or notes from their visible `intent.md` prompts. The
+settings seed is reviewed code shipped with the kernel so it can run before any
+brain exists; normal seeds still grow through the configured brain and leave
+signed receipts in the log.
+
+If you want one shared instance regardless of where you run `self`, pin it in
+your shell rc:
+
+```sh
+export SELF_HOME=~/.self             # or: export SELF_HOME=$HOME/my-self
+```
 
 The same flow works from the CLI:
 
 ```sh
 
 cd ~/my-project
-export SELF_HOME=$PWD/.self          # the instance lives beside your code
 export SELF_BRAIN="claude -p"        # any executable can be the brain (see below)
 self grow seeds/chat                 # generate a capability set from its intent
 self                                 # rebuild from the log, then serve at :7777
@@ -71,7 +80,8 @@ agent instructions. To write your own capability sets, see [`SEEDS.md`](SEEDS.md
 
 ## How it works
 
-An instance is a directory (`SELF_HOME`) with two files of real state:
+An instance is a directory (`SELF_HOME`, defaulting to the current working
+directory) with two files of real state:
 
 ```
 events.jsonl    the append-only log — the only state
@@ -236,7 +246,8 @@ scripts then run without a sandbox — see Limits.
 ## Environment
 
 ```
-SELF_HOME         instance directory (default ~/.self)
+SELF_HOME         instance directory (default: current working directory; set in
+                  your shell rc to pin one shared home, e.g. ~/.self)
 SELF_BRAIN        brain executable (e.g. "claude -p"); the kernel spawns it for
                   every request kind. It overrides saved /settings config.
                   Without either, set SELF_LLM_STUB=1 for demos/tests.

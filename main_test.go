@@ -839,6 +839,17 @@ func TestKernelRendersSeedCatalog(t *testing.T) {
 	}
 }
 
+func TestHomeDefaultsToWorkingDirectory(t *testing.T) {
+	t.Setenv("SELF_HOME", "")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := homeDir(); got != wd {
+		t.Fatalf("homeDir default = %q, want cwd %q", got, wd)
+	}
+}
+
 // TestThemesShareOneClassContract pins the swappable-shell invariant: a theme
 // is only a skin. Every theme must define the variables the structural layer
 // reads, and the class vocabulary + rules live once in structuralCSS — never

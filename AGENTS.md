@@ -2,9 +2,10 @@
 
 Copy the section below into the agent instructions (`CLAUDE.md`,
 `AGENTS.md`, or system prompt) of any project whose sessions should use a
-self instance as shared persistent state. It assumes `self` is on PATH and
-`SELF_HOME` points at an instance. To also use the agent as the instance's
-brain (compiler included), see "The brain interface" in the README.
+self instance as shared persistent state. It assumes `self` is on PATH; by
+default the current working directory is the instance, or `SELF_HOME` can pin a
+shared one. To also use the agent as the instance's brain (compiler included),
+see "The brain interface" in the README.
 
 ---
 

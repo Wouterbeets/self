@@ -2101,7 +2101,10 @@ func homeDir() string {
 		}
 		return v
 	}
-	return filepath.Join(os.Getenv("HOME"), ".self")
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
 }
 
 // ensureHome initializes a bare instance on first contact: a signing key and a first
@@ -2151,7 +2154,9 @@ usage: self [command] [args]
   self protocol        print the brain + capability wire protocol
 
 environment:
-  SELF_HOME         the instance — a dir holding events.jsonl + .secret (default ~/.self)
+  SELF_HOME         the instance — a dir holding events.jsonl + .secret
+                    (default: current working directory; set it in your shell rc
+                    to pin a shared instance, e.g. export SELF_HOME=~/.self)
 
   plug a brain (one seam; think, heartbeat, grow, and compile all pass through it):
   SELF_BRAIN        any executable, e.g. "claude -p" — it gets the ask's kind in
