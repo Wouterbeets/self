@@ -1443,16 +1443,23 @@ const shellMeta = `<meta name="viewport" content="width=device-width,initial-sca
 const defaultTheme = "grove"
 
 // themeOrder fixes how the picker lists designs; themes is the lookup. To add a
-// design, define its variables in a new skin and add one entry here — nothing
-// structural changes.
-var themeOrder = []string{"grove", "micro", "paper"}
+// design, add one entry here — nothing structural changes.
+var themeOrder = []string{"grove", "micro", "paper", "spec"}
 
+// A theme is a skin plus, optionally, a block of extra rules. The skin is
+// variables only — the interchangeable core, and all most designs need. The
+// rules block is the escape hatch for a design whose feel is more than a
+// palette (letter-spacing, uppercase labels, decorative pseudo-elements): it
+// still styles only the fixed class vocabulary, never the events, and only the
+// active theme's rules are ever injected, so they need no scoping. It changes
+// how the same markup looks, never what a projection must emit.
 var themes = map[string]struct {
 	label string // the name shown in the picker
-	skin  string // :root (and dark-media) variable definitions — the whole theme
+	skin  string // :root (and dark-media) variable definitions
+	rules string // optional extra rules layered after the structural CSS
 }{
 	// grove — the original: warm paper, serif headings, soft rounded cards.
-	"grove": {"Grove", `:root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#26231d;--muted:#7d7568;--line:#e5e0d5;--wash:#edeade;
+	"grove": {label: "Grove", skin: `:root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#26231d;--muted:#7d7568;--line:#e5e0d5;--wash:#edeade;
 --accent:#2f6b4f;--accent-ink:#fff;--user-bg:#e3efe6;--user-line:#cbdfd2;--danger:#b3402e;
 --shadow:0 1px 3px rgba(60,50,30,.07);
 --font:system-ui,-apple-system,sans-serif;--head-font:Georgia,'Iowan Old Style',serif;--mono:ui-monospace,monospace;
@@ -1463,7 +1470,7 @@ var themes = map[string]struct {
 
 	// micro — micrographics: monospace throughout, zero radius, thick hard
 	// borders and a solid offset drop shadow. A crisp, bitmap-poster feel.
-	"micro": {"Micro", `:root{--bg:#e8e6df;--panel:#fbfbf7;--ink:#161512;--muted:#6d6a60;--line:#161512;--wash:#dedbcf;
+	"micro": {label: "Micro", skin: `:root{--bg:#e8e6df;--panel:#fbfbf7;--ink:#161512;--muted:#6d6a60;--line:#161512;--wash:#dedbcf;
 --accent:#c8361f;--accent-ink:#fff;--user-bg:#e3e0d4;--user-line:#161512;--danger:#c8361f;
 --shadow:3px 3px 0 var(--line);
 --font:'Courier New',ui-monospace,'DejaVu Sans Mono',monospace;--head-font:'Courier New',ui-monospace,monospace;--mono:'Courier New',ui-monospace,monospace;
@@ -1474,7 +1481,7 @@ var themes = map[string]struct {
 
 	// paper — clean and modern: sans throughout, thin hairlines, no shadow,
 	// gentle radii. The low-chrome option.
-	"paper": {"Paper", `:root{--bg:#ffffff;--panel:#ffffff;--ink:#1a1a1a;--muted:#8a8a8a;--line:#e6e6e6;--wash:#f4f4f4;
+	"paper": {label: "Paper", skin: `:root{--bg:#ffffff;--panel:#ffffff;--ink:#1a1a1a;--muted:#8a8a8a;--line:#e6e6e6;--wash:#f4f4f4;
 --accent:#2b59c3;--accent-ink:#fff;--user-bg:#eef2fb;--user-line:#dbe3f6;--danger:#c0392b;
 --shadow:none;
 --font:system-ui,-apple-system,sans-serif;--head-font:system-ui,-apple-system,sans-serif;--mono:ui-monospace,monospace;
@@ -1482,6 +1489,40 @@ var themes = map[string]struct {
 @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--panel:#151821;--ink:#e6e8ee;--muted:#8b90a0;
 --line:#242836;--wash:#1b1f2a;--accent:#6f9bff;--accent-ink:#0f1115;--user-bg:#1a2233;--user-line:#2a3550;
 --danger:#ff7a6b;--shadow:none}}`},
+
+	// spec — technical-label / spec-sheet: monochrome ink-on-paper, monospace,
+	// letter-spaced uppercase labels, hairline frames, and decorative
+	// registration marks + a barcode strip under the title. The rules block
+	// carries the feel that variables alone can't (tracking, uppercasing, the
+	// pseudo-element micro-graphics); it still touches only the shared classes.
+	"spec": {label: "Spec", skin: `:root{--bg:#e9e7df;--panel:#f6f5ef;--ink:#17150f;--muted:#8f897b;--line:#17150f;--wash:#dedbd0;
+--accent:#17150f;--accent-ink:#f6f5ef;--user-bg:#17150f;--user-line:#17150f;--danger:#a8341f;
+--shadow:none;
+--font:ui-monospace,'SFMono-Regular','DejaVu Sans Mono',monospace;--head-font:ui-monospace,'SFMono-Regular',monospace;--mono:ui-monospace,'SFMono-Regular','DejaVu Sans Mono',monospace;
+--radius:0;--radius-sm:0;--radius-msg:0;--line-w:1px}
+@media (prefers-color-scheme:dark){:root{--bg:#0c0c0a;--panel:#141310;--ink:#e9e6da;--muted:#8f897b;
+--line:#e9e6da;--wash:#1c1b17;--accent:#e9e6da;--accent-ink:#0c0c0a;--user-bg:#e9e6da;--user-line:#e9e6da;
+--danger:#e0755f}}`, rules: `
+body{letter-spacing:.02em}
+h1,h2,h3{text-transform:uppercase;letter-spacing:.16em;font-weight:700}
+h1{font-size:1.7rem;letter-spacing:.22em;border-bottom:var(--line-w) solid var(--line);padding-bottom:10px;margin-bottom:.5em}
+h1::after{content:"";display:block;height:20px;max-width:240px;margin-top:9px;
+background:repeating-linear-gradient(90deg,var(--ink) 0 2px,transparent 2px 4px,var(--ink) 4px 5px,transparent 5px 9px,var(--ink) 9px 12px,transparent 12px 13px,var(--ink) 13px 16px,transparent 16px 18px)}
+.muted{letter-spacing:.08em}
+.who{letter-spacing:.2em}
+.who::before{content:"▍"}
+.tag{background:transparent;border:var(--line-w) solid var(--line);color:var(--ink);text-transform:uppercase;letter-spacing:.14em;padding:0 6px}
+th{letter-spacing:.14em}
+button{text-transform:uppercase;letter-spacing:.14em}
+input::placeholder,textarea::placeholder{text-transform:uppercase;letter-spacing:.14em;font-size:.85em}
+.dots i{border-radius:0}
+.msg.user{color:var(--accent-ink)}
+.msg.user .who{color:var(--accent-ink);opacity:.75}
+.card,article,.msg{position:relative}
+.card::before,article::before,.msg::before{content:"";position:absolute;top:-1px;left:-1px;width:7px;height:7px;color:inherit;
+background:linear-gradient(currentColor,currentColor) 0 0/7px 1px no-repeat,linear-gradient(currentColor,currentColor) 0 0/1px 7px no-repeat}
+.card::after,article::after,.msg::after{content:"";position:absolute;bottom:-1px;right:-1px;width:7px;height:7px;color:inherit;
+background:linear-gradient(currentColor,currentColor) right bottom/7px 1px no-repeat,linear-gradient(currentColor,currentColor) right bottom/1px 7px no-repeat}`},
 }
 
 // structuralCSS is the fixed half of the shell: the class vocabulary and every
@@ -1530,22 +1571,22 @@ body:has(.msg) form:last-of-type{position:sticky;bottom:0;padding:14px 0 10px;ma
 background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius-sm);box-shadow:var(--shadow);font-family:var(--mono);font-size:11px}
 .self-themes a{padding:2px 7px;border-radius:var(--radius-sm);color:var(--muted);text-decoration:none;line-height:1.4}
 .self-themes a[aria-current]{background:var(--accent);color:var(--accent-ink)}
-@media print{.self-themes{display:none}}
-</style>`
+@media print{.self-themes{display:none}}`
 
 // validTheme reports whether name is a known design; selection paths accept
 // only known names, so the injected picker links and cookie can never smuggle
 // arbitrary CSS in.
 func validTheme(name string) bool { _, ok := themes[name]; return ok }
 
-// themeCSS assembles the full <style> for one design: its skin (the variables)
-// followed by the shared structural rules. Unknown names fall back to default.
+// themeCSS assembles the full <style> for one design: the skin's variables, the
+// shared structural rules, then the theme's own rules (if any) so they layer on
+// top. Unknown names fall back to default.
 func themeCSS(name string) string {
 	t, ok := themes[name]
 	if !ok {
 		t = themes[defaultTheme]
 	}
-	return shellMeta + "<style>" + t.skin + "\n" + structuralCSS
+	return shellMeta + "<style>" + t.skin + "\n" + structuralCSS + t.rules + "\n</style>"
 }
 
 // pickTheme resolves the design for one request, most specific first: an
@@ -2325,8 +2366,8 @@ environment:
                     to a fail-closed read-only allowlist; never fails open)
   SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
                     (default: the model @ its endpoint, or "stub (no LLM)")
-  SELF_THEME        default page design when serving: grove | micro | paper
-                    (default grove); a ?theme= link or the on-page picker
+  SELF_THEME        default page design when serving: grove | micro | paper |
+                    spec (default grove); a ?theme= link or the on-page picker
                     overrides it per viewer. Presentation only — never logged.
 `
 }
