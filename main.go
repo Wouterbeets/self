@@ -677,12 +677,15 @@ func refreshSite(home string) {
 // signs what comes back. SELF_LLM_STUB=1 supplies a deterministic offline brain
 // for demos and tests. The llm value carries just enough to route a compile:
 // stub-or-process, the home it runs against, and — during a grow — the whole
-// intent, woven into each compile so no piece is authored in a dark room.
+// intent plus the orchestrator's stated reasoning, woven into each compile so
+// no piece is authored in a dark room. The reasoning travels in-band, through
+// the prompt and the log, never through a session store outside the log.
 
 type llm struct {
-	stub   bool
-	home   string
-	intent string
+	stub      bool
+	home      string
+	intent    string
+	reasoning string
 }
 
 type brainConfig struct {
@@ -736,14 +739,14 @@ func (c *llm) compileCommand(d commandDecl) (string, error) {
 	if c.stub {
 		return stubCommand(d), nil
 	}
-	return compileViaBrain(c.home, c.intent, "command", d.Name, jsonRepr(d))
+	return compileViaBrain(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d))
 }
 
 func (c *llm) compileProjector(d projectorDecl) (string, error) {
 	if c.stub {
 		return stubProjector(d), nil
 	}
-	return compileViaBrain(c.home, c.intent, "projector", d.Name, jsonRepr(d))
+	return compileViaBrain(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d))
 }
 
 // compileViaBrain hands a compile ask to the plugged brain through the same
@@ -757,7 +760,7 @@ func (c *llm) compileProjector(d projectorDecl) (string, error) {
 // compilePrompt is the text of a compile ask: author one script honoring the
 // pipe contract, test it with your own tools, and hand back exactly one
 // script.authored line — the kernel does the installing and signing.
-func compilePrompt(intent, typ, name, decl string) string {
+func compilePrompt(intent, reasoning, typ, name, decl string) string {
 	prompt := fmt.Sprintf(`COMPILE one capability for this instance. Author a complete executable script (any language with a shebang, standard libraries only) honoring the pipe contract, adapted to this instance's state (a brief on your stdin; the full log is at SELF_HOME/events.jsonl if you need it).
 
 %s
@@ -769,14 +772,17 @@ If the declaration carries an "implementation", it is a reference from another i
 
 Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 {"name":"script.authored","payload":{"script":"<the full script>"}}`, pipeContract, typ, name, decl)
+	if strings.TrimSpace(reasoning) != "" {
+		prompt = "The ORCHESTRATOR that declared this capability explored the instance and explained its plan below (it is also in the log as grow.orchestrated). Compile in line with it.\n\n--- ORCHESTRATOR'S REASONING ---\n" + reasoning + "\n--- END REASONING ---\n\n" + prompt
+	}
 	if strings.TrimSpace(intent) != "" {
 		prompt = "This capability is one part of a product with the following INTENT. Compile it so the whole intent is served.\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---\n\n" + prompt
 	}
 	return prompt
 }
 
-func compileViaBrain(home, intent, typ, name, decl string) (string, error) {
-	res, err := pipeBrain(home, "compile", compilePrompt(intent, typ, name, decl))
+func compileViaBrain(home, intent, reasoning, typ, name, decl string) (string, error) {
+	res, err := pipeBrain(home, "compile", compilePrompt(intent, reasoning, typ, name, decl))
 	if err != nil {
 		return "", err
 	}
@@ -1048,6 +1054,7 @@ func applyDeclarations(home string, res *brainResult) {
 	}
 	if len(evs) > 0 {
 		c := newLLM(home)
+		c.reasoning = strings.TrimSpace(res.Response)
 		n := compileDeclarations(c, home, evs)
 		fmt.Fprintf(os.Stderr, "self: grew %d capabilit(ies)\n", n)
 		refreshSite(home)
@@ -2058,6 +2065,19 @@ func cmdGrow(home, seedDir string) error {
 	c.intent = intent
 	if len(res.Declarations) == 0 {
 		return fmt.Errorf("the orchestrator declared nothing for %q", name)
+	}
+
+	// The orchestrator's stated reasoning is provenance: log it, so the chain
+	// from intent to script survives in the log (and in any seed sharing it),
+	// and weave it into each compile of this grow so every piece is authored
+	// with the plan in view — in-band continuity, never a session store.
+	if r := strings.TrimSpace(res.Response); r != "" {
+		c.reasoning = r
+		rp, _ := json.Marshal(map[string]any{"seed": name, "reasoning": r})
+		re := newEvent("grow.orchestrated", rp)
+		if err := appendEvent(home, &re); err != nil {
+			return err
+		}
 	}
 
 	var declEvents []Event

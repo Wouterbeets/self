@@ -614,11 +614,60 @@ func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
 	must("grow", growPrompt("some intent"), "stdout", "events.jsonl", "no markdown", "one line")
 	must("answer contract", brainAnswerContract, "stdout", "cannot write the log", "no code fences")
 	// compile: the brain may test with its tools, but must not install or persist.
-	must("compile", compilePrompt("", "command", "note", `{"name":"note"}`),
+	must("compile", compilePrompt("", "", "command", "note", `{"name":"note"}`),
 		"do not install", "events.jsonl", "no code fence")
 	// the intent-woven variant keeps the same guidance.
-	must("compile+intent", compilePrompt("a product", "command", "note", `{"name":"note"}`),
+	must("compile+intent", compilePrompt("a product", "", "command", "note", `{"name":"note"}`),
 		"do not install", "no code fence")
+	// during a grow the orchestrator's reasoning rides in-band in the prompt.
+	must("compile+reasoning", compilePrompt("a product", "declared note because the intent asks for one", "command", "note", `{"name":"note"}`),
+		"orchestrator", "declared note because the intent asks for one", "do not install")
+}
+
+// The orchestrator's stated reasoning is provenance. cmdGrow appends it to the
+// log as grow.orchestrated and weaves it into every compile of that grow — the
+// in-band alternative to remembering through a session store outside the log:
+// rehydrate replays it, share carries it, audit can read it.
+func TestGrowLogsOrchestratorReasoning(t *testing.T) {
+	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", "")
+	home := t.TempDir()
+
+	seed := filepath.Join(t.TempDir(), "notes")
+	if err := os.Mkdir(seed, 0755); err != nil {
+		t.Fatal(err)
+	}
+	intent := "`self run note <text>` appends one `note.added` event. `/notes` renders notes."
+	if err := os.WriteFile(filepath.Join(seed, "intent.md"), []byte(intent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdGrow(home, seed); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Seed      string `json:"seed"`
+		Reasoning string `json:"reasoning"`
+	}
+	found := false
+	for _, e := range events {
+		if e.Name == "grow.orchestrated" {
+			if err := json.Unmarshal(e.Payload, &got); err != nil {
+				t.Fatal(err)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("grow did not append a grow.orchestrated event")
+	}
+	if got.Seed != "notes" || strings.TrimSpace(got.Reasoning) == "" {
+		t.Fatalf("grow.orchestrated payload = %+v, want seed \"notes\" and non-empty reasoning", got)
+	}
 }
 
 func TestStubBrainCoversThinkAndGrow(t *testing.T) {
