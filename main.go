@@ -549,7 +549,7 @@ func newLLM(home string) *llm {
 // ─────────────────────────────── the prompts ────────────────────────────────
 
 const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
-projector script: receives all events as JSONL on stdin, writes HTML on stdout. The kernel persists it to SELF_HOME/site/<name>.html.
+projector script: receives all events as JSONL on stdin, writes bare semantic HTML on stdout. Do not emit CSS, JavaScript, inline styles, or external assets: the kernel injects the shared shell at serve time. The kernel persists projector output to SELF_HOME/site/<name>.html.
 The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries.`
 
 // brainAnswerContract tells a capable, tool-using brain how to hand its answer
@@ -559,7 +559,7 @@ The kernel sets SELF_HOME on every script. Any language with a shebang works; us
 // there, under its own signature. It also emits Markdown by habit; the pipe
 // tolerates fences, but one clean JSON object per line is what actually wants
 // ingesting. Woven into every ask that expects events (grow, heartbeat, compile).
-const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout and appends the events it finds there, under its own signed receipt. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. Just print each event as ONE line of compact JSON (no Markdown, no code fences, no backticks). Bare prose lines are tolerated as reply text.`
+const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To add capabilities, print declaration events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing.`
 
 // ────────────────────────────── the compiler ────────────────────────────────
 
@@ -594,7 +594,7 @@ func compilePrompt(intent, typ, name, decl string) string {
 DECLARATION (%s %q):
 %s
 
-If the declaration carries an "implementation", it is a reference from another instance: verify it and adapt it here — never copy it blindly. Use your own tools freely to write and TEST the script by execution before answering — but do not install it, edit events.jsonl, or run the self CLI: the kernel installs and signs the script from the one line you print, and nothing else.
+If the declaration carries an "implementation", it is a reference from another instance: verify it and adapt it here — never copy it blindly. Use your own tools freely to write and TEST the script by execution before answering — but do not install it, edit events.jsonl, or run the self CLI: the kernel installs and signs the script from the one line you print, and nothing else. If this is a projector, emit only bare semantic HTML: no CSS, no JavaScript, no inline style attributes, no external assets.
 
 Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 {"name":"script.authored","payload":{"script":"<the full script>"}}`, pipeContract, typ, name, decl)

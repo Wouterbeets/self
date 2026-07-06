@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""brain-opencode - a SELF_BRAIN adapter backed by `opencode run`.
+
+The self kernel expects a brain process to print self event JSONL (or prose).
+OpenCode's `--format json` prints its own event stream instead. This adapter
+extracts the assistant text from that stream and passes it through unchanged;
+the kernel prompt remains the single source of protocol instructions.
+
+Usage:
+
+    export SELF_BRAIN="$PWD/examples/brain-opencode"
+    export SELF_OPENCODE_MODEL=github-copilot/gpt-5.5  # optional
+    self grow seeds/chat
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+def opencode_command():
+    cmd = [os.environ.get("SELF_OPENCODE", "opencode"), "run", "--format", "json"]
+    if os.environ.get("SELF_OPENCODE_PURE", "1") != "0":
+        cmd.append("--pure")
+    model = os.environ.get("SELF_OPENCODE_MODEL", "")
+    if model:
+        cmd.extend(["--model", model])
+    agent = os.environ.get("SELF_OPENCODE_AGENT", "")
+    if agent:
+        cmd.extend(["--agent", agent])
+    if os.environ.get("SELF_OPENCODE_AUTO", "") in ("1", "true", "yes"):
+        cmd.append("--auto")
+    return cmd
+
+
+def run_opencode(message, log):
+    proc = subprocess.run(
+        opencode_command() + [message],
+        input=log,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=os.environ.get("SELF_HOME") or None,
+    )
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    if proc.returncode != 0:
+        raise SystemExit(proc.returncode)
+    return collect_text(proc.stdout)
+
+
+def collect_text(stream):
+    chunks = []
+    fallback = []
+    for raw in stream.splitlines():
+        if not raw.strip():
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            fallback.append(raw)
+            continue
+        part = obj.get("part") if isinstance(obj, dict) else None
+        if isinstance(part, dict) and part.get("type") == "text":
+            chunks.append(part.get("text", ""))
+    if chunks:
+        return "".join(chunks).strip()
+    return "\n".join(fallback).strip()
+
+
+def main():
+    prompt = sys.argv[-1] if len(sys.argv) > 1 else ""
+    log = sys.stdin.read()
+    print(run_opencode(prompt, log))
+
+
+if __name__ == "__main__":
+    main()

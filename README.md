@@ -77,7 +77,9 @@ stdout (`{name, payload}` per line; the kernel fills in the rest). The emitted
 events are appended and all projections re-render.
 
 **Projections.** A projection is an executable that reads all events on stdin
-and writes HTML on stdout, saved to `site/<name>.html`. It must be a pure
+and writes bare semantic HTML on stdout, saved to `site/<name>.html`. The
+kernel injects the shared shell when serving, so projectors must not emit CSS,
+JavaScript, inline styles, or external assets. A projector must be a pure
 function of the log: rendering twice from the same log yields the same bytes.
 
 **Runtime code generation.** A `command.declared` or `projector.declared` event
