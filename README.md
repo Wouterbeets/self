@@ -2,9 +2,10 @@
 
 `self` is a small, local-first runtime. It keeps one append-only event log as
 its only state, and rebuilds every view — and every capability — from that log.
-Capabilities are not shipped as code. You describe what you want, and a
-language model of your choosing writes the script for it, on your machine. Every
-generated script is installed only under a signature made with a key that never
+Capabilities are not shipped as code. You describe what you want, and a brain of
+your choosing — any process, from `claude -p` to a script hitting an API —
+writes the script for it, on your machine. The kernel itself holds no model: it
+only installs each generated script under a signature made with a key that never
 leaves the instance, so the whole system can be rebuilt from the log alone, with
 no model and no network.
 
@@ -80,9 +81,9 @@ and writes HTML on stdout, saved to `site/<name>.html`. It must be a pure
 function of the log: rendering twice from the same log yields the same bytes.
 
 **Runtime code generation.** A `command.declared` or `projector.declared` event
-triggers a compile: the brain writes the script from the declaration, the kernel
-installs it and records a `script.compiled` receipt. Declarations — not code —
-are what cross every boundary.
+triggers a compile: the kernel hands the declaration to the brain process, which
+writes the script; the kernel installs it and records a `script.compiled`
+receipt. Declarations — not code — are what cross every boundary.
 
 **Signed installation.** A receipt is `{type, name, script, by, sig}`, where
 `sig` is an HMAC-SHA256 over the fields using the instance's key. Only receipts
@@ -101,7 +102,6 @@ self                 rehydrate from the log, then serve (default)
 self grow <seed>     generate capabilities from a seed's intent.md (needs a brain)
 self run <cmd> ...   run a command: append its events, re-render projections
 self think "..."     query the brain; returns {response, declarations} JSON
-self brain "..."     the built-in brain process; replaced wholesale by $SELF_BRAIN
 self heartbeat       one improvement cycle: the brain inspects the log and may declare
 self show <name>     render a projection to stdout
 self live [port]     serve the instance (default 7777)
@@ -143,13 +143,18 @@ or `SELF_THEME` for the instance default. The choice is presentation only, chose
 ## The brain
 
 Every request for intelligence — `think`, `heartbeat`, `grow`, and each
-compile — goes through one interface. There are three ways to supply it:
+compile — goes through one interface. The kernel holds no model; the brain is
+always a **process** you supply, or the built-in offline stub:
 
 ```sh
 SELF_BRAIN="claude -p"     # any executable (agent CLI, script, human shim)
-SELF_LLM_URL=http://...    # or any OpenAI-compatible endpoint (built-in loop)
 SELF_LLM_STUB=1            # or deterministic offline stubs (testing, demos)
 ```
+
+To drive an OpenAI-compatible endpoint, point `SELF_BRAIN` at the
+[`examples/brain-openai`](examples/brain-openai) adapter — a stdlib-only process
+that speaks the contract below. It used to live inside the kernel; it is a
+drop-in file now, so the core stays model-free.
 
 The stub path is deliberately dumb but complete: `think` returns a fixed reply,
 `grow` declares a minimal command + projection from names in `intent.md`, and
@@ -203,44 +208,45 @@ provenance survives adaptation (the sender's records stay in the receiver's log)
 and cross-instance authorship is recorded but not cryptographically verifiable,
 because the keys are symmetric and never leave an instance.
 
-## Sandbox
+## Where the brain runs
 
-While generating, the brain has a bash tool for exploration. Where the platform
-supports it, that tool runs in a jail built from Linux user namespaces: an
-ephemeral copy of the instance at `/body` (never `.secret`), no network, writes
-confined to the jail. Nothing run there installs anything — declarations remain
-the only way in. Where namespaces are unavailable (or `SELF_SANDBOX=0`), it falls
-back to a read-only command allowlist against the same secret-less copy. It never
-fails open.
-
-This jail is for the brain's *exploration during generation*. Installed
-capability scripts run without a sandbox — see Limits.
+The kernel spawns the brain as a plain subprocess and reads its stdout; it does
+not give the brain tools, and does not sandbox it. Exploration during
+generation — running a candidate script, reading files — is the brain's own
+concern, and a capable brain (a coding agent) already has its own sandboxed
+tools. The kernel's guarantee is narrower and stronger: whatever the brain does,
+**only a locally-signed `script.compiled` receipt ever installs**, so a brain
+can only ever *propose* — it cannot write the record. Installed capability
+scripts then run without a sandbox — see Limits.
 
 ## Environment
 
 ```
 SELF_HOME         instance directory (default ~/.self)
-SELF_BRAIN        brain executable; replaces the built-in for all request kinds
-SELF_LLM_URL      OpenAI-compatible endpoint (default http://127.0.0.1:8080)
-SELF_LLM_API_KEY  its key
-SELF_LLM_MODEL    its model
-SELF_LLM_STUB     "1" → offline stub generation (no LLM, no network)
-SELF_SANDBOX      "0" → disable the namespace jail (read-only fallback)
+SELF_BRAIN        brain executable (e.g. "claude -p"); the kernel spawns it for
+                  every request kind. Without it, set SELF_LLM_STUB=1.
+SELF_LLM_STUB     "1" → offline stub generation (no brain, no network)
 SELF_BIND         serve address (default 127.0.0.1; set 0.0.0.0 to expose)
 SELF_BRAIN_ID     author string signed into receipts
-                  (default: model @ endpoint, or "stub (no LLM)")
+                  (default: the brain executable, or "stub (no LLM)")
 SELF_THEME        default page design: grove | micro | paper | spec
                   (default grove); ?theme= or the on-page picker overrides it
 ```
 
+The [`examples/brain-openai`](examples/brain-openai) adapter reads
+`SELF_LLM_URL`, `SELF_LLM_API_KEY`, and `SELF_LLM_MODEL`, but those are the
+adapter's own variables — the kernel neither sets nor reads them.
+
 ## Repository layout
 
 - `main.go` — the entire runtime: log, signed install, pipe orchestration, the
-  LLM compiler/brain, HTTP server. One file by design.
+  brain seam, HTTP server. One file by design.
 - `main_test.go` — the pinned invariants: log semantics, offline runtime
-  generation, the forged-receipt gate, sandbox containment, receipt provenance,
-  share/adopt independence, the pluggable brain, and byte-stable reconstruction.
-- `demo.sh` — the offline, no-LLM walkthrough of the loop.
+  generation, the forged-receipt gate, receipt provenance, share/adopt
+  independence, the pluggable brain, and byte-stable reconstruction.
+- `examples/` — drop-in brains that plug in through `SELF_BRAIN`, starting with
+  `brain-openai` for OpenAI-compatible endpoints. Not part of the kernel.
+- `demo.sh` — the offline, no-brain walkthrough of the loop.
 - `seeds/journal` — the smallest example: one command, one projection.
 - `seeds/chat` — a conversational surface; asking for a missing capability
   generates it mid-conversation.
@@ -251,20 +257,20 @@ SELF_THEME        default page design: grove | micro | paper | spec
 
 These are current properties, stated plainly, not goals to aspire to.
 
-- **The compiler is driven by a model reading the log, and the log can contain
-  untrusted input.** Chat messages, adopted seeds, and other events all become
-  context for the brain that writes your scripts. A crafted event can try to
-  steer what gets written (prompt injection). There is **no human review step
-  between authoring and signing** — the signature is applied to whatever the
-  model produced. Generated scripts are plain text in `capabilities/`; read them,
-  use a brain you trust, and treat adopting a seed as running code. Keeping a
-  human in the loop before trusting a new capability is the intended posture. The
-  advantage over the usual software supply chain is that what you inspect is
-  readable intent and readable output, not an opaque binary — but it is still
-  yours to inspect.
-- **Installed capability scripts run without a sandbox.** The jail protects only
-  the brain's exploration during generation, not the scripts the kernel runs
-  afterward.
+- **The brain is driven by the log, and the log can contain untrusted input.**
+  Chat messages, adopted seeds, and other events all become context for the brain
+  that writes your scripts. A crafted event can try to steer what gets written
+  (prompt injection). There is **no human review step between authoring and
+  signing** — the signature is applied to whatever the brain produced. Generated
+  scripts are plain text in `capabilities/`; read them, use a brain you trust, and
+  treat adopting a seed as running code. Keeping a human in the loop before
+  trusting a new capability is the intended posture. The advantage over the usual
+  software supply chain is that what you inspect is readable intent and readable
+  output, not an opaque binary — but it is still yours to inspect.
+- **The kernel does not sandbox the brain, and installed capability scripts run
+  without a sandbox.** The kernel runs the brain as a plain subprocess (isolating
+  its exploration is the brain's own concern) and runs the scripts it installs
+  directly. The kernel's guarantee is the signed-receipt gate, not containment.
 - **The log is unbounded.** Every compile stores its script bytes, and every
   projection replays the whole log (O(history)). Snapshotting is not built in; a
   snapshot can itself be modeled as a seed and left to the user.

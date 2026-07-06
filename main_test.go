@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,20 +11,6 @@ import (
 	"strings"
 	"testing"
 )
-
-// TestMain lets the test binary serve as the playpen's child half: the jail
-// re-execs /proc/self/exe, and under `go test` that is this binary, not self.
-// Without this dispatch the probe would recurse into the test suite itself.
-func TestMain(m *testing.M) {
-	if len(os.Args) == 4 && os.Args[1] == "__jail" {
-		if err := cmdJail(os.Args[2], os.Args[3]); err != nil {
-			fmt.Fprintf(os.Stderr, "jail: %s\n", err)
-			os.Exit(125)
-		}
-		os.Exit(0)
-	}
-	os.Exit(m.Run())
-}
 
 func TestLogAppendRead(t *testing.T) {
 	home := t.TempDir()
@@ -209,79 +194,6 @@ func TestRehydrateTypeCollision(t *testing.T) {
 		if !fileExists(p) {
 			t.Fatalf("%s did not survive rehydration — receipts collided across types", p)
 		}
-	}
-}
-
-// TestPlaypen pins the containment contract of the brain's full-bash jail:
-// real execution inside, with the signing key absent, writes confined, and
-// the network dark. Where the platform cannot jail, the kernel must fall
-// back to the fail-closed read-only allowlist — never fail open.
-func TestPlaypen(t *testing.T) {
-	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "events.jsonl"),
-		[]byte(`{"seq":1,"name":"kernel.initialized","payload":{}}`+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".secret"), []byte("sacred"), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	// the fallback must refuse writes regardless of platform support
-	t.Setenv("SELF_SANDBOX", "0")
-	if p := newPlaypen(home); p != nil {
-		t.Fatal("SELF_SANDBOX=0 must disable the playpen")
-	}
-	if out := readOnlyBash(home, "rm events.jsonl"); !strings.Contains(out, "not on the read-only allowlist") {
-		t.Fatalf("fallback failed open: %q", out)
-	}
-	// and the signing key must not be readable through the fallback either:
-	// like the jail, it runs against a sanitized copy where .secret never is.
-	if out := readOnlyBash(home, "cat .secret"); strings.Contains(out, "sacred") {
-		t.Fatalf("fallback leaked the signing key: %q", out)
-	}
-	if out := readOnlyBash(home, "ls -a"); strings.Contains(out, ".secret") {
-		t.Fatalf("fallback exposed .secret in the working tree: %q", out)
-	}
-	t.Setenv("SELF_SANDBOX", "")
-
-	p := newPlaypen(home)
-	if p == nil {
-		t.Skip("no user-namespace support here — playpen unavailable, fallback covered above")
-	}
-	defer p.close()
-
-	// full bash, real execution, state that persists across calls
-	p.run("echo tested-by-execution > proof.txt")
-	if out := p.run("cat proof.txt"); !strings.Contains(out, "tested-by-execution") {
-		t.Fatalf("playpen state did not persist: %q", out)
-	}
-
-	// the instance copy is real and the log is readable
-	if out := p.run("grep -c kernel.initialized events.jsonl"); !strings.Contains(out, "1") {
-		t.Fatalf("instance copy missing the log: %q", out)
-	}
-
-	// the one file that must never enter, never enters
-	if out := p.run("ls -a /body"); strings.Contains(out, ".secret") {
-		t.Fatalf("the signing key entered the playpen: %q", out)
-	}
-
-	// writes cannot leave the jail
-	if out := p.run("touch /usr/escaped 2>/dev/null && echo ESCAPED || echo confined"); !strings.Contains(out, "confined") {
-		t.Fatalf("write escaped the jail: %q", out)
-	}
-
-	// the network namespace is dark
-	if out := p.run("(echo x > /dev/tcp/1.1.1.1/80) 2>/dev/null && echo ONLINE || echo dark"); !strings.Contains(out, "dark") {
-		t.Fatalf("the playpen reached the network: %q", out)
-	}
-
-	// and nothing done inside touched the real instance
-	if _, err := os.Stat(filepath.Join(home, "proof.txt")); err == nil {
-		t.Fatal("playpen write leaked into the real home")
-	}
-	if data, _ := os.ReadFile(filepath.Join(home, ".secret")); string(data) != "sacred" {
-		t.Fatal("the real secret was disturbed")
 	}
 }
 
