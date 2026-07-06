@@ -1595,11 +1595,15 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 		if line == "" {
 			continue
 		}
+		content, fence := unfence(line)
+		if fence { // a bare ``` / ```json marker: pure decoration, not reply text
+			continue
+		}
 		var e struct {
 			Name    string          `json:"name"`
 			Payload json.RawMessage `json:"payload"`
 		}
-		if json.Unmarshal([]byte(line), &e) != nil || e.Name == "" {
+		if json.Unmarshal([]byte(content), &e) != nil || e.Name == "" {
 			prose = append(prose, line)
 			continue
 		}
@@ -1633,6 +1637,24 @@ const brainHint = `plug a brain: SELF_BRAIN=<any executable, e.g. "claude -p", o
 func brainCommand(prompt string) (string, []string) {
 	parts := strings.Fields(os.Getenv("SELF_BRAIN"))
 	return parts[0], append(parts[1:], prompt)
+}
+
+// unfence strips the Markdown a chat-shaped brain (claude -p and its kin) wraps
+// JSON in, so a model that answers in prose still plugs into the pipe unchanged.
+// A line that is a bare fence marker (``` or ```json) is decoration, reported by
+// the second return so the caller drops it from the reply text; a single line
+// wrapped in backticks (`{…}`) is unwrapped to its content. Anything else — plain
+// JSON from the stub or an adapter, or ordinary prose — passes through untouched,
+// so no existing brain regresses.
+func unfence(line string) (content string, fence bool) {
+	t := strings.TrimSpace(line)
+	if strings.HasPrefix(t, "```") {
+		return "", true
+	}
+	if len(t) >= 2 && strings.HasPrefix(t, "`") && strings.HasSuffix(t, "`") {
+		return strings.TrimSpace(strings.Trim(t, "`")), false
+	}
+	return t, false
 }
 
 // cmdHeartbeat is one self-improvement cycle: the brain reads what changed
