@@ -11,6 +11,22 @@ exist, where to look for the rest); the brain MUST inspect `SELF_HOME` itself
 — `site/*.html`, `events.jsonl`, `capabilities/` — with its own tools to do
 its job. A process without that exploration ability is not a complete brain.
 
+## `claude -p` — no adapter
+
+A coding-agent CLI that already explores with its own tools and prints to
+stdout plugs straight into the pipe; there is nothing here to install for it:
+
+```sh
+export SELF_BRAIN="claude -p --continue"
+self grow seeds/chat
+```
+
+`--continue` matters: the kernel runs the brain with `SELF_HOME` as its
+working directory, so each ask resumes the previous ask's conversation for
+that instance — compiles inherit the orchestrating ask's exploration instead
+of re-reading the instance cold, and an interactive session you ran in the
+instance directory becomes the conversation the kernel continues.
+
 ## `brain-openai`
 
 A reference adapter that illustrates the wire shape for any OpenAI-compatible

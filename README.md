@@ -171,9 +171,19 @@ compile — goes through one interface. The kernel holds no model; the brain is
 always a **process** you supply, or the built-in offline stub:
 
 ```sh
-SELF_BRAIN="claude -p"     # any executable (agent CLI, script, human shim)
-SELF_LLM_STUB=1            # or deterministic offline stubs (testing, demos)
+SELF_BRAIN="claude -p --continue"   # any executable (agent CLI, script, human shim)
+SELF_LLM_STUB=1                     # or deterministic offline stubs (testing, demos)
 ```
+
+A tool-capable agent CLI needs no adapter: `SELF_BRAIN="claude -p"` is a
+complete brain as-is. Prefer `claude -p --continue`. The kernel runs the brain
+with the instance as its working directory, and `--continue` resumes the most
+recent conversation there — so every ask against one instance chains into one
+per-instance conversation. Compiles reuse the exploration the orchestrating
+ask already did instead of starting cold (in practice `grow` runs about three
+times faster), and a Claude Code session you ran interactively *in the
+instance directory* becomes the very conversation the kernel continues: the
+agent that worked on the instance is the brain that keeps growing it.
 
 To drive an OpenAI-compatible endpoint, point `SELF_BRAIN` at the
 [`examples/brain-openai`](examples/brain-openai) adapter — a stdlib-only process

@@ -2349,7 +2349,7 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	return res, nil
 }
 
-const brainHint = `plug a brain: SELF_BRAIN=<a tool-capable executable, e.g. "claude -p" or examples/brain-opencode>; the brain must inspect SELF_HOME itself. See examples/README.md. Or SELF_LLM_STUB=1 for offline stubs.`
+const brainHint = `plug a brain: SELF_BRAIN=<a tool-capable executable, e.g. "claude -p --continue" or examples/brain-opencode>; the brain must inspect SELF_HOME itself. See examples/README.md. Or SELF_LLM_STUB=1 for offline stubs.`
 
 // brainCommand splits a configured executable into command and args, appending
 // the prompt as the last argument.
