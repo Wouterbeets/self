@@ -304,6 +304,9 @@ passes `SELF_LLM_URL`, `SELF_LLM_API_KEY`, and `SELF_LLM_MODEL` to it.
 - `seeds/settings` — the first trusted seed: configure a brain from the browser
   without putting API keys in the log.
 - `seeds/notes` / `seeds/journal` — small examples: one command, one projection.
+- `seeds/memory` — durable memory for a stateless brain: `remember` writes
+  facts to the log; a cold brain orients from `/memory`. The in-log answer to
+  session stores.
 - `seeds/chat` — a conversational surface; asking for a missing capability
   generates it mid-conversation.
 - `seeds/renga` — linked verse written by many authors across sessions; a seed

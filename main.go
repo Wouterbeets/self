@@ -1180,6 +1180,7 @@ func bundledSeeds() []seedCard {
 		{Name: "settings", Title: "settings", Kind: "trusted bundled", Description: "Configure the brain from the browser. This seed is shipped as reviewed kernel data so it can install before any brain exists.", Path: repoFile("seeds", "settings"), Primary: "configure-brain"},
 		{Name: "chat", Title: "chat", Kind: "grown from intent", Description: "Conversational front door that can grow new capabilities mid-chat.", Path: repoFile("seeds", "chat"), Primary: "chat"},
 		{Name: "notes", Title: "notes", Kind: "grown from intent", Description: "Minimal append-only note taking example: one command and one page.", Path: repoFile("seeds", "notes"), Primary: "note"},
+		{Name: "memory", Title: "memory", Kind: "grown from intent", Description: "Durable memory for a stateless brain: remember writes facts to the log; a cold brain orients from /memory.", Path: repoFile("seeds", "memory"), Primary: "remember"},
 	}
 }
 
