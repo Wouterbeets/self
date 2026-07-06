@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -239,6 +240,25 @@ func installScript(home, typ, name, script string) error {
 		return err
 	}
 	return os.WriteFile(p, []byte(script), 0755)
+}
+
+func installTrustedScript(home, typ, name, script, by string) error {
+	if err := installScript(home, typ, name, script); err != nil {
+		return err
+	}
+	return appendReceipt(home, typ, name, script, by)
+}
+
+func declareCommand(home string, d commandDecl) error {
+	payload, _ := json.Marshal(d)
+	e := newEvent("command.declared", payload)
+	return appendEvent(home, &e)
+}
+
+func declareProjector(home string, d projectorDecl) error {
+	payload, _ := json.Marshal(d)
+	e := newEvent("projector.declared", payload)
+	return appendEvent(home, &e)
 }
 
 // rehydrate rebuilds the instance from the log alone: the latest kernel-signed
@@ -526,6 +546,14 @@ type llm struct {
 	intent string
 }
 
+type brainConfig struct {
+	Provider string `json:"provider"`
+	Command  string `json:"command"`
+	BaseURL  string `json:"base_url"`
+	Model    string `json:"model"`
+	KeySet   bool   `json:"key_set"`
+}
+
 // identity names the brain for provenance: who authored the bytes a receipt
 // carries. SELF_BRAIN_ID lets an agent name itself; otherwise the brain
 // executable is the honest mechanical answer, and a stub says so.
@@ -536,7 +564,7 @@ func (c *llm) identity() string {
 	if c.stub {
 		return "stub (no LLM)"
 	}
-	if exe := brainExe(); exe != "" {
+	if exe := brainExe(c.home); exe != "" {
 		return exe
 	}
 	return "brain"
@@ -786,10 +814,73 @@ type brainResult struct {
 	Script       string // a compile ask's answer, from a script.authored event
 }
 
-// brainExe is the plugged brain, if any: an executable (with optional args)
-// honoring the brain contract — prompt as last arg, log JSONL on stdin, event
-// JSONL (or prose) on stdout.
-func brainExe() string { return strings.TrimSpace(os.Getenv("SELF_BRAIN")) }
+// brainExe is the plugged brain, if any: env wins for explicit sessions; if not
+// set, the optional settings seed can resolve a latest brain.configured event
+// into a process command. The process still honors the same brain contract.
+func brainExe(home string) string {
+	if v := strings.TrimSpace(os.Getenv("SELF_BRAIN")); v != "" {
+		return v
+	}
+	cfg := latestBrainConfig(home)
+	if strings.TrimSpace(cfg.Command) != "" {
+		return cfg.Command
+	}
+	switch strings.TrimSpace(cfg.Provider) {
+	case "opencode":
+		return repoFile("examples", "brain-opencode")
+	case "openai", "custom":
+		return repoFile("examples", "brain-openai")
+	}
+	return ""
+}
+
+func latestBrainConfig(home string) brainConfig {
+	events, err := readEvents(home)
+	if err != nil {
+		return brainConfig{}
+	}
+	var cfg brainConfig
+	for _, e := range events {
+		if e.Name == "brain.configured" {
+			json.Unmarshal(e.Payload, &cfg)
+		}
+	}
+	return cfg
+}
+
+func repoRoot() string {
+	if _, file, _, ok := runtime.Caller(0); ok {
+		return filepath.Dir(file)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
+}
+
+func repoFile(elem ...string) string {
+	return filepath.Join(append([]string{repoRoot()}, elem...)...)
+}
+
+func brainEnv(home, kind string) []string {
+	env := append(os.Environ(), "SELF_HOME="+home, "SELF_ASK="+kind)
+	if os.Getenv("SELF_BRAIN") != "" {
+		return env
+	}
+	cfg := latestBrainConfig(home)
+	if cfg.BaseURL != "" {
+		env = append(env, "SELF_LLM_URL="+cfg.BaseURL)
+	}
+	if cfg.Model != "" {
+		env = append(env, "SELF_LLM_MODEL="+cfg.Model)
+	}
+	if key, err := os.ReadFile(filepath.Join(home, ".brain-key")); err == nil {
+		if s := strings.TrimSpace(string(key)); s != "" {
+			env = append(env, "SELF_LLM_API_KEY="+s)
+		}
+	}
+	return env
+}
 
 // agent runs one brain conversation with the three powers: read (bash), act
 // (run, over the given capability catalog), grow (declare). user may be a JSON
@@ -871,6 +962,7 @@ func renderKernelHTML(home string) {
 	b.WriteString("<h1>self</h1>\n")
 	b.WriteString("<p class=\"muted\">a local-first, event-sourced runtime with LLM-generated capabilities</p>\n")
 	b.WriteString("<p>One append-only event log is the only state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log; humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
+	renderSeedCatalog(&b, home, commands, projectors)
 	b.WriteString("<h2>if you are an LLM reading this</h2>\n<p>You are one of two things, and the runtime treats them identically. Either the kernel spawned you as this instance's <strong>brain</strong>: <code>events.jsonl</code> is the only state, <code>site/*.html</code> is its rendered form, and your operations are <strong>read</strong> (inspect projections), <strong>write</strong> (run any command below), and <strong>extend</strong> (declare a capability; the kernel compiles it on ingestion). Or you are an <strong>external agent</strong> — a coding session, another instance's process — using this instance from outside: same state, same operations, through the shell. <code>self run &lt;command&gt; …</code> to write, <code>self show &lt;projection&gt;</code> to read, <code>self think \"…\"</code> / <code>self heartbeat</code> to extend, or <code>POST /run/&lt;command&gt;</code> while this page is served. Set <code>SELF_BRAIN_ID</code> first — every script you cause to be generated is signed with that string as its recorded author.</p>\n<p>The log is append-only, so no operation is destructive — and it is the only state that survives a session: what is not appended is lost. If this instance defines verification or hand-off conventions (claim/verify, awaken/bequeath — see below), follow them: announce your session, attach evidence before marking work done, record a hand-off note when you finish.</p>\n")
 
 	b.WriteString("<h2>commands</h2>\n")
@@ -923,6 +1015,88 @@ func renderKernelHTML(home string) {
 	siteDir := filepath.Join(home, "site")
 	os.MkdirAll(siteDir, 0755)
 	os.WriteFile(filepath.Join(siteDir, "kernel.html"), []byte(b.String()), 0644)
+}
+
+type seedCard struct {
+	Name        string
+	Title       string
+	Kind        string
+	Description string
+	Path        string
+	Primary     string
+}
+
+func bundledSeeds() []seedCard {
+	return []seedCard{
+		{Name: "settings", Title: "settings", Kind: "trusted bundled", Description: "Configure the brain from the browser. This seed is shipped as reviewed kernel data so it can install before any brain exists.", Path: repoFile("seeds", "settings"), Primary: "configure-brain"},
+		{Name: "chat", Title: "chat", Kind: "grown from intent", Description: "Conversational front door that can grow new capabilities mid-chat.", Path: repoFile("seeds", "chat"), Primary: "chat"},
+		{Name: "notes", Title: "notes", Kind: "grown from intent", Description: "Minimal append-only note taking example: one command and one page.", Path: repoFile("seeds", "notes"), Primary: "note"},
+	}
+}
+
+func renderSeedCatalog(b *strings.Builder, home string, commands map[string]commandDecl, projectors map[string]projectorDecl) {
+	esc := html.EscapeString
+	brain := brainExe(home)
+	stubBrain := brain == "" && os.Getenv("SELF_LLM_STUB") == "1"
+	b.WriteString("<h2>start here</h2>\n")
+	b.WriteString("<p>This home starts small on purpose. Before a brain is configured, you are the brain: inspect the seed, decide whether you trust it, then install only what you understand.</p>\n")
+	if stubBrain {
+		b.WriteString("<p class=\"tag\">offline stub brain enabled</p>\n")
+	} else if brain == "" {
+		b.WriteString("<p class=\"tag\">no brain configured yet</p>\n")
+	} else {
+		b.WriteString("<p class=\"tag\">brain configured: <code>" + esc(brain) + "</code></p>\n")
+	}
+	b.WriteString("<div class=\"stack\">\n")
+	for _, seed := range bundledSeeds() {
+		installed := false
+		if seed.Primary != "" {
+			_, installed = commands[seed.Primary]
+			if !installed {
+				_, installed = projectors[seed.Primary]
+			}
+		}
+		b.WriteString("<article class=\"card\"><h3>" + esc(seed.Title) + "</h3>")
+		b.WriteString("<p>" + esc(seed.Description) + "</p>")
+		b.WriteString("<p class=\"muted\">" + esc(seed.Kind) + "</p>")
+		if seed.Name == "settings" {
+			b.WriteString("<details><summary>intent.md</summary><pre>" + esc(seedIntent(seed.Path)) + "</pre></details>")
+			b.WriteString("<details><summary>what will be installed?</summary><pre>command: configure-brain -> brain.configured\nprojection: /settings consumes brain.configured\nsecret handling: API keys are written to SELF_HOME/.brain-key, never events.jsonl</pre></details>")
+		} else if seed.Path != "" {
+			b.WriteString("<details><summary>intent.md</summary><pre>" + esc(seedIntent(seed.Path)) + "</pre></details>")
+		}
+		if installed {
+			b.WriteString("<p class=\"tag\">installed</p>")
+			if seed.Name == "settings" {
+				b.WriteString("<p><a href=\"/settings\">Open settings</a></p>")
+			}
+		} else if seed.Name == "settings" {
+			b.WriteString("<form method=\"post\" action=\"/install-seed\"><input type=\"hidden\" name=\"seed\" value=\"settings\"><button>Install settings</button></form>")
+		} else if brain == "" && !stubBrain {
+			b.WriteString("<p class=\"muted\">Install settings and configure a brain before growing this seed.</p>")
+		} else {
+			b.WriteString("<form method=\"post\" action=\"/grow-seed\"><input type=\"hidden\" name=\"seed\" value=\"" + esc(seed.Name) + "\"><button>Grow " + esc(seed.Title) + "</button></form>")
+		}
+		b.WriteString("</article>\n")
+	}
+	b.WriteString("</div>\n")
+}
+
+func seedIntent(seedDir string) string {
+	data, err := os.ReadFile(filepath.Join(seedDir, "intent.md"))
+	if err != nil {
+		return err.Error()
+	}
+	return string(data)
+}
+
+func seedPathByName(name string) (string, bool) {
+	for _, seed := range bundledSeeds() {
+		if seed.Name == name && seed.Path != "" {
+			return seed.Path, true
+		}
+	}
+	return "", false
 }
 
 // ─────────────────────────────── the surface ────────────────────────────────
@@ -1279,6 +1453,43 @@ func cmdServe(home, port string) error {
 		http.ServeFile(w, r, logPath(home))
 	})
 
+	mux.HandleFunc("/install-seed", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := installBundledSeed(home, r.FormValue("seed")); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	})
+
+	mux.HandleFunc("/grow-seed", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.ParseForm() != nil {
+			http.Error(w, "bad form", 400)
+			return
+		}
+		seedDir, ok := seedPathByName(r.FormValue("seed"))
+		if !ok {
+			http.Error(w, "unknown seed", 404)
+			return
+		}
+		if err := cmdGrow(home, seedDir); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	})
+
 	// POST /run/<command> → run a capability from the browser. A form's field
 	// values become positional args in document order (names are for humans;
 	// order is the contract); then Post/Redirect/Get back to the page.
@@ -1329,6 +1540,132 @@ func cmdServe(home, port string) error {
 }
 
 // ────────────────────────────── the commands ────────────────────────────────
+
+const settingsConfigureScript = `#!/usr/bin/env python3
+import json
+import os
+import sys
+
+provider = sys.argv[1] if len(sys.argv) > 1 else ""
+command = sys.argv[2] if len(sys.argv) > 2 else ""
+base_url = sys.argv[3] if len(sys.argv) > 3 else ""
+model = sys.argv[4] if len(sys.argv) > 4 else ""
+key = sys.argv[5] if len(sys.argv) > 5 else ""
+
+for _ in sys.stdin:
+    pass
+
+home = os.environ.get("SELF_HOME", ".")
+keyfile = os.path.join(home, ".brain-key")
+if key.strip():
+    with open(keyfile, "w") as f:
+        f.write(key.strip())
+    os.chmod(keyfile, 0o600)
+
+key_set = os.path.exists(keyfile) and os.path.getsize(keyfile) > 0
+print(json.dumps({"name": "brain.configured", "payload": {
+    "provider": provider,
+    "command": command,
+    "base_url": base_url,
+    "model": model,
+    "key_set": key_set,
+}}))
+`
+
+const settingsProjectorScript = `#!/usr/bin/env python3
+import html
+import json
+import sys
+
+cfg = {"provider": "", "command": "", "base_url": "", "model": "", "key_set": False}
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    event = json.loads(line)
+    if event.get("name") == "brain.configured":
+        payload = event.get("payload") or {}
+        cfg.update(payload)
+
+def esc(value):
+    return html.escape(str(value or ""), quote=True)
+
+print("<!doctype html>")
+print('<html lang="en"><head><meta charset="utf-8"><title>settings</title></head><body>')
+print("<h1>settings</h1>")
+print("<p class=\"muted\">Configure the brain process used by think, grow, heartbeat, and compile. Environment variable SELF_BRAIN still wins for explicit shell sessions.</p>")
+if cfg.get("provider") or cfg.get("command"):
+    print('<article class="card"><h2>current brain</h2>')
+    print("<p><strong>provider</strong> %s</p>" % esc(cfg.get("provider") or "custom"))
+    if cfg.get("command"):
+        print("<p><strong>command</strong> <code>%s</code></p>" % esc(cfg.get("command")))
+    if cfg.get("base_url"):
+        print("<p><strong>base URL</strong> <code>%s</code></p>" % esc(cfg.get("base_url")))
+    if cfg.get("model"):
+        print("<p><strong>model</strong> <code>%s</code></p>" % esc(cfg.get("model")))
+    print("<p><strong>API key</strong> %s</p>" % ("set" if cfg.get("key_set") else "not set"))
+    print("</article>")
+else:
+    print('<p class="tag">no saved brain configured yet</p>')
+print('<form method="post" action="/run/configure-brain">')
+print('<label>provider <input name="provider" placeholder="opencode, openai, custom" value="%s"></label>' % esc(cfg.get("provider")))
+print('<label>command <input name="command" placeholder="optional exact SELF_BRAIN command" value="%s"></label>' % esc(cfg.get("command")))
+print('<label>base URL <input name="base_url" placeholder="https://api.openai.com or local endpoint" value="%s"></label>' % esc(cfg.get("base_url")))
+print('<label>model <input name="model" placeholder="model name" value="%s"></label>' % esc(cfg.get("model")))
+print('<label>API key <input name="key" type="password" placeholder="blank keeps existing key"></label>')
+print('<button>save brain</button>')
+print('</form>')
+print('<h2>common choices</h2>')
+print('<ul>')
+print('<li><strong>OpenCode:</strong> provider <code>opencode</code>, model optional. Uses bundled <code>examples/brain-opencode</code>.</li>')
+print('<li><strong>OpenAI-compatible:</strong> provider <code>openai</code> or <code>custom</code>, base URL, model, key. Uses bundled <code>examples/brain-openai</code>.</li>')
+print('<li><strong>Any process:</strong> put the full command in command; it receives SELF_ASK, log stdin, prompt argv.</li>')
+print('</ul>')
+print('<p><a href="/">Back to home</a></p>')
+print('</body></html>')
+`
+
+func settingsCommandDecl() commandDecl {
+	var d commandDecl
+	d.Name = "configure-brain"
+	d.Description = "Configure the brain process used by think/grow/compile; secrets are stored outside the event log."
+	d.Params = map[string]string{"provider": "string", "command": "string", "base_url": "string", "model": "string", "key": "string"}
+	d.Event.Name = "brain.configured"
+	d.Event.Fields = map[string]string{"provider": "string", "command": "string", "base_url": "string", "model": "string", "key_set": "bool"}
+	return d
+}
+
+func settingsProjectorDecl() projectorDecl {
+	return projectorDecl{Name: "settings", Description: "Configure this instance's brain and inspect the saved non-secret settings.", Consumes: []string{"brain.configured"}}
+}
+
+func installBundledSeed(home, name string) error {
+	if name != "settings" {
+		return fmt.Errorf("unknown bundled seed %q", name)
+	}
+	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "configure-brain")); err == nil {
+		return fmt.Errorf("settings is already installed")
+	}
+	if err := declareCommand(home, settingsCommandDecl()); err != nil {
+		return err
+	}
+	if err := declareProjector(home, settingsProjectorDecl()); err != nil {
+		return err
+	}
+	by := "bundled seed: settings"
+	if err := installTrustedScript(home, "command", "configure-brain", settingsConfigureScript, by); err != nil {
+		return err
+	}
+	if err := installTrustedScript(home, "projector", "settings", settingsProjectorScript, by); err != nil {
+		return err
+	}
+	if err := ingest(home, []Event{newEvent("brain.configured", json.RawMessage(`{"provider":"","command":"","base_url":"","model":"","key_set":false}`))}); err != nil {
+		return err
+	}
+	renderKernelHTML(home)
+	refreshProjections(home)
+	return nil
+}
 
 // cmdGrow grows a seed: a directory with intent.md (the genotype — prose
 // intent, not a parts-list) and optionally seed.jsonl (initial content events,
@@ -1581,7 +1918,8 @@ func cmdThink(home, prompt string) error {
 // construction. With no brain plugged in, SELF_LLM_STUB=1 supplies a
 // deterministic offline one; otherwise the ask fails with a hint.
 func pipeBrain(home, kind, prompt string) (*brainResult, error) {
-	if brainExe() == "" {
+	exe := brainExe(home)
+	if exe == "" {
 		if os.Getenv("SELF_LLM_STUB") == "1" {
 			return stubBrain(home, kind, prompt)
 		}
@@ -1591,9 +1929,9 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	bin, argv := brainCommand(prompt)
+	bin, argv := brainCommand(exe, prompt)
 	cmd := exec.Command(bin, argv...)
-	cmd.Env = append(os.Environ(), "SELF_HOME="+home, "SELF_ASK="+kind)
+	cmd.Env = brainEnv(home, kind)
 	cmd.Dir = home
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -1653,11 +1991,10 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 
 const brainHint = `plug a brain: SELF_BRAIN=<any executable, e.g. "claude -p", or examples/brain-openai for an OpenAI-compatible endpoint>, or SELF_LLM_STUB=1 for offline stubs`
 
-// brainCommand splits $SELF_BRAIN into an executable and its args, appending the
-// prompt as the last argument. pipeBrain guarantees $SELF_BRAIN is set before
-// this is called.
-func brainCommand(prompt string) (string, []string) {
-	parts := strings.Fields(os.Getenv("SELF_BRAIN"))
+// brainCommand splits a configured executable into command and args, appending
+// the prompt as the last argument.
+func brainCommand(exe, prompt string) (string, []string) {
+	parts := strings.Fields(exe)
 	return parts[0], append(parts[1:], prompt)
 }
 

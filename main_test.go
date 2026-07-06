@@ -588,6 +588,15 @@ func mustEvents(t *testing.T, decls []map[string]any) []Event {
 	return evs
 }
 
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 // A capable brain (claude -p) will otherwise try to persist its own work —
 // write events.jsonl, run the CLI, install a script — and emit Markdown. Every
 // event-expecting ask must tell it the answer channel is stdout only, plain
@@ -770,6 +779,63 @@ func TestCommandHelpTreatsFlagsAsHelp(t *testing.T) {
 	}
 	if !strings.Contains(runHelp, "usage: self run <command> [args...]") {
 		t.Fatalf("run help is not command usage:\n%s", runHelp)
+	}
+}
+
+func TestBundledSettingsInstallsWithoutBrain(t *testing.T) {
+	t.Setenv("SELF_BRAIN", "")
+	t.Setenv("SELF_LLM_STUB", "")
+	home := t.TempDir()
+	if err := installBundledSeed(home, "settings"); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(filepath.Join(home, "capabilities", "commands", "configure-brain")) {
+		t.Fatal("settings command did not install")
+	}
+	if !fileExists(filepath.Join(home, "capabilities", "projectors", "settings")) {
+		t.Fatal("settings projector did not install")
+	}
+	if err := rehydrate(home); err != nil {
+		t.Fatal(err)
+	}
+	page, err := runProjection(home, "settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), "configure-brain") && !strings.Contains(string(page), "save brain") {
+		t.Fatalf("settings page missing form:\n%s", page)
+	}
+
+	events, err := runCommand(home, "configure-brain", []string{"custom", "printf hi", "http://example.invalid", "model-x", "secret-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Name != "brain.configured" {
+		t.Fatalf("configure-brain emitted %v", events)
+	}
+	log, _ := os.ReadFile(logPath(home))
+	if strings.Contains(string(log), "secret-token") {
+		t.Fatal("API key leaked into the event log")
+	}
+	if got := strings.TrimSpace(string(mustReadFile(t, filepath.Join(home, ".brain-key")))); got != "secret-token" {
+		t.Fatalf("brain key file = %q", got)
+	}
+	if got := brainExe(home); got != "printf hi" {
+		t.Fatalf("configured brain command = %q", got)
+	}
+}
+
+func TestKernelRendersSeedCatalog(t *testing.T) {
+	home := t.TempDir()
+	if err := ensureHome(home); err != nil {
+		t.Fatal(err)
+	}
+	renderKernelHTML(home)
+	page := string(mustReadFile(t, filepath.Join(home, "site", "kernel.html")))
+	for _, want := range []string{"start here", "Install settings", "intent.md", "notes"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("kernel catalog missing %q:\n%s", want, page)
+		}
 	}
 }
 

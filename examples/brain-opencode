@@ -22,7 +22,7 @@ def opencode_command():
     cmd = [os.environ.get("SELF_OPENCODE", "opencode"), "run", "--format", "json"]
     if os.environ.get("SELF_OPENCODE_PURE", "1") != "0":
         cmd.append("--pure")
-    model = os.environ.get("SELF_OPENCODE_MODEL", "")
+    model = os.environ.get("SELF_OPENCODE_MODEL", os.environ.get("SELF_LLM_MODEL", ""))
     if model:
         cmd.extend(["--model", model])
     agent = os.environ.get("SELF_OPENCODE_AGENT", "")

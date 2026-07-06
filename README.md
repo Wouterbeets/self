@@ -43,6 +43,18 @@ scripts; this shows the machinery, not the intelligence.
 
 ```sh
 go install .                        # `self` on PATH (via GOBIN)
+make run                            # or: self
+```
+
+Open <http://127.0.0.1:7777>. A new home starts with a first-run page: install
+the bundled settings seed, configure a brain from the browser, then grow chat or
+notes from their visible `intent.md` prompts. The settings seed is reviewed code
+shipped with the kernel so it can run before any brain exists; normal seeds still
+grow through the configured brain and leave signed receipts in the log.
+
+The same flow works from the CLI:
+
+```sh
 
 cd ~/my-project
 export SELF_HOME=$PWD/.self          # the instance lives beside your code
@@ -226,7 +238,8 @@ scripts then run without a sandbox — see Limits.
 ```
 SELF_HOME         instance directory (default ~/.self)
 SELF_BRAIN        brain executable (e.g. "claude -p"); the kernel spawns it for
-                  every request kind. Without it, set SELF_LLM_STUB=1.
+                  every request kind. It overrides saved /settings config.
+                  Without either, set SELF_LLM_STUB=1 for demos/tests.
 SELF_LLM_STUB     "1" → offline stub generation (no brain, no network)
 SELF_BIND         serve address (default 127.0.0.1; set 0.0.0.0 to expose)
 SELF_BRAIN_ID     author string signed into receipts
@@ -235,9 +248,9 @@ SELF_THEME        default page design: grove | micro | paper | spec
                   (default grove); ?theme= or the on-page picker overrides it
 ```
 
-The [`examples/brain-openai`](examples/brain-openai) adapter reads
-`SELF_LLM_URL`, `SELF_LLM_API_KEY`, and `SELF_LLM_MODEL`, but those are the
-adapter's own variables — the kernel neither sets nor reads them.
+The settings seed can save a `brain.configured` event and a local `.brain-key`;
+if `SELF_BRAIN` is unset, the kernel resolves that into a bundled adapter and
+passes `SELF_LLM_URL`, `SELF_LLM_API_KEY`, and `SELF_LLM_MODEL` to it.
 
 ## Repository layout
 
@@ -249,7 +262,9 @@ adapter's own variables — the kernel neither sets nor reads them.
 - `examples/` — drop-in brains that plug in through `SELF_BRAIN`, starting with
   `brain-openai` for OpenAI-compatible endpoints. Not part of the kernel.
 - `demo.sh` — the offline, no-brain walkthrough of the loop.
-- `seeds/journal` — the smallest example: one command, one projection.
+- `seeds/settings` — the first trusted seed: configure a brain from the browser
+  without putting API keys in the log.
+- `seeds/notes` / `seeds/journal` — small examples: one command, one projection.
 - `seeds/chat` — a conversational surface; asking for a missing capability
   generates it mid-conversation.
 - `seeds/renga` — linked verse written by many authors across sessions; a seed
