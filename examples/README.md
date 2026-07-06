@@ -17,15 +17,16 @@ A coding-agent CLI that already explores with its own tools and prints to
 stdout plugs straight into the pipe; there is nothing here to install for it:
 
 ```sh
-export SELF_BRAIN="claude -p --continue"
+export SELF_BRAIN="claude -p"
 self grow seeds/chat
 ```
 
-`--continue` matters: the kernel runs the brain with `SELF_HOME` as its
-working directory, so each ask resumes the previous ask's conversation for
-that instance — compiles inherit the orchestrating ask's exploration instead
-of re-reading the instance cold, and an interactive session you ran in the
-instance directory becomes the conversation the kernel continues.
+Stateless on purpose: each ask starts cold and orients from the brief and the
+rendered state. Resist wiring the harness's session store in as memory
+(`--continue`): it accumulates brain state outside the log — unreplayable,
+unauditable, absent from every seed. An instance's memory is its events and
+projections; a brain that needs to remember something should write it to the
+log through a capability, where `rehydrate` and `share` can reach it.
 
 ## `brain-openai`
 
