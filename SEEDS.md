@@ -21,10 +21,12 @@ myseed/
 `self grow myseed/` does the rest:
 
 1. It records an `intent.declared` event.
-2. It hands `intent.md` to the brain (this needs a brain — `grow` cannot run on
-   the offline stub). The brain reads the intent, looks at what the instance
-   already has, and decides how to decompose it into **commands** (verbs that
-   emit events) and **projections** (HTML views over events).
+2. It hands `intent.md` to the brain (a real brain writes real capabilities;
+   `SELF_LLM_STUB=1` supplies a deterministic offline one that declares a
+   minimal command + projection, enough to exercise the loop). The brain reads
+   the intent, looks at what the instance already has, and decides how to
+   decompose it into **commands** (verbs that emit events) and **projections**
+   (HTML views over events).
 3. It declares each capability. The kernel compiles each one into a script,
    installs it, and records a signed receipt.
 4. If `seed.jsonl` is present, its events are appended so the new views have

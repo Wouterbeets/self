@@ -552,6 +552,15 @@ const pipeContract = `command script: receives args as argv, current events as J
 projector script: receives all events as JSONL on stdin, writes HTML on stdout. The kernel persists it to SELF_HOME/site/<name>.html.
 The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries.`
 
+// brainAnswerContract tells a capable, tool-using brain how to hand its answer
+// back. A coding-agent brain (claude -p) will otherwise try to persist its work
+// itself — write events.jsonl, run `self`, install a script — and that effort is
+// wasted and denied: the kernel reads ONLY stdout and appends what it finds
+// there, under its own signature. It also emits Markdown by habit; the pipe
+// tolerates fences, but one clean JSON object per line is what actually wants
+// ingesting. Woven into every ask that expects events (grow, heartbeat, compile).
+const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout and appends the events it finds there, under its own signed receipt. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. Just print each event as ONE line of compact JSON (no Markdown, no code fences, no backticks). Bare prose lines are tolerated as reply text.`
+
 // ────────────────────────────── the compiler ────────────────────────────────
 
 func (c *llm) compileCommand(d commandDecl) (string, error) {
@@ -574,7 +583,10 @@ func (c *llm) compileProjector(d projectorDecl) (string, error) {
 // is one script.authored event. During a grow the whole intent rides along too,
 // so each piece is compiled toward the same product. The kernel still installs
 // and signs — a brain authors bytes, only the kernel makes them real.
-func compileViaBrain(home, intent, typ, name, decl string) (string, error) {
+// compilePrompt is the text of a compile ask: author one script honoring the
+// pipe contract, test it with your own tools, and hand back exactly one
+// script.authored line — the kernel does the installing and signing.
+func compilePrompt(intent, typ, name, decl string) string {
 	prompt := fmt.Sprintf(`COMPILE one capability for this instance. Author a complete executable script (any language with a shebang, standard libraries only) honoring the pipe contract, adapted to this instance's log (on your stdin as JSONL).
 
 %s
@@ -582,14 +594,18 @@ func compileViaBrain(home, intent, typ, name, decl string) (string, error) {
 DECLARATION (%s %q):
 %s
 
-If the declaration carries an "implementation", it is a reference from another instance: verify it and adapt it here — never copy it blindly. Verify by execution with your own tools before answering.
+If the declaration carries an "implementation", it is a reference from another instance: verify it and adapt it here — never copy it blindly. Use your own tools freely to write and TEST the script by execution before answering — but do not install it, edit events.jsonl, or run the self CLI: the kernel installs and signs the script from the one line you print, and nothing else.
 
-Answer with ONE line of JSON and nothing else:
+Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 {"name":"script.authored","payload":{"script":"<the full script>"}}`, pipeContract, typ, name, decl)
 	if strings.TrimSpace(intent) != "" {
 		prompt = "This capability is one part of a product with the following INTENT. Compile it so the whole intent is served.\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---\n\n" + prompt
 	}
-	res, err := pipeBrain(home, "compile", prompt)
+	return prompt
+}
+
+func compileViaBrain(home, intent, typ, name, decl string) (string, error) {
+	res, err := pipeBrain(home, "compile", compilePrompt(intent, typ, name, decl))
 	if err != nil {
 		return "", err
 	}
@@ -1320,6 +1336,13 @@ func cmdServe(home, port string) error {
 // instance, and declares the decomposition that realizes it here; each piece is
 // then compiled with the whole intent woven in. Same intent, different instance,
 // different decomposition.
+// growPrompt frames the orchestration ask: decompose the intent into declared
+// capabilities, and hand them back the one way the kernel accepts them.
+func growPrompt(intent string) string {
+	return "Grow the capabilities that realize this product: declare each one by emitting a command.declared / projector.declared event, then summarize in one line.\n\n" +
+		brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
+}
+
 func cmdGrow(home, seedDir string) error {
 	raw, err := os.ReadFile(filepath.Join(seedDir, "intent.md"))
 	if err != nil {
@@ -1335,8 +1358,7 @@ func cmdGrow(home, seedDir string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "self: orchestrating %q from intent…\n", name)
-	res, err := pipeBrain(home, "grow",
-		"Grow the capabilities that realize this product: declare each one (emit command.declared / projector.declared), then summarize in one line.\n\n--- INTENT ---\n"+intent+"\n--- END INTENT ---")
+	res, err := pipeBrain(home, "grow", growPrompt(intent))
 	if err != nil {
 		return fmt.Errorf("orchestrate %q: %w (growing needs a brain — %s)", name, err, brainHint)
 	}
@@ -1595,11 +1617,15 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 		if line == "" {
 			continue
 		}
+		content, fence := unfence(line)
+		if fence { // a bare ``` / ```json marker: pure decoration, not reply text
+			continue
+		}
 		var e struct {
 			Name    string          `json:"name"`
 			Payload json.RawMessage `json:"payload"`
 		}
-		if json.Unmarshal([]byte(line), &e) != nil || e.Name == "" {
+		if json.Unmarshal([]byte(content), &e) != nil || e.Name == "" {
 			prose = append(prose, line)
 			continue
 		}
@@ -1635,6 +1661,24 @@ func brainCommand(prompt string) (string, []string) {
 	return parts[0], append(parts[1:], prompt)
 }
 
+// unfence strips the Markdown a chat-shaped brain (claude -p and its kin) wraps
+// JSON in, so a model that answers in prose still plugs into the pipe unchanged.
+// A line that is a bare fence marker (``` or ```json) is decoration, reported by
+// the second return so the caller drops it from the reply text; a single line
+// wrapped in backticks (`{…}`) is unwrapped to its content. Anything else — plain
+// JSON from the stub or an adapter, or ordinary prose — passes through untouched,
+// so no existing brain regresses.
+func unfence(line string) (content string, fence bool) {
+	t := strings.TrimSpace(line)
+	if strings.HasPrefix(t, "```") {
+		return "", true
+	}
+	if len(t) >= 2 && strings.HasPrefix(t, "`") && strings.HasSuffix(t, "`") {
+		return strings.TrimSpace(strings.Trim(t, "`")), false
+	}
+	return t, false
+}
+
 // cmdHeartbeat is one self-improvement cycle: the brain reads what changed
 // since its last beat, explores, and — if warranted — declares one small
 // improvement, which compiles through the strange loop.
@@ -1644,7 +1688,8 @@ func cmdHeartbeat(home string) error {
 	if err := appendEvent(home, &hb); err != nil {
 		return err
 	}
-	prompt := `This is a self-improvement heartbeat. Explore your instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (emit command.declared / projector.declared); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` + heartbeatContext(prior)
+	prompt := `This is a self-improvement heartbeat. Explore your instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (emit command.declared / projector.declared); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` +
+		"\n\n" + brainAnswerContract + heartbeatContext(prior)
 	res, err := pipeBrain(home, "heartbeat", prompt)
 	if err != nil {
 		return err

@@ -505,6 +505,113 @@ else:
 	}
 }
 
+// A chat-shaped brain (claude -p and its kin) answers in Markdown: it wraps the
+// event JSON in backticks or a ```json fence and narrates around it. The pipe
+// must still find the events, or the headline SELF_BRAIN="claude -p" is a broken
+// promise. This pins that a Markdown-speaking brain plugs in unchanged.
+func TestBrainMarkdownFencedJSON(t *testing.T) {
+	if _, fence := unfence("```json"); !fence {
+		t.Fatal("```json should be a fence marker")
+	}
+	if _, fence := unfence("```"); !fence {
+		t.Fatal("bare ``` should be a fence marker")
+	}
+	if c, _ := unfence("`{\"name\":\"x\"}`"); c != `{"name":"x"}` {
+		t.Fatalf("inline-backticked JSON not unwrapped: %q", c)
+	}
+	if c, _ := unfence(`{"name":"x"}`); c != `{"name":"x"}` {
+		t.Fatalf("plain JSON should pass through untouched: %q", c)
+	}
+	if c, _ := unfence("use `self run entry`"); c != "use `self run entry`" {
+		t.Fatalf("prose with inline code must not be stripped: %q", c)
+	}
+
+	brain := filepath.Join(t.TempDir(), "brain")
+	// Mimics claude -p: prose, then a backtick-wrapped declaration, then a
+	// fenced compile answer.
+	if err := os.WriteFile(brain, []byte("#!/usr/bin/env python3\n"+
+		`import os, sys, json
+sys.stdin.read()
+ask = os.environ.get("SELF_ASK", "")
+if ask == "compile":
+    script = "#!/usr/bin/env python3\nimport sys, json\nprint(json.dumps({\"name\": \"noted\", \"payload\": {\"text\": \" \".join(sys.argv[1:]) or \"()\"}}))\n"
+    print("Here is the script:")
+    print("`+"```"+`json")
+    print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
+    print("`+"```"+`")
+else:
+    print("I'll declare the note command per the contract.")
+    print("`+"`"+`" + json.dumps({"name": "command.declared", "payload": {
+        "name": "note", "description": "record a note",
+        "params": {"text": "string"},
+        "event": {"name": "noted", "fields": {"text": "string"}}}}) + "`+"`"+`")
+    print("Declared the `+"`"+`note`+"`"+`command.")
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_BRAIN", brain)
+	t.Setenv("SELF_BRAIN_ID", "a markdown-speaking brain")
+	t.Setenv("SELF_LLM_STUB", "")
+
+	home := t.TempDir()
+	res, err := pipeBrain(home, "grow", "grow a note capability")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Declarations) != 1 || res.Declarations[0]["name"] != "command.declared" {
+		t.Fatalf("backtick-wrapped declaration not parsed: %+v", res.Declarations)
+	}
+	// prose survives, fence markers do not leak into it
+	if !strings.Contains(res.Response, "declare the note command") {
+		t.Fatalf("prose lost: %q", res.Response)
+	}
+	if strings.Contains(res.Response, "```") {
+		t.Fatalf("fence markers leaked into prose: %q", res.Response)
+	}
+	// the fenced compile answer is found and drives a real install
+	if err := ingest(home, mustEvents(t, res.Declarations)); err != nil {
+		t.Fatal(err)
+	}
+	if p := filepath.Join(home, "capabilities", "commands", "note"); !fileExists(p) {
+		t.Fatal("the note capability compiled via the fenced brain did not install")
+	}
+}
+
+func mustEvents(t *testing.T, decls []map[string]any) []Event {
+	t.Helper()
+	var evs []Event
+	for _, d := range decls {
+		name, _ := d["name"].(string)
+		payload, _ := json.Marshal(d["payload"])
+		evs = append(evs, newEvent(name, payload))
+	}
+	return evs
+}
+
+// A capable brain (claude -p) will otherwise try to persist its own work —
+// write events.jsonl, run the CLI, install a script — and emit Markdown. Every
+// event-expecting ask must tell it the answer channel is stdout only, plain
+// JSON, one line each. This pins that guidance into the prompts the brain sees.
+func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
+	must := func(where, prompt string, needles ...string) {
+		low := strings.ToLower(prompt)
+		for _, n := range needles {
+			if !strings.Contains(low, n) {
+				t.Errorf("%s prompt is missing guidance %q", where, n)
+			}
+		}
+	}
+	// grow and heartbeat expect declarations: answer on stdout, plain JSON.
+	must("grow", growPrompt("some intent"), "stdout", "events.jsonl", "no markdown", "one line")
+	must("answer contract", brainAnswerContract, "stdout", "cannot write the log", "no code fences")
+	// compile: the brain may test with its tools, but must not install or persist.
+	must("compile", compilePrompt("", "command", "note", `{"name":"note"}`),
+		"do not install", "events.jsonl", "no code fence")
+	// the intent-woven variant keeps the same guidance.
+	must("compile+intent", compilePrompt("a product", "command", "note", `{"name":"note"}`),
+		"do not install", "no code fence")
+}
+
 func TestStubBrainCoversThinkAndGrow(t *testing.T) {
 	t.Setenv("SELF_LLM_STUB", "1")
 	t.Setenv("SELF_BRAIN", "")
