@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -704,5 +706,119 @@ func TestCommandHelpTreatsFlagsAsHelp(t *testing.T) {
 	}
 	if !strings.Contains(runHelp, "usage: self run <command> [args...]") {
 		t.Fatalf("run help is not command usage:\n%s", runHelp)
+	}
+}
+
+// TestThemesShareOneClassContract pins the swappable-shell invariant: a theme
+// is only a skin. Every theme must define the variables the structural layer
+// reads, and the class vocabulary + rules live once in structuralCSS — never
+// duplicated into a skin — so switching designs can never rename a class or
+// drop a rule a projection depends on.
+func TestThemesShareOneClassContract(t *testing.T) {
+	// The fixed contract: rules the projections and shellScript are written
+	// against. These belong to the structural layer, identical for every theme.
+	for _, sel := range []string{".msg.user", "form.busy button", ".card,article", ".self-themes", "body:has(.msg)"} {
+		if !strings.Contains(structuralCSS, sel) {
+			t.Fatalf("structuralCSS missing class contract %q", sel)
+		}
+	}
+	// The variables every skin must supply for the structural layer to resolve.
+	vars := []string{"--bg", "--panel", "--ink", "--accent", "--accent-ink", "--danger",
+		"--line", "--wash", "--shadow", "--font", "--head-font", "--mono",
+		"--radius", "--radius-sm", "--radius-msg", "--line-w"}
+	for name, th := range themes {
+		for _, v := range vars {
+			if !strings.Contains(th.skin, v+":") {
+				t.Fatalf("theme %q does not define %s", name, v)
+			}
+		}
+		// A skin is variables only: it must not smuggle in structural rules.
+		if strings.Contains(th.skin, ".msg") || strings.Contains(th.skin, "box-sizing") {
+			t.Fatalf("theme %q leaks structural rules into its skin", name)
+		}
+		css := themeCSS(name)
+		if !strings.Contains(css, th.skin) || !strings.Contains(css, structuralCSS) {
+			t.Fatalf("themeCSS(%q) does not compose skin + structural layer", name)
+		}
+	}
+	if len(themeOrder) != len(themes) {
+		t.Fatalf("themeOrder (%d) and themes (%d) disagree", len(themeOrder), len(themes))
+	}
+	for _, name := range themeOrder {
+		if !validTheme(name) {
+			t.Fatalf("themeOrder lists unknown theme %q", name)
+		}
+	}
+}
+
+// TestPickThemePrecedence pins selection: an explicit ?theme wins, then the
+// cookie, then SELF_THEME, then the built-in default — and unknown values are
+// ignored at every level so a bad cookie or env can never inject arbitrary CSS.
+func TestPickThemePrecedence(t *testing.T) {
+	t.Setenv("SELF_THEME", "")
+
+	req := func(url string, cookie string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, url, nil)
+		if cookie != "" {
+			r.AddCookie(&http.Cookie{Name: "self_theme", Value: cookie})
+		}
+		return r
+	}
+
+	if got := pickTheme(req("/", "")); got != defaultTheme {
+		t.Fatalf("no signal → %q, want default %q", got, defaultTheme)
+	}
+	if got := pickTheme(req("/?theme=micro", "paper")); got != "micro" {
+		t.Fatalf("query should win: got %q", got)
+	}
+	if got := pickTheme(req("/?theme=bogus", "paper")); got != "paper" {
+		t.Fatalf("invalid query should fall through to cookie: got %q", got)
+	}
+	if got := pickTheme(req("/", "paper")); got != "paper" {
+		t.Fatalf("cookie should apply: got %q", got)
+	}
+	if got := pickTheme(req("/", "bogus")); got != defaultTheme {
+		t.Fatalf("invalid cookie should be ignored: got %q", got)
+	}
+
+	t.Setenv("SELF_THEME", "micro")
+	if got := pickTheme(req("/", "")); got != "micro" {
+		t.Fatalf("SELF_THEME should apply: got %q", got)
+	}
+	t.Setenv("SELF_THEME", "nonsense")
+	if got := pickTheme(req("/", "")); got != defaultTheme {
+		t.Fatalf("invalid SELF_THEME should be ignored: got %q", got)
+	}
+}
+
+// TestInjectShellShape checks the shell is layered onto a page without
+// disturbing it: CSS goes inside <head>, the picker before </body> with the
+// active design marked, and an unknown theme degrades to the default.
+func TestInjectShellShape(t *testing.T) {
+	page := []byte("<!DOCTYPE html><html><head><title>t</title></head><body><h1>hi</h1></body></html>")
+
+	out := string(injectShell(page, "micro"))
+	if !strings.Contains(out, themes["micro"].skin) {
+		t.Fatal("micro skin not injected")
+	}
+	head := strings.Index(out, "</head>")
+	if i := strings.Index(out, "<style>"); i < 0 || i > head {
+		t.Fatal("stylesheet not inside <head>")
+	}
+	nav := strings.Index(out, `<nav class="self-themes"`)
+	body := strings.LastIndex(out, "</body>")
+	if nav < 0 || nav > body {
+		t.Fatal("theme picker not placed before </body>")
+	}
+	if !strings.Contains(out, `href="?theme=micro" aria-current="true"`) {
+		t.Fatal("picker does not mark the active theme")
+	}
+	if !strings.Contains(out, "<h1>hi</h1>") {
+		t.Fatal("injectShell dropped the page's own content")
+	}
+
+	// Unknown theme falls back to the default skin, never empty/arbitrary CSS.
+	if !strings.Contains(string(injectShell(page, "bogus")), themes[defaultTheme].skin) {
+		t.Fatal("unknown theme did not fall back to default skin")
 	}
 }

@@ -123,6 +123,19 @@ so what you see is the log's replay, and re-renders when `/events` grows. Strip
 it (`self show`, curl, a no-JS browser) and every page still works, because
 every action underneath is a plain HTML form.
 
+**Swappable designs.** The class vocabulary and the layout rules are fixed —
+that stable contract is what the projections and the script are written
+against. A *theme* changes none of it: it is only a skin, a set of CSS
+variables (palette, fonts, radii, border weight, shadow) the rules read through
+`var()`. So switching designs never renames a class or touches a projection.
+Three ship in the kernel — `grove` (the warm default), `micro` (a hard-edged
+monospace micrographics look), and `paper` (clean and low-chrome) — and adding
+one is a single map entry. Pick a design with the on-page switcher (plain links,
+so it works with no JS), a `?theme=<name>` link, or `SELF_THEME` for the
+instance default. The choice is presentation only, chosen at serve time like
+`prefers-color-scheme`; nothing is written to the log, so `self show` and
+`rehydrate` stay theme-agnostic.
+
 ## The brain
 
 Every request for intelligence — `think`, `heartbeat`, `grow`, and each
@@ -212,6 +225,8 @@ SELF_SANDBOX      "0" → disable the namespace jail (read-only fallback)
 SELF_BIND         serve address (default 127.0.0.1; set 0.0.0.0 to expose)
 SELF_BRAIN_ID     author string signed into receipts
                   (default: model @ endpoint, or "stub (no LLM)")
+SELF_THEME        default page design: grove | micro | paper (default grove);
+                  a ?theme= link or the on-page picker overrides it per viewer
 ```
 
 ## Repository layout
