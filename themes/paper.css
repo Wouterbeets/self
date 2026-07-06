@@ -1,0 +1,10 @@
+/* paper — clean and modern: sans throughout, thin hairlines, no shadow,
+   gentle radii. The low-chrome option. */
+:root{--bg:#ffffff;--panel:#ffffff;--ink:#1a1a1a;--muted:#8a8a8a;--line:#e6e6e6;--wash:#f4f4f4;
+--accent:#2b59c3;--accent-ink:#fff;--user-bg:#eef2fb;--user-line:#dbe3f6;--danger:#c0392b;
+--shadow:none;
+--font:system-ui,-apple-system,sans-serif;--head-font:system-ui,-apple-system,sans-serif;--mono:ui-monospace,monospace;
+--radius:6px;--radius-sm:4px;--radius-msg:10px;--line-w:1px}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--panel:#151821;--ink:#e6e8ee;--muted:#8b90a0;
+--line:#242836;--wash:#1b1f2a;--accent:#6f9bff;--accent-ink:#0f1115;--user-bg:#1a2233;--user-line:#2a3550;
+--danger:#ff7a6b;--shadow:none}}

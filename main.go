@@ -20,6 +20,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -32,6 +33,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -80,6 +82,18 @@ func readEvents(home string) ([]Event, error) {
 }
 
 func appendEvent(home string, e *Event) error {
+	if err := os.MkdirAll(home, 0755); err != nil {
+		return err
+	}
+	// Assigning seq is read-last-then-append: without a lock, two writers (a
+	// server POST and a CLI `run`) can read the same tail and collide. An
+	// advisory lock on the log serializes the whole critical section, so the
+	// single-writer property holds even across processes.
+	unlock, err := lockLog(home)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	prior, err := readEvents(home)
 	if err != nil {
 		return err
@@ -92,9 +106,6 @@ func appendEvent(home string, e *Event) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(home, 0755); err != nil {
-		return err
-	}
 	f, err := os.OpenFile(logPath(home), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return err
@@ -102,6 +113,24 @@ func appendEvent(home string, e *Event) error {
 	defer f.Close()
 	_, err = fmt.Fprintln(f, string(line))
 	return err
+}
+
+// lockLog takes an exclusive advisory (flock) lock on the log file and returns
+// a release function. The lock coordinates only between appendEvent callers;
+// readers use their own descriptors and are unaffected.
+func lockLog(home string) (func(), error) {
+	lf, err := os.OpenFile(logPath(home), os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+		lf.Close()
+		return nil, err
+	}
+	return func() {
+		syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+		lf.Close()
+	}, nil
 }
 
 // ─────────────────────── provenance: the signed install ─────────────────────
@@ -904,93 +933,60 @@ const shellMeta = `<meta name="viewport" content="width=device-width,initial-sca
 
 const defaultTheme = "grove"
 
-// themeOrder fixes how the picker lists designs; themes is the lookup. To add a
-// design, add one entry here — nothing structural changes.
-var themeOrder = []string{"grove", "micro", "paper", "spec"}
+// A theme is a skin: CSS custom properties (palette, fonts, radii, borders) the
+// structural layer reads through var(), plus—optionally—a few extra rules for a
+// feel variables alone can't carry. It is injected AFTER the structural CSS, so
+// its variables resolve and its rules layer on top; it never renames a class or
+// changes what a projection emits.
+type theme struct {
+	label string
+	css   string
+}
 
-// A theme is a skin plus, optionally, a block of extra rules. The skin is
-// variables only — the interchangeable core, and all most designs need. The
-// rules block is the escape hatch for a design whose feel is more than a
-// palette (letter-spacing, uppercase labels, decorative pseudo-elements): it
-// still styles only the fixed class vocabulary, never the events, and only the
-// active theme's rules are ever injected, so they need no scoping. It changes
-// how the same markup looks, never what a projection must emit.
-var themes = map[string]struct {
-	label string // the name shown in the picker
-	skin  string // :root (and dark-media) variable definitions
-	rules string // optional extra rules layered after the structural CSS
-}{
-	// grove — the original: warm paper, serif headings, soft rounded cards.
-	"grove": {label: "Grove", skin: `:root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#26231d;--muted:#7d7568;--line:#e5e0d5;--wash:#edeade;
---accent:#2f6b4f;--accent-ink:#fff;--user-bg:#e3efe6;--user-line:#cbdfd2;--danger:#b3402e;
---shadow:0 1px 3px rgba(60,50,30,.07);
---font:system-ui,-apple-system,sans-serif;--head-font:Georgia,'Iowan Old Style',serif;--mono:ui-monospace,monospace;
---radius:10px;--radius-sm:5px;--radius-msg:14px;--line-w:1px}
-@media (prefers-color-scheme:dark){:root{--bg:#16150f;--panel:#201e16;--ink:#e7e2d6;--muted:#948b7b;
---line:#35322a;--wash:#2a2820;--accent:#69b98e;--accent-ink:#10231a;--user-bg:#233529;--user-line:#31513e;
---danger:#e0755f;--shadow:0 1px 3px rgba(0,0,0,.4)}}`},
+//go:embed themes/*.css
+var themeFS embed.FS
 
-	// micro — micrographics: monospace throughout, zero radius, thick hard
-	// borders and a solid offset drop shadow. A crisp, bitmap-poster feel.
-	"micro": {label: "Micro", skin: `:root{--bg:#e8e6df;--panel:#fbfbf7;--ink:#161512;--muted:#6d6a60;--line:#161512;--wash:#dedbcf;
---accent:#c8361f;--accent-ink:#fff;--user-bg:#e3e0d4;--user-line:#161512;--danger:#c8361f;
---shadow:3px 3px 0 var(--line);
---font:'Courier New',ui-monospace,'DejaVu Sans Mono',monospace;--head-font:'Courier New',ui-monospace,monospace;--mono:'Courier New',ui-monospace,monospace;
---radius:0;--radius-sm:0;--radius-msg:0;--line-w:2px}
-@media (prefers-color-scheme:dark){:root{--bg:#0d0d0b;--panel:#161613;--ink:#eae8dd;--muted:#8f8b7d;
---line:#eae8dd;--wash:#232320;--accent:#ff5a3c;--accent-ink:#0d0d0b;--user-bg:#1d1d19;--user-line:#eae8dd;
---danger:#ff5a3c;--shadow:3px 3px 0 var(--line)}}`},
+// themes and themeOrder are built once from the embedded themes/*.css files —
+// the design set ships inside the binary, so serving needs no files on disk and
+// the offline guarantees hold. Each file's base name is the theme id; the
+// default (grove) lists first, the rest alphabetically. Add a design by dropping
+// a .css into themes/ and rebuilding — nothing structural changes.
+var themes, themeOrder = loadThemes()
 
-	// paper — clean and modern: sans throughout, thin hairlines, no shadow,
-	// gentle radii. The low-chrome option.
-	"paper": {label: "Paper", skin: `:root{--bg:#ffffff;--panel:#ffffff;--ink:#1a1a1a;--muted:#8a8a8a;--line:#e6e6e6;--wash:#f4f4f4;
---accent:#2b59c3;--accent-ink:#fff;--user-bg:#eef2fb;--user-line:#dbe3f6;--danger:#c0392b;
---shadow:none;
---font:system-ui,-apple-system,sans-serif;--head-font:system-ui,-apple-system,sans-serif;--mono:ui-monospace,monospace;
---radius:6px;--radius-sm:4px;--radius-msg:10px;--line-w:1px}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--panel:#151821;--ink:#e6e8ee;--muted:#8b90a0;
---line:#242836;--wash:#1b1f2a;--accent:#6f9bff;--accent-ink:#0f1115;--user-bg:#1a2233;--user-line:#2a3550;
---danger:#ff7a6b;--shadow:none}}`},
+func loadThemes() (map[string]theme, []string) {
+	m := map[string]theme{}
+	var extra []string
+	entries, _ := themeFS.ReadDir("themes")
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".css") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".css")
+		data, err := themeFS.ReadFile("themes/" + e.Name())
+		if err != nil || name == "" {
+			continue
+		}
+		m[name] = theme{label: themeLabel(name), css: string(data)}
+		if name != defaultTheme {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	return m, append([]string{defaultTheme}, extra...)
+}
 
-	// spec — technical-label / spec-sheet: monochrome ink-on-paper, monospace,
-	// letter-spaced uppercase labels, hairline frames, and decorative
-	// registration marks + a barcode strip under the title. The rules block
-	// carries the feel that variables alone can't (tracking, uppercasing, the
-	// pseudo-element micro-graphics); it still touches only the shared classes.
-	"spec": {label: "Spec", skin: `:root{--bg:#e9e7df;--panel:#f6f5ef;--ink:#17150f;--muted:#8f897b;--line:#17150f;--wash:#dedbd0;
---accent:#17150f;--accent-ink:#f6f5ef;--user-bg:#17150f;--user-line:#17150f;--danger:#a8341f;
---shadow:none;
---font:ui-monospace,'SFMono-Regular','DejaVu Sans Mono',monospace;--head-font:ui-monospace,'SFMono-Regular',monospace;--mono:ui-monospace,'SFMono-Regular','DejaVu Sans Mono',monospace;
---radius:0;--radius-sm:0;--radius-msg:0;--line-w:1px}
-@media (prefers-color-scheme:dark){:root{--bg:#0c0c0a;--panel:#141310;--ink:#e9e6da;--muted:#8f897b;
---line:#e9e6da;--wash:#1c1b17;--accent:#e9e6da;--accent-ink:#0c0c0a;--user-bg:#e9e6da;--user-line:#e9e6da;
---danger:#e0755f}}`, rules: `
-body{letter-spacing:.02em}
-h1,h2,h3{text-transform:uppercase;letter-spacing:.16em;font-weight:700}
-h1{font-size:1.7rem;letter-spacing:.22em;border-bottom:var(--line-w) solid var(--line);padding-bottom:10px;margin-bottom:.5em}
-h1::after{content:"";display:block;height:20px;max-width:240px;margin-top:9px;
-background:repeating-linear-gradient(90deg,var(--ink) 0 2px,transparent 2px 4px,var(--ink) 4px 5px,transparent 5px 9px,var(--ink) 9px 12px,transparent 12px 13px,var(--ink) 13px 16px,transparent 16px 18px)}
-.muted{letter-spacing:.08em}
-.who{letter-spacing:.2em}
-.who::before{content:"▍"}
-.tag{background:transparent;border:var(--line-w) solid var(--line);color:var(--ink);text-transform:uppercase;letter-spacing:.14em;padding:0 6px}
-th{letter-spacing:.14em}
-button{text-transform:uppercase;letter-spacing:.14em}
-input::placeholder,textarea::placeholder{text-transform:uppercase;letter-spacing:.14em;font-size:.85em}
-.dots i{border-radius:0}
-.msg.user{color:var(--accent-ink)}
-.msg.user .who{color:var(--accent-ink);opacity:.75}
-.card,article,.msg{position:relative}
-.card::before,article::before,.msg::before{content:"";position:absolute;top:-1px;left:-1px;width:7px;height:7px;color:inherit;
-background:linear-gradient(currentColor,currentColor) 0 0/7px 1px no-repeat,linear-gradient(currentColor,currentColor) 0 0/1px 7px no-repeat}
-.card::after,article::after,.msg::after{content:"";position:absolute;bottom:-1px;right:-1px;width:7px;height:7px;color:inherit;
-background:linear-gradient(currentColor,currentColor) right bottom/7px 1px no-repeat,linear-gradient(currentColor,currentColor) right bottom/1px 7px no-repeat}`},
+// themeLabel is the picker's display name for a theme id: its capitalized form.
+func themeLabel(name string) string {
+	if name == "" {
+		return name
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
 }
 
 // structuralCSS is the fixed half of the shell: the class vocabulary and every
 // layout rule, written entirely against var()s a theme supplies. It never
-// mentions a literal color, font, or radius — that is what makes the skins
-// above interchangeable.
+// mentions a literal color, font, or radius — that is what makes the embedded
+// themes/*.css skins interchangeable.
 const structuralCSS = `*{box-sizing:border-box}html{scroll-behavior:smooth}
 body{font-family:var(--font);margin:0 auto;max-width:72ch;padding:24px 20px 32px;
 background:var(--bg);color:var(--ink);line-height:1.55}
@@ -1040,15 +1036,15 @@ background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var
 // arbitrary CSS in.
 func validTheme(name string) bool { _, ok := themes[name]; return ok }
 
-// themeCSS assembles the full <style> for one design: the skin's variables, the
-// shared structural rules, then the theme's own rules (if any) so they layer on
-// top. Unknown names fall back to default.
+// themeCSS assembles the full <style> for one design: the shared structural
+// rules, then the theme's CSS (its variables, and any extra rules that layer on
+// top). Unknown names fall back to the default.
 func themeCSS(name string) string {
 	t, ok := themes[name]
 	if !ok {
 		t = themes[defaultTheme]
 	}
-	return shellMeta + "<style>" + t.skin + "\n" + structuralCSS + t.rules + "\n</style>"
+	return shellMeta + "<style>" + structuralCSS + "\n" + t.css + "\n</style>"
 }
 
 // pickTheme resolves the design for one request, most specific first: an

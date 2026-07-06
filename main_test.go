@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -33,6 +34,50 @@ func TestLogAppendRead(t *testing.T) {
 		}
 		if e.ID == "" || e.OccurredAt.IsZero() {
 			t.Errorf("event %d missing id or timestamp", i)
+		}
+	}
+}
+
+// TestConcurrentAppendsDoNotCollide pins the single-writer property under
+// contention: many writers appending at once must still yield unique,
+// contiguous sequence numbers — the advisory log lock is what guarantees it.
+func TestConcurrentAppendsDoNotCollide(t *testing.T) {
+	home := t.TempDir()
+	const writers = 24
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e := newEvent("tick", json.RawMessage(`{}`))
+			if err := appendEvent(home, &e); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != writers {
+		t.Fatalf("got %d events, want %d — an append was lost to a race", len(events), writers)
+	}
+	seen := map[int]bool{}
+	for _, e := range events {
+		if seen[e.Seq] {
+			t.Fatalf("duplicate seq %d — two writers collided", e.Seq)
+		}
+		seen[e.Seq] = true
+	}
+	for i := 1; i <= writers; i++ {
+		if !seen[i] {
+			t.Fatalf("seq %d missing — sequence is not contiguous", i)
 		}
 	}
 }
@@ -640,21 +685,25 @@ func TestThemesShareOneClassContract(t *testing.T) {
 		"--radius", "--radius-sm", "--radius-msg", "--line-w"}
 	for name, th := range themes {
 		for _, v := range vars {
-			if !strings.Contains(th.skin, v+":") {
+			if !strings.Contains(th.css, v+":") {
 				t.Fatalf("theme %q does not define %s", name, v)
 			}
 		}
-		// A skin is variables only: it must not smuggle in structural rules.
-		if strings.Contains(th.skin, ".msg") || strings.Contains(th.skin, "box-sizing") {
-			t.Fatalf("theme %q leaks structural rules into its skin", name)
+		// A theme supplies variables (and at most a few layered rules); the box
+		// model lives once, in the structural layer, never in a theme.
+		if strings.Contains(th.css, "box-sizing") {
+			t.Fatalf("theme %q redefines the structural box model", name)
 		}
 		css := themeCSS(name)
-		if !strings.Contains(css, th.skin) || !strings.Contains(css, structuralCSS) {
-			t.Fatalf("themeCSS(%q) does not compose skin + structural layer", name)
+		if !strings.Contains(css, th.css) || !strings.Contains(css, structuralCSS) {
+			t.Fatalf("themeCSS(%q) does not compose theme + structural layer", name)
 		}
 	}
 	if len(themeOrder) != len(themes) {
 		t.Fatalf("themeOrder (%d) and themes (%d) disagree", len(themeOrder), len(themes))
+	}
+	if themeOrder[0] != defaultTheme {
+		t.Fatalf("themeOrder must list the default %q first, got %q", defaultTheme, themeOrder[0])
 	}
 	for _, name := range themeOrder {
 		if !validTheme(name) {
@@ -710,8 +759,8 @@ func TestInjectShellShape(t *testing.T) {
 	page := []byte("<!DOCTYPE html><html><head><title>t</title></head><body><h1>hi</h1></body></html>")
 
 	out := string(injectShell(page, "micro"))
-	if !strings.Contains(out, themes["micro"].skin) {
-		t.Fatal("micro skin not injected")
+	if !strings.Contains(out, themes["micro"].css) {
+		t.Fatal("micro theme not injected")
 	}
 	head := strings.Index(out, "</head>")
 	if i := strings.Index(out, "<style>"); i < 0 || i > head {
@@ -729,8 +778,8 @@ func TestInjectShellShape(t *testing.T) {
 		t.Fatal("injectShell dropped the page's own content")
 	}
 
-	// Unknown theme falls back to the default skin, never empty/arbitrary CSS.
-	if !strings.Contains(string(injectShell(page, "bogus")), themes[defaultTheme].skin) {
-		t.Fatal("unknown theme did not fall back to default skin")
+	// Unknown theme falls back to the default theme, never empty/arbitrary CSS.
+	if !strings.Contains(string(injectShell(page, "bogus")), themes[defaultTheme].css) {
+		t.Fatal("unknown theme did not fall back to the default")
 	}
 }
