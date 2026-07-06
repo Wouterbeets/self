@@ -967,3 +967,113 @@ func TestInjectShellShape(t *testing.T) {
 		t.Fatal("unknown theme did not fall back to the default")
 	}
 }
+
+// TestBrainReceivesStateBriefNotRawLog pins the renovation: the brain no longer
+// gets the whole event log dumped on stdin. It gets an orientation brief —
+// the same current-state unfolding the projections draw — and is pointed at
+// SELF_HOME for depth (the raw log and rendered pages live on disk). A brain
+// reads state, not a firehose; an instance's brain prompt stays O(state), not
+// O(history), so a long-lived instance doesn't grow an unbounded ask. The stub
+// brain (SELF_LLM_STUB=1) ignores stdin, so this pins the wired-brain path only.
+func TestBrainReceivesStateBriefNotRawLog(t *testing.T) {
+	// A brain that records its stdin to a file so we can inspect what the kernel
+	// actually fed it. It answers a think ask with one prose line.
+	seen := filepath.Join(t.TempDir(), "stdin.txt")
+	brain := filepath.Join(t.TempDir(), "brain")
+	if err := os.WriteFile(brain, []byte(`#!/usr/bin/env python3
+import os, sys
+data = sys.stdin.read()
+with open(os.environ["SEEN"], "w") as f:
+    f.write(data)
+print("read " + str(len(data)) + " bytes on stdin")
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_BRAIN", brain)
+	t.Setenv("SELF_BRAIN_ID", "the recorder brain")
+	t.Setenv("SELF_LLM_STUB", "")
+	// and don't let a SELF_LLM_API_KEY leak in via .brain-key
+
+	home := t.TempDir()
+	// lay down a small, recognizable log: a declaration + a couple of events
+	decl := newEvent("command.declared", json.RawMessage(`{"name":"note","description":"take a note","event":{"name":"note.taken","fields":{"title":"string"}}}`))
+	if err := appendEvent(home, &decl); err != nil {
+		t.Fatal(err)
+	}
+	msg := newEvent("note.taken", json.RawMessage(`{"title":"water the plants"}`))
+	if err := appendEvent(home, &msg); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SEEN", seen)
+	res, err := pipeBrain(home, "think", "what do you see?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Response, "bytes on stdin") {
+		t.Fatalf("brain did not run / record: %q", res.Response)
+	}
+
+	fed, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := string(fed)
+
+	// the brief names the instance and points the brain at where to look
+	if !strings.Contains(brief, "# self — orientation brief") {
+		t.Fatalf("brief missing instance header:\n%s", brief)
+	}
+	if !strings.Contains(brief, "site/kernel.html") {
+		t.Fatalf("brief does not point the brain at kernel.html:\n%s", brief)
+	}
+	if !strings.Contains(brief, "note.taken") {
+		t.Fatalf("brief missing the note command's event:\n%s", brief)
+	}
+	if !strings.Contains(brief, "events.jsonl") {
+		t.Fatalf("brief does not point the brain at the raw log:\n%s", brief)
+	}
+
+	// and it is NOT the raw JSONL log: no event-object line with a `"seq":` key
+	if strings.Contains(brief, `"seq":`) {
+		t.Fatalf("brain was fed the raw log, not a brief:\n%s", brief)
+	}
+	// bounded: the brief is small relative to a grown log
+	if len(brief) > 4096 {
+		t.Fatalf("brief is %d bytes — not bounded", len(brief))
+	}
+}
+
+// TestStateBriefIsEmptyAndBounded pins the brief's shape at the two extremes:
+// an empty home yields an "empty log" line, and a home with many events still
+// produces a brief far smaller than the raw log — O(state), not O(history),
+// and crucially contains NO event-log digest, because the brief is pure
+// orientation: where the brain is, what exists, where to look for the rest.
+func TestStateBriefIsEmptyAndBounded(t *testing.T) {
+	empty := t.TempDir()
+	if b := stateBrief(empty); !strings.Contains(b, "Empty log") {
+		t.Fatalf("empty home brief = %q", b)
+	}
+
+	home := t.TempDir()
+	decl := newEvent("command.declared", json.RawMessage(`{"name":"note","description":"take a note","event":{"name":"note.taken","fields":{"title":"string"}}}`))
+	if err := appendEvent(home, &decl); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 500; i++ {
+		e := newEvent("note.taken", json.RawMessage(`{"title":"a note with a reasonably long title to make the log meaty"}`))
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := os.ReadFile(filepath.Join(home, "events.jsonl"))
+	brief := stateBrief(home)
+	if len(brief) >= len(raw) {
+		t.Fatalf("brief (%d) not smaller than the raw log (%d) — not O(state)", len(brief), len(raw))
+	}
+	// the orientation brief has NO event-log digest — no `seq` lines at all.
+	// the brain is pointed at events.jsonl if it needs the raw material.
+	if strings.Contains(brief, "seq ") {
+		t.Fatalf("brief contains a seq digest — not pure orientation:\n%s", brief)
+	}
+}

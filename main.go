@@ -300,8 +300,7 @@ func rehydrate(home string) error {
 			return err
 		}
 	}
-	renderKernelHTML(home)
-	refreshProjections(home)
+	refreshSite(home)
 	fmt.Fprintf(os.Stderr, "self: rehydrated %d capabilit(ies) from the log\n", len(order))
 	return nil
 }
@@ -322,6 +321,133 @@ func feedEvents(stdin io.WriteCloser, events []Event) {
 		}
 		stdin.Close()
 	}()
+}
+
+// feedText writes a plain-text string to a process's stdin and closes it. Used
+// for the brain, which receives an orientation brief — not the raw log — so it
+// reads where to look, then explores SELF_HOME itself with its own tools
+// instead of being force-fed a firehose of events.
+func feedText(stdin io.WriteCloser, text string) {
+	go func() {
+		io.WriteString(stdin, text)
+		stdin.Close()
+	}()
+}
+
+// stateBrief is the kernel's wake-up card for a brain: pure orientation, not a
+// log digest. It tells the brain where it is, what capabilities exist, and
+// where to look for the rest — and nothing else. The brain is expected to
+// explore SELF_HOME itself: read site/kernel.html for the full
+// self-description, site/*.html for the rendered state a human sees,
+// events.jsonl for the raw log, capabilities/ for the compiled scripts. The
+// kernel holds no internal state a brain cannot see on disk.
+//
+// A consequence: a brain that cannot inspect files under SELF_HOME — a plain
+// stdin/stdout API adapter with no tools — cannot do the job. The kernel's
+// seam is still a pipe, but a real brain needs a tool loop on its side of it.
+// The kernel does not sandbox or supply tools; isolating the brain's
+// exploration is the brain's own concern (a coding agent already has its own).
+//
+// The kernel materializes the brief to SELF_HOME/site/brief.md (see
+// renderBriefFile) so it is explorable on disk like every other piece of
+// state. Markdown on purpose — plain text to `cat`, rendered by the server
+// like any other .md file under site/.
+func stateBrief(home string) string {
+	events, err := readEvents(home)
+	if err != nil {
+		// a corrupt log is the kernel's failure, not the brain's; surface it
+		return fmt.Sprintf("# self — orientation brief\n\nInstance: `%s`\n\n**ERROR reading the log:** %s\n", home, err)
+	}
+	commands := map[string]commandDecl{}
+	projectors := map[string]projectorDecl{}
+	var cmdOrder, projOrder []string
+	for _, e := range events {
+		switch e.Name {
+		case "command.declared":
+			var d commandDecl
+			if json.Unmarshal(e.Payload, &d) == nil && d.Name != "" {
+				if _, ok := commands[d.Name]; !ok {
+					cmdOrder = append(cmdOrder, d.Name)
+				}
+				commands[d.Name] = d
+			}
+		case "projector.declared":
+			var d projectorDecl
+			if json.Unmarshal(e.Payload, &d) == nil && d.Name != "" {
+				if _, ok := projectors[d.Name]; !ok {
+					projOrder = append(projOrder, d.Name)
+				}
+				projectors[d.Name] = d
+			}
+		}
+	}
+
+	oneLine := func(s string) string {
+		return strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# self — orientation brief\n\n")
+	fmt.Fprintf(&b, "Instance: `%s`\n\n", home)
+	if len(events) == 0 {
+		b.WriteString("Empty log. Grow a seed: `self grow <seed>` (try `seeds/journal`).\n")
+		return b.String()
+	}
+
+	fmt.Fprintf(&b, "## read this first\n\n")
+	fmt.Fprintf(&b, "- `site/kernel.html` — the instance's full self-description (capabilities, the pipe contract, where things live).\n")
+	fmt.Fprintf(&b, "- `site/*.html` — rendered state, the same pages a human sees.\n")
+	fmt.Fprintf(&b, "- `events.jsonl` — the whole append-only log (the only truth).\n")
+	fmt.Fprintf(&b, "- `capabilities/` — the compiled scripts currently installed.\n\n")
+
+	if len(projOrder) > 0 {
+		b.WriteString("## projections (current state)\n\n")
+		for _, n := range projOrder {
+			d := projectors[n]
+			consumes := strings.Join(d.Consumes, ", ")
+			if consumes == "" {
+				consumes = "—"
+			}
+			fmt.Fprintf(&b, "- `/%s` — %s (consumes %s) → `site/%s.html`\n",
+				n, oneLine(d.Description), consumes, n)
+		}
+		b.WriteString("\n")
+	}
+	if len(cmdOrder) > 0 {
+		b.WriteString("## commands (verbs — `self run <name> …`)\n\n")
+		for _, n := range cmdOrder {
+			d := commands[n]
+			fmt.Fprintf(&b, "- `%s` — %s (emits %s)\n", n, oneLine(d.Description), d.Event.Name)
+		}
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "%d events in the log. Explore for the rest.\n", len(events))
+	return b.String()
+}
+
+// renderBriefFile writes the orientation brief to SELF_HOME/site/brief.md,
+// the kernel-resident surface a brain reads. Called alongside renderKernelHTML
+// whenever the log changes, and re-run immediately before every brain ask (see
+// freshBrief) so a brain never reads stale orientation. Rendered by the server
+// like any other markdown file under site/.
+func renderBriefFile(home string) {
+	siteDir := filepath.Join(home, "site")
+	os.MkdirAll(siteDir, 0755)
+	os.WriteFile(filepath.Join(siteDir, "brief.md"), []byte(stateBrief(home)), 0644)
+}
+
+// freshBrief writes the orientation brief to disk and returns the exact bytes
+// the kernel just wrote. Used by pipeBrain so the brain is always fed the
+// current state of the instance — never a cached file that could grow stale if
+// the log changed outside the normal refresh path (e.g. a CLI `run` between a
+// serve request and a brain call). The disk is the source; the brain can read
+// the same file itself to explore. Write then read back would be redundant —
+// stateBrief is deterministic, so the bytes written are the bytes returned.
+func freshBrief(home string) string {
+	brief := stateBrief(home)
+	siteDir := filepath.Join(home, "site")
+	os.MkdirAll(siteDir, 0755)
+	os.WriteFile(filepath.Join(siteDir, "brief.md"), []byte(brief), 0644)
+	return brief
 }
 
 // pipeProcess runs an executable as a Unix pipeline node — the one shape the
@@ -399,8 +525,7 @@ func ingest(home string, evs []Event) error {
 	if n := compileDeclarations(c, home, evs); n > 0 {
 		fmt.Fprintf(os.Stderr, "self: self-improved — %d capabilit(ies) compiled\n", n)
 	}
-	renderKernelHTML(home)
-	refreshProjections(home)
+	refreshSite(home)
 	return nil
 }
 
@@ -530,6 +655,20 @@ func refreshProjections(home string) {
 	}
 }
 
+// refreshSite writes every kernel-resident view of state and re-runs every
+// declared projector. Call this whenever the log changes: it keeps disk in
+// lockstep with the log so a brain (or a human, or an external agent) reading
+// files under SELF_HOME/site/ sees current state, never a stale view. There is
+// no internal state the kernel renders into a brain prompt that is not on disk.
+// The brief is written LAST, after the projections, so a brain that reads the
+// brief and then follows its pointers to site/*.html always finds pages at
+// least as fresh as the brief that sent it there.
+func refreshSite(home string) {
+	renderKernelHTML(home)
+	refreshProjections(home)
+	renderBriefFile(home)
+}
+
 // ──────────────────────────────── the brain ─────────────────────────────────
 //
 // The kernel holds no model. Every ask — think, heartbeat, grow, and each
@@ -587,7 +726,9 @@ The kernel sets SELF_HOME on every script. Any language with a shebang works; us
 // there, under its own signature. It also emits Markdown by habit; the pipe
 // tolerates fences, but one clean JSON object per line is what actually wants
 // ingesting. Woven into every ask that expects events (grow, heartbeat, compile).
-const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To add capabilities, print declaration events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing.`
+const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To add capabilities, print declaration events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing.
+
+WHAT YOU ARE GIVEN — your stdin is an orientation brief: where you are, what capabilities exist, where to look for the rest. That is all. To do your job you must EXPLORE the instance surface with your tools: read ` + "`SELF_HOME/site/kernel.html`" + ` for the full self-description, ` + "`SELF_HOME/site/*.html`" + ` for the rendered state a human sees, ` + "`SELF_HOME/events.jsonl`" + ` for the raw log, ` + "`SELF_HOME/capabilities/`" + ` for the compiled scripts. The kernel holds no internal state you cannot see on disk. A brain without tools to read those files cannot do this job.`
 
 // ────────────────────────────── the compiler ────────────────────────────────
 
@@ -607,15 +748,17 @@ func (c *llm) compileProjector(d projectorDecl) (string, error) {
 
 // compileViaBrain hands a compile ask to the plugged brain through the same
 // seam as every other ask. The declaration (its optional implementation
-// reference included) rides in the prompt; the log rides on stdin; the answer
-// is one script.authored event. During a grow the whole intent rides along too,
-// so each piece is compiled toward the same product. The kernel still installs
-// and signs — a brain authors bytes, only the kernel makes them real.
+// reference included) rides in the prompt; an orientation brief rides on stdin
+// (the brain inspects SELF_HOME itself for depth — site/*.html, events.jsonl,
+// capabilities/); the answer is one script.authored event. During a grow the
+// whole intent rides along too, so each piece is compiled toward the same
+// product. The kernel still installs and signs — a brain authors bytes, only
+// the kernel makes them real.
 // compilePrompt is the text of a compile ask: author one script honoring the
 // pipe contract, test it with your own tools, and hand back exactly one
 // script.authored line — the kernel does the installing and signing.
 func compilePrompt(intent, typ, name, decl string) string {
-	prompt := fmt.Sprintf(`COMPILE one capability for this instance. Author a complete executable script (any language with a shebang, standard libraries only) honoring the pipe contract, adapted to this instance's log (on your stdin as JSONL).
+	prompt := fmt.Sprintf(`COMPILE one capability for this instance. Author a complete executable script (any language with a shebang, standard libraries only) honoring the pipe contract, adapted to this instance's state (a brief on your stdin; the full log is at SELF_HOME/events.jsonl if you need it).
 
 %s
 
@@ -907,8 +1050,7 @@ func applyDeclarations(home string, res *brainResult) {
 		c := newLLM(home)
 		n := compileDeclarations(c, home, evs)
 		fmt.Fprintf(os.Stderr, "self: grew %d capabilit(ies)\n", n)
-		renderKernelHTML(home)
-		refreshProjections(home)
+		refreshSite(home)
 	}
 }
 
@@ -1373,6 +1515,208 @@ addEventListener("DOMContentLoaded", tick);
 })();
 </script>`
 
+// renderMarkdown is a small, stdlib-only Markdown→HTML converter for the
+// kernel's own .md artifacts (brief.md, and any plugin a brain writes as
+// markdown). It is deliberately minimal — headings, unordered lists, fenced
+// code blocks, blank-line paragraphs, and inline [text](url), `code`,
+// **bold**, *italic* — enough to render the kernel's prose cleanly. It is not
+// a feature-complete Markdown parser; the contract is "graceful rendering of
+// kernel markdown in a browser", not CommonMark conformance. Projectors
+// authored by the brain stay bare semantic HTML (their contract); markdown
+// here is for the kernel-resident surfaces a brain reads and a human might
+// glance at. Escapes all input first; emits no inline styles or scripts.
+func renderMarkdown(src []byte) []byte {
+	lines := strings.Split(string(src), "\n")
+	var out strings.Builder
+	out.WriteString("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"></head><body>\n")
+	var inList, inCode bool
+	var para []string
+	flushPara := func() {
+		if len(para) == 0 {
+			return
+		}
+		out.WriteString("<p>")
+		out.WriteString(strings.Join(para, "<br>"))
+		out.WriteString("</p>\n")
+		para = para[:0]
+	}
+	closeList := func() {
+		if inList {
+			out.WriteString("</ul>\n")
+			inList = false
+		}
+	}
+	closeCode := func() {
+		if inCode {
+			out.WriteString("</code></pre>\n")
+			inCode = false
+		}
+	}
+	for _, raw := range lines {
+		line := raw
+		// fenced code blocks — ``` opens and closes
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			if inCode {
+				closeCode()
+			} else {
+				flushPara()
+				closeList()
+				out.WriteString("<pre><code>")
+				inCode = true
+			}
+			continue
+		}
+		if inCode {
+			out.WriteString(html.EscapeString(line))
+			out.WriteString("\n")
+			continue
+		}
+		t := strings.TrimSpace(line)
+		if t == "" {
+			flushPara()
+			closeList()
+			continue
+		}
+		if strings.HasPrefix(t, "# ") {
+			flushPara()
+			closeList()
+			out.WriteString("<h1>" + renderInlineMD(t[2:]) + "</h1>\n")
+			continue
+		}
+		if strings.HasPrefix(t, "## ") {
+			flushPara()
+			closeList()
+			out.WriteString("<h2>" + renderInlineMD(t[3:]) + "</h2>\n")
+			continue
+		}
+		if strings.HasPrefix(t, "### ") {
+			flushPara()
+			closeList()
+			out.WriteString("<h3>" + renderInlineMD(t[4:]) + "</h3>\n")
+			continue
+		}
+		if strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") {
+			flushPara()
+			if !inList {
+				out.WriteString("<ul>\n")
+				inList = true
+			}
+			out.WriteString("<li>" + renderInlineMD(t[2:]) + "</li>\n")
+			continue
+		}
+		closeList()
+		para = append(para, renderInlineMD(t))
+	}
+	flushPara()
+	closeList()
+	closeCode()
+	out.WriteString("</body></html>\n")
+	return []byte(out.String())
+}
+
+// renderInlineMD handles a single line's inline markdown: `[text](url)`,
+// `code`, **bold**, *italic*. Input is escaped first; patterns are applied
+// after, so URLs never reach the raw HTML.
+func renderInlineMD(s string) string {
+	s = html.EscapeString(s)
+	// [text](url) → <a href="url" rel="noopener">text</a>
+	for {
+		i := strings.Index(s, "[")
+		if i < 0 {
+			break
+		}
+		j := strings.Index(s[i:], "](")
+		if j < 0 {
+			break
+		}
+		j += i
+		k := strings.Index(s[j+2:], ")")
+		if k < 0 {
+			break
+		}
+		text := s[i+1 : j]
+		url := s[j+2 : j+2+k]
+		s = s[:i] + `<a href="` + url + `" rel="noopener">` + text + "</a>" + s[j+3+k:]
+	}
+	// `code` — inline backtick
+	for {
+		i := strings.Index(s, "`")
+		if i < 0 {
+			break
+		}
+		j := strings.Index(s[i+1:], "`")
+		if j < 0 {
+			break
+		}
+		j += i + 1
+		s = s[:i] + "<code>" + s[i+1:j] + "</code>" + s[j+1:]
+	}
+	// **bold**
+	s = strings.ReplaceAll(s, "**", "\x00BOLD\x00") // placeholder to avoid ** collisions
+	for {
+		i := strings.Index(s, "\x00BOLD\x00")
+		if i < 0 {
+			break
+		}
+		j := strings.Index(s[i+6:], "\x00BOLD\x00")
+		if j < 0 {
+			break
+		}
+		j += i + 6
+		s = s[:i] + "<strong>" + s[i+6:j] + "</strong>" + s[j+6:]
+	}
+	// *italic*
+	for {
+		i := strings.Index(s, "*")
+		if i < 0 {
+			break
+		}
+		j := strings.Index(s[i+1:], "*")
+		if j < 0 {
+			break
+		}
+		j += i + 1
+		s = s[:i] + "<em>" + s[i+1:j] + "</em>" + s[j+1:]
+	}
+	return s
+}
+
+// siteFile resolves a path under SELF_HOME/site/ to a file by name, looking for
+// <name>.html, <name>.md, and <name>.txt in order. It returns the file path and
+// the matched extension, or "" if no such file. Used by the server and by
+// `self show` so a brain (or human) can reach any on-disk artifact by bare name.
+func siteFile(home, name string) (path, ext string) {
+	for _, e := range []string{".html", ".md", ".txt"} {
+		p := filepath.Join(home, "site", name+e)
+		if fileExists(p) {
+			return p, e
+		}
+	}
+	return "", ""
+}
+
+// serveSiteFile writes a site file to an HTTP response, dispatching by
+// extension: .md is rendered to HTML and injected through the shell (so a
+// markdown artifact is a first-class page, themed and progressive-enhanced),
+// .html goes through the shell as-is, and .txt is served verbatim as text/plain
+// (the shell doesn't touch it — plain text is honest about what it is).
+func serveSiteFile(w http.ResponseWriter, r *http.Request, path, ext string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	switch ext {
+	case ".md":
+		writePage(w, r, renderMarkdown(data))
+	case ".html":
+		writePage(w, r, data)
+	case ".txt":
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write(data)
+	}
+}
+
 func injectShell(page []byte, theme string) []byte {
 	head := themeCSS(theme) + shellScript
 	if i := bytes.Index(page, []byte("<head>")); i >= 0 {
@@ -1409,8 +1753,7 @@ func cmdServe(home, port string) error {
 	if port == "" {
 		port = "7777"
 	}
-	renderKernelHTML(home)
-	refreshProjections(home)
+	refreshSite(home)
 
 	mux := http.NewServeMux()
 
@@ -1428,6 +1771,7 @@ func cmdServe(home, port string) error {
 		}
 		if name == "kernel" {
 			renderKernelHTML(home)
+			renderBriefFile(home)
 			page, err := os.ReadFile(filepath.Join(home, "site", "kernel.html"))
 			if err != nil {
 				http.Error(w, err.Error(), 500)
@@ -1443,6 +1787,18 @@ func cmdServe(home, port string) error {
 				return
 			}
 			writePage(w, r, page)
+			return
+		}
+		// Any on-disk site artifact by bare name: brief, kernel, etc.
+		// .md is rendered to HTML through the shell, .html through the shell
+		// as-is, .txt served verbatim as text/plain. A brain (or human, or
+		// external agent) can reach any kernel-resident surface by name.
+		if p, ext := siteFile(home, name); p != "" {
+			if name == "brief" {
+				renderBriefFile(home) // always fresh when served
+				p, ext = siteFile(home, "brief")
+			}
+			serveSiteFile(w, r, p, ext)
 			return
 		}
 		http.FileServer(http.Dir(filepath.Join(home, "site"))).ServeHTTP(w, r)
@@ -1617,9 +1973,9 @@ print('<button>save brain</button>')
 print('</form>')
 print('<h2>common choices</h2>')
 print('<ul>')
-print('<li><strong>OpenCode:</strong> provider <code>opencode</code>, model optional. Uses bundled <code>examples/brain-opencode</code>.</li>')
-print('<li><strong>OpenAI-compatible:</strong> provider <code>openai</code> or <code>custom</code>, base URL, model, key. Uses bundled <code>examples/brain-openai</code>.</li>')
-print('<li><strong>Any process:</strong> put the full command in command; it receives SELF_ASK, log stdin, prompt argv.</li>')
+print('<li><strong>OpenCode (recommended):</strong> provider <code>opencode</code>, model optional. Uses bundled <code>examples/brain-opencode</code>. Tool-capable — can inspect SELF_HOME itself, which the contract requires.</li>')
+print('<li><strong>OpenAI-compatible (reference only):</strong> provider <code>openai</code> or <code>custom</code>, base URL, model, key. Uses bundled <code>examples/brain-openai</code>, which illustrates the wire shape but has no tool loop of its own — incomplete by spec; do not expect real capabilities from it.</li>')
+print('<li><strong>Any process:</strong> put the full command in command; it receives SELF_ASK, an orientation brief on stdin, the prompt as argv. A brain without tools to inspect SELF_HOME cannot do the job.</li>')
 print('</ul>')
 print('<p><a href="/">Back to home</a></p>')
 print('</body></html>')
@@ -1662,8 +2018,7 @@ func installBundledSeed(home, name string) error {
 	if err := ingest(home, []Event{newEvent("brain.configured", json.RawMessage(`{"provider":"","command":"","base_url":"","model":"","key_set":false}`))}); err != nil {
 		return err
 	}
-	renderKernelHTML(home)
-	refreshProjections(home)
+	refreshSite(home)
 	return nil
 }
 
@@ -1743,8 +2098,7 @@ func cmdGrow(home, seedDir string) error {
 	if err := appendEvent(home, &se); err != nil {
 		return err
 	}
-	renderKernelHTML(home)
-	refreshProjections(home)
+	refreshSite(home)
 	fmt.Printf("grew %q: %d capabilit(ies) from intent — %s\n", name, grown, res.Response)
 	return nil
 }
@@ -1808,7 +2162,7 @@ func cmdShare(home, name string) error {
 	if err := appendEvent(home, &e); err != nil {
 		return err
 	}
-	refreshProjections(home)
+	refreshSite(home)
 	fmt.Fprintf(os.Stderr, "self: shared %q — %d event(s) of intent and evidence\n", name, len(seed))
 	return nil
 }
@@ -1909,14 +2263,23 @@ func cmdThink(home, prompt string) error {
 
 // pipeBrain is the ONE seam through which the kernel asks for intelligence —
 // think, heartbeat, grow, and compile all pass here. It spawns $SELF_BRAIN with
-// the ask's kind in $SELF_ASK, the prompt as the last argument, and the whole
-// log as JSONL on stdin. The parse is tolerant on purpose: JSON lines with a
-// name are events — script.authored answers a compile, chat.message carries the
-// reply, anything else is a declaration — and bare prose joins the reply. So any
-// process that can read stdin and print plugs in whole: a local model, an API
-// loop, a coding agent, a human. The kernel cannot tell the difference, by
-// construction. With no brain plugged in, SELF_LLM_STUB=1 supplies a
-// deterministic offline one; otherwise the ask fails with a hint.
+// the ask's kind in $SELF_ASK, the prompt as the last argument, and a freshly
+// written orientation brief from SELF_HOME/site/brief.md on stdin: where the
+// brain is, what capabilities exist, and where to look for the rest — nothing
+// more. The brief is on disk, like every other piece of state, so a tool-using
+// brain can read it itself (cat SELF_HOME/site/brief.md) and the kernel has no
+// internal state a brain cannot see. The brief is recomputed before every ask
+// so a brain never reads stale orientation — the kernel writes the file, then
+// reads back exactly what it wrote, and feeds that. A real brain MUST inspect
+// SELF_HOME itself (site/*.html, events.jsonl, capabilities/) with its own
+// tools: the brief is a wake-up card, not a context dump, and a process without
+// that exploration ability is not a complete brain. The kernel's seam is still
+// a pipe; the tool loop is the brain's concern, never the kernel's. The parse
+// of the brain's stdout is tolerant on purpose: JSON lines with a name are
+// events — script.authored answers a compile, chat.message carries the reply,
+// anything else is a declaration — and bare prose joins the reply. With no
+// brain plugged in, SELF_LLM_STUB=1 supplies a deterministic offline one;
+// otherwise the ask fails with a hint.
 func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	exe := brainExe(home)
 	if exe == "" {
@@ -1925,10 +2288,7 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 		}
 		return nil, fmt.Errorf("no brain is plugged in — %s", brainHint)
 	}
-	current, err := readEvents(home)
-	if err != nil {
-		return nil, err
-	}
+	brief := freshBrief(home)
 	bin, argv := brainCommand(exe, prompt)
 	cmd := exec.Command(bin, argv...)
 	cmd.Env = brainEnv(home, kind)
@@ -1945,7 +2305,7 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start brain %s: %w (%s)", filepath.Base(bin), err, brainHint)
 	}
-	feedEvents(stdin, current)
+	feedText(stdin, brief)
 	res := &brainResult{Declarations: []map[string]any{}}
 	var prose []string
 	sc := bufio.NewScanner(stdout)
@@ -1989,7 +2349,7 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	return res, nil
 }
 
-const brainHint = `plug a brain: SELF_BRAIN=<any executable, e.g. "claude -p", or examples/brain-openai for an OpenAI-compatible endpoint>, or SELF_LLM_STUB=1 for offline stubs`
+const brainHint = `plug a brain: SELF_BRAIN=<a tool-capable executable, e.g. "claude -p" or examples/brain-opencode>; the brain must inspect SELF_HOME itself. See examples/README.md. Or SELF_LLM_STUB=1 for offline stubs.`
 
 // brainCommand splits a configured executable into command and args, appending
 // the prompt as the last argument.
@@ -2075,6 +2435,7 @@ func heartbeatContext(events []Event) string {
 func cmdShow(home, name string) error {
 	if name == "kernel" {
 		renderKernelHTML(home)
+		renderBriefFile(home)
 		page, err := os.ReadFile(filepath.Join(home, "site", "kernel.html"))
 		if err != nil {
 			return err
@@ -2082,12 +2443,42 @@ func cmdShow(home, name string) error {
 		os.Stdout.Write(page)
 		return nil
 	}
-	page, err := runProjection(home, name)
-	if err != nil {
-		return err
+	if name == "brief" {
+		renderBriefFile(home)
+		data, err := os.ReadFile(filepath.Join(home, "site", "brief.md"))
+		if err != nil {
+			return err
+		}
+		os.Stdout.Write(data)
+		return nil
 	}
-	os.Stdout.Write(page)
-	return nil
+	// a live projector takes precedence over a stale on-disk file of the
+	// same name — projectors are the log's pure replay, re-run live.
+	if p, _ := scriptPath(home, "projector", name); fileExists(p) {
+		page, err := runProjection(home, name)
+		if err != nil {
+			return err
+		}
+		os.Stdout.Write(page)
+		return nil
+	}
+	// bare name → on-disk artifact (.html, .md, .txt) under site/, if present
+	if p, ext := siteFile(home, name); p != "" {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		// for .md, render to stdout as HTML the way the server would (minus
+		// the shell); for .html/.txt, write verbatim. Show is for humans and
+		// agents reading the same surface the server serves.
+		if ext == ".md" {
+			os.Stdout.Write(renderMarkdown(data))
+		} else {
+			os.Stdout.Write(data)
+		}
+		return nil
+	}
+	return fmt.Errorf("projection %q not found", name)
 }
 
 // ─────────────────────────────────── main ───────────────────────────────────
@@ -2122,6 +2513,7 @@ func ensureHome(home string) error {
 		return err
 	}
 	renderKernelHTML(home)
+	renderBriefFile(home)
 	fmt.Fprintf(os.Stderr, "self: new home %s\n", home)
 	return nil
 }
@@ -2159,10 +2551,15 @@ environment:
                     to pin a shared instance, e.g. export SELF_HOME=~/.self)
 
   plug a brain (one seam; think, heartbeat, grow, and compile all pass through it):
-  SELF_BRAIN        any executable, e.g. "claude -p" — it gets the ask's kind in
-                    $SELF_ASK, the prompt as its last argument, and the whole log
-                    as JSONL on stdin; it answers in event JSONL, prose tolerated.
-                    See examples/brain-openai for an OpenAI-compatible adapter.
+  SELF_BRAIN        a tool-capable executable, e.g. "claude -p" or
+                    examples/brain-opencode — it gets the ask's kind in
+                    $SELF_ASK, the prompt as its last argument, and an
+                    orientation brief on stdin; it answers in event JSONL,
+                    prose tolerated. The brain must inspect SELF_HOME itself
+                    (site/*.html, events.jsonl, capabilities/) with its own
+                    tools. See examples/README.md. examples/brain-openai is a
+                    reference adapter that illustrates the wire shape but is
+                    incomplete by spec (no tool loop).
   SELF_LLM_STUB     "1" → offline stub scripts (no brain, no network)
   SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
                     (default: the brain executable, or "stub (no LLM)")
@@ -2179,10 +2576,17 @@ Brain process contract
 
   The same seam handles think, heartbeat, grow, and compile.
 
-  SELF_BRAIN   executable to spawn, optionally with args, for example "claude -p"
+  SELF_BRAIN   executable to spawn, optionally with args. A brain MUST be able to
+              inspect files under SELF_HOME (site/*.html, events.jsonl,
+              capabilities/) with its own tools — a plain stdin/stdout adapter
+              with no file access cannot do the job. Coding-agent brains
+              (opencode run, claude -p) already have such tools.
   SELF_ASK     request kind: think | heartbeat | grow | compile
   argv         the prompt is passed as the last argument
-  stdin        the full event log as JSONL: {id, seq, name, occurred_at, payload}
+  stdin        an orientation brief (plain text): where the brain is, what
+               capabilities exist, and where to look for the rest. The brain is
+               expected to explore SELF_HOME itself for depth — this is a
+               wake-up card, not a context dump.
   stdout       event JSONL; non-JSON lines are tolerated as prose reply text
 
 Brain reply events

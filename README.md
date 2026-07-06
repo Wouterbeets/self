@@ -3,11 +3,11 @@
 `self` is a small, local-first runtime. It keeps one append-only event log as
 its only state, and rebuilds every view — and every capability — from that log.
 Capabilities are not shipped as code. You describe what you want, and a brain of
-your choosing — any process, from `claude -p` to a script hitting an API —
-writes the script for it, on your machine. The kernel itself holds no model: it
-only installs each generated script under a signature made with a key that never
-leaves the instance, so the whole system can be rebuilt from the log alone, with
-no model and no network.
+your choosing — a tool-capable coding agent like `opencode run` or `claude -p` —
+writes the script for it, on your machine, after inspecting the instance's
+rendered state. The kernel itself holds no model: it only installs each generated
+script under a signature made with a key that never leaves the instance, so the
+whole system can be rebuilt from the log alone, with no model and no network.
 
 The point is durable, inspectable state for an LLM agent: one log, replayed into
 every view, with a record of who generated each script and the ability to
@@ -177,8 +177,12 @@ SELF_LLM_STUB=1            # or deterministic offline stubs (testing, demos)
 
 To drive an OpenAI-compatible endpoint, point `SELF_BRAIN` at the
 [`examples/brain-openai`](examples/brain-openai) adapter — a stdlib-only process
-that speaks the contract below. It used to live inside the kernel; it is a
-drop-in file now, so the core stays model-free.
+that illustrates the contract's wire shape. It is intentionally incomplete: it
+makes a single completion against the brief without inspecting `SELF_HOME`
+itself, so it cannot do the exploration a real brain needs. Use it to understand
+the seam, then plug a tool-capable agent (`examples/brain-opencode`, or
+`claude -p`) for real capabilities. It used to live inside the kernel; it is a
+reference file now, so the core stays model-free.
 
 The stub path is deliberately dumb but complete: `think` returns a fixed reply,
 `grow` declares a minimal command + projection from names in `intent.md`, and
@@ -191,7 +195,12 @@ The `SELF_BRAIN` process contract:
 |-------------|---------------------------------------------------------------|
 | `$SELF_ASK` | request kind: `think` \| `heartbeat` \| `grow` \| `compile`   |
 | last argv   | the prompt (for `compile`, it carries the declaration to build)|
-| stdin       | the full event log, JSONL                                      |
+| stdin       | an **orientation brief** (plain text): where the brain is,    |
+|             | what capabilities exist, and where to look for the rest. This  |
+|             | is a wake-up card, not a context dump. The brain MUST inspect  |
+|             | `SELF_HOME` itself with its own tools — `site/*.html`,         |
+|             | `events.jsonl`, `capabilities/` — to do its job. A process    |
+|             | without that exploration ability is not a complete brain.      |
 | stdout      | event JSONL; non-JSON lines are collected as the text reply    |
 
 So a whole brain is any program that switches on `$SELF_ASK` and prints events:
@@ -199,21 +208,26 @@ So a whole brain is any program that switches on `$SELF_ASK` and prints events:
 ```python
 #!/usr/bin/env python3
 import os, sys, json
-log    = sys.stdin.read()          # the event log, JSONL — read it or not
+brief  = sys.stdin.read()         # an orientation brief, plain text — where to look
 ask    = os.environ["SELF_ASK"]    # think | heartbeat | grow | compile
-prompt = sys.argv[-1]              # for compile, this is the declaration to build
+prompt = sys.argv[-1]             # for compile, this is the declaration to build
+# A real brain then reads SELF_HOME/site/kernel.html, events.jsonl, etc. itself.
 
 if ask == "compile":               # author the script the declaration asked for
     script = "#!/bin/sh\necho '{\"name\":\"pinged\",\"payload\":{}}'\n"
     print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
 else:                              # think/heartbeat/grow: prose + optional declarations
-    print("looked at the log; nothing to add.")   # non-JSON line → the text reply
+    print("explored the instance; nothing to add.")  # non-JSON line → the text reply
 ```
 
 `command.declared` / `projector.declared` add capabilities; `script.authored`
-answers a `compile`. Any process that reads stdin and prints JSON is a complete
-brain, compiler included; its receipts are signed with `SELF_BRAIN_ID` as the
-recorded author. `claude -p` is the same shape with a real model behind it.
+answers a `compile`. The kernel's seam is a pipe, but a brain that cannot
+inspect files under `SELF_HOME` (`site/*.html`, `events.jsonl`,
+`capabilities/`) cannot do the job — the orientation brief on stdin is a
+wake-up card, not a context dump. A tool-capable coding agent (`opencode run`,
+`claude -p`) already has the tools to explore; a plain API adapter without a
+tool loop of its own is incomplete by spec. Receipts are signed with
+`SELF_BRAIN_ID` as the recorded author.
 
 ## Capability exchange
 
@@ -270,8 +284,11 @@ passes `SELF_LLM_URL`, `SELF_LLM_API_KEY`, and `SELF_LLM_MODEL` to it.
 - `main_test.go` — the pinned invariants: log semantics, offline runtime
   generation, the forged-receipt gate, receipt provenance, share/adopt
   independence, the pluggable brain, and byte-stable reconstruction.
-- `examples/` — drop-in brains that plug in through `SELF_BRAIN`, starting with
-  `brain-openai` for OpenAI-compatible endpoints. Not part of the kernel.
+- `examples/` — brain adapters that plug in through `SELF_BRAIN`.
+  `brain-opencode` is a working tool-capable brain (it delegates to
+  `opencode run`, which can inspect `SELF_HOME`); `brain-openai` is a reference
+  adapter that illustrates the contract's wire shape but is incomplete by spec
+  (no tool loop of its own). Not part of the kernel.
 - `demo.sh` — the offline, no-brain walkthrough of the loop.
 - `seeds/settings` — the first trusted seed: configure a brain from the browser
   without putting API keys in the log.

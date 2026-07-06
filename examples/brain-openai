@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
-"""brain-openai — a drop-in SELF_BRAIN for any OpenAI-compatible endpoint.
+"""brain-openai — a reference SELF_BRAIN adapter for any OpenAI-compatible endpoint.
 
-self's kernel holds no model. A brain is any process honoring the contract:
+self's kernel holds no model. A brain is a process honoring the contract:
 
     $SELF_ASK   the request kind: think | heartbeat | grow | compile
     argv[-1]    the prompt
-    stdin       the whole event log as JSONL
+    stdin       an orientation brief (plain text): where the brain is, what
+                capabilities exist, where to look for the rest. The brain is
+                expected to explore SELF_HOME itself for depth (site/*.html,
+                events.jsonl, capabilities/) — this is a wake-up card, not a
+                context dump.
     stdout      event JSONL (one {name, payload} per line); bare prose is the reply
 
-This adapter is that process for an OpenAI-compatible chat endpoint. It uses only
-the Python standard library, so there is nothing to install. Point self at it:
+This adapter illustrates the contract SHAPE for an OpenAI-compatible chat
+endpoint. It is NOT a complete brain: it makes a single completion with the
+brief as context and answers, without inspecting SELF_HOME itself. A real brain
+needs a tool loop (read files, run candidate scripts, explore the rendered
+state) to do what the kernel asks. Use it to understand the wire format; for
+real capabilities, plug a tool-capable coding agent (examples/brain-opencode or
+`claude -p`). It uses only the Python standard library, so there is nothing to
+install. Point self at it:
 
     export SELF_BRAIN="$PWD/examples/brain-openai"
     export SELF_LLM_URL=http://127.0.0.1:8080     # any /v1/chat/completions server
@@ -39,18 +49,18 @@ PIPE_CONTRACT = (
 )
 
 COMPILE_SYSTEM = (
-    "You are the self compiler. You are given ONE capability declaration and the "
-    "instance's event log. Author a single complete executable script (with a "
-    "shebang, standard libraries only) that honors this pipe contract:\n\n"
+    "You are the self compiler. You are given ONE capability declaration and a "
+    "orientation brief for the instance. Author a single complete executable script "
+    "(with a shebang, standard libraries only) that honors this pipe contract:\n\n"
     + PIPE_CONTRACT
     + "\n\nProjectors must emit bare semantic HTML with no CSS or JavaScript — the "
     "kernel injects a shared shell at serve time. If the declaration carries an "
-    '"implementation" from another instance, adapt it to this log; never copy it '
-    "blindly. Reply with the script and nothing else — no prose, no code fences."
+    '"implementation" from another instance, adapt it to this instance; never copy '
+    "it blindly. Reply with the script and nothing else — no prose, no code fences."
 )
 
 BRAIN_SYSTEM = (
-    "You are this instance's brain. You read the event log and answer the prompt. "
+    "You are this instance's brain. You read the orientation brief and answer the prompt. "
     "Reply in plain prose. To ADD a capability, additionally emit declaration "
     "events, one compact JSON object per line, exactly in these shapes:\n"
     '  {"name":"command.declared","payload":{"name":"note","description":"...",'
@@ -106,11 +116,11 @@ def emit(name, payload):
 def main():
     ask = os.environ.get("SELF_ASK", "think")
     prompt = sys.argv[-1] if len(sys.argv) > 1 else sys.stdin.readline().strip()
-    log = sys.stdin.read()  # the event log — passed to the model as context
+    brief = sys.stdin.read()  # the orientation brief — passed to the model as context
 
     context = ""
-    if log.strip():
-        context = "\n\n--- EVENT LOG (JSONL) ---\n" + log
+    if brief.strip():
+        context = "\n\n--- ORIENTATION BRIEF ---\n" + brief
 
     if ask == "compile":
         script = strip_fences(call_model(COMPILE_SYSTEM, prompt + context))
