@@ -1,0 +1,10 @@
+/* grove — the warm default: paper background, serif headings, soft rounded
+   cards. The look self ships with. */
+:root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#26231d;--muted:#7d7568;--line:#e5e0d5;--wash:#edeade;
+--accent:#2f6b4f;--accent-ink:#fff;--user-bg:#e3efe6;--user-line:#cbdfd2;--danger:#b3402e;
+--shadow:0 1px 3px rgba(60,50,30,.07);
+--font:system-ui,-apple-system,sans-serif;--head-font:Georgia,'Iowan Old Style',serif;--mono:ui-monospace,monospace;
+--radius:10px;--radius-sm:5px;--radius-msg:14px;--line-w:1px}
+@media (prefers-color-scheme:dark){:root{--bg:#16150f;--panel:#201e16;--ink:#e7e2d6;--muted:#948b7b;
+--line:#35322a;--wash:#2a2820;--accent:#69b98e;--accent-ink:#10231a;--user-bg:#233529;--user-line:#31513e;
+--danger:#e0755f;--shadow:0 1px 3px rgba(0,0,0,.4)}}

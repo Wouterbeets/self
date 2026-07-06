@@ -3,29 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
-
-// TestMain lets the test binary serve as the playpen's child half: the jail
-// re-execs /proc/self/exe, and under `go test` that is this binary, not self.
-// Without this dispatch the probe would recurse into the test suite itself.
-func TestMain(m *testing.M) {
-	if len(os.Args) == 4 && os.Args[1] == "__jail" {
-		if err := cmdJail(os.Args[2], os.Args[3]); err != nil {
-			fmt.Fprintf(os.Stderr, "jail: %s\n", err)
-			os.Exit(125)
-		}
-		os.Exit(0)
-	}
-	os.Exit(m.Run())
-}
 
 func TestLogAppendRead(t *testing.T) {
 	home := t.TempDir()
@@ -48,6 +34,50 @@ func TestLogAppendRead(t *testing.T) {
 		}
 		if e.ID == "" || e.OccurredAt.IsZero() {
 			t.Errorf("event %d missing id or timestamp", i)
+		}
+	}
+}
+
+// TestConcurrentAppendsDoNotCollide pins the single-writer property under
+// contention: many writers appending at once must still yield unique,
+// contiguous sequence numbers — the advisory log lock is what guarantees it.
+func TestConcurrentAppendsDoNotCollide(t *testing.T) {
+	home := t.TempDir()
+	const writers = 24
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e := newEvent("tick", json.RawMessage(`{}`))
+			if err := appendEvent(home, &e); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != writers {
+		t.Fatalf("got %d events, want %d — an append was lost to a race", len(events), writers)
+	}
+	seen := map[int]bool{}
+	for _, e := range events {
+		if seen[e.Seq] {
+			t.Fatalf("duplicate seq %d — two writers collided", e.Seq)
+		}
+		seen[e.Seq] = true
+	}
+	for i := 1; i <= writers; i++ {
+		if !seen[i] {
+			t.Fatalf("seq %d missing — sequence is not contiguous", i)
 		}
 	}
 }
@@ -209,79 +239,6 @@ func TestRehydrateTypeCollision(t *testing.T) {
 		if !fileExists(p) {
 			t.Fatalf("%s did not survive rehydration — receipts collided across types", p)
 		}
-	}
-}
-
-// TestPlaypen pins the containment contract of the brain's full-bash jail:
-// real execution inside, with the signing key absent, writes confined, and
-// the network dark. Where the platform cannot jail, the kernel must fall
-// back to the fail-closed read-only allowlist — never fail open.
-func TestPlaypen(t *testing.T) {
-	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "events.jsonl"),
-		[]byte(`{"seq":1,"name":"kernel.initialized","payload":{}}`+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".secret"), []byte("sacred"), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	// the fallback must refuse writes regardless of platform support
-	t.Setenv("SELF_SANDBOX", "0")
-	if p := newPlaypen(home); p != nil {
-		t.Fatal("SELF_SANDBOX=0 must disable the playpen")
-	}
-	if out := readOnlyBash(home, "rm events.jsonl"); !strings.Contains(out, "not on the read-only allowlist") {
-		t.Fatalf("fallback failed open: %q", out)
-	}
-	// and the signing key must not be readable through the fallback either:
-	// like the jail, it runs against a sanitized copy where .secret never is.
-	if out := readOnlyBash(home, "cat .secret"); strings.Contains(out, "sacred") {
-		t.Fatalf("fallback leaked the signing key: %q", out)
-	}
-	if out := readOnlyBash(home, "ls -a"); strings.Contains(out, ".secret") {
-		t.Fatalf("fallback exposed .secret in the working tree: %q", out)
-	}
-	t.Setenv("SELF_SANDBOX", "")
-
-	p := newPlaypen(home)
-	if p == nil {
-		t.Skip("no user-namespace support here — playpen unavailable, fallback covered above")
-	}
-	defer p.close()
-
-	// full bash, real execution, state that persists across calls
-	p.run("echo tested-by-execution > proof.txt")
-	if out := p.run("cat proof.txt"); !strings.Contains(out, "tested-by-execution") {
-		t.Fatalf("playpen state did not persist: %q", out)
-	}
-
-	// the instance copy is real and the log is readable
-	if out := p.run("grep -c kernel.initialized events.jsonl"); !strings.Contains(out, "1") {
-		t.Fatalf("instance copy missing the log: %q", out)
-	}
-
-	// the one file that must never enter, never enters
-	if out := p.run("ls -a /body"); strings.Contains(out, ".secret") {
-		t.Fatalf("the signing key entered the playpen: %q", out)
-	}
-
-	// writes cannot leave the jail
-	if out := p.run("touch /usr/escaped 2>/dev/null && echo ESCAPED || echo confined"); !strings.Contains(out, "confined") {
-		t.Fatalf("write escaped the jail: %q", out)
-	}
-
-	// the network namespace is dark
-	if out := p.run("(echo x > /dev/tcp/1.1.1.1/80) 2>/dev/null && echo ONLINE || echo dark"); !strings.Contains(out, "dark") {
-		t.Fatalf("the playpen reached the network: %q", out)
-	}
-
-	// and nothing done inside touched the real instance
-	if _, err := os.Stat(filepath.Join(home, "proof.txt")); err == nil {
-		t.Fatal("playpen write leaked into the real home")
-	}
-	if data, _ := os.ReadFile(filepath.Join(home, ".secret")); string(data) != "sacred" {
-		t.Fatal("the real secret was disturbed")
 	}
 }
 
@@ -728,21 +685,25 @@ func TestThemesShareOneClassContract(t *testing.T) {
 		"--radius", "--radius-sm", "--radius-msg", "--line-w"}
 	for name, th := range themes {
 		for _, v := range vars {
-			if !strings.Contains(th.skin, v+":") {
+			if !strings.Contains(th.css, v+":") {
 				t.Fatalf("theme %q does not define %s", name, v)
 			}
 		}
-		// A skin is variables only: it must not smuggle in structural rules.
-		if strings.Contains(th.skin, ".msg") || strings.Contains(th.skin, "box-sizing") {
-			t.Fatalf("theme %q leaks structural rules into its skin", name)
+		// A theme supplies variables (and at most a few layered rules); the box
+		// model lives once, in the structural layer, never in a theme.
+		if strings.Contains(th.css, "box-sizing") {
+			t.Fatalf("theme %q redefines the structural box model", name)
 		}
 		css := themeCSS(name)
-		if !strings.Contains(css, th.skin) || !strings.Contains(css, structuralCSS) {
-			t.Fatalf("themeCSS(%q) does not compose skin + structural layer", name)
+		if !strings.Contains(css, th.css) || !strings.Contains(css, structuralCSS) {
+			t.Fatalf("themeCSS(%q) does not compose theme + structural layer", name)
 		}
 	}
 	if len(themeOrder) != len(themes) {
 		t.Fatalf("themeOrder (%d) and themes (%d) disagree", len(themeOrder), len(themes))
+	}
+	if themeOrder[0] != defaultTheme {
+		t.Fatalf("themeOrder must list the default %q first, got %q", defaultTheme, themeOrder[0])
 	}
 	for _, name := range themeOrder {
 		if !validTheme(name) {
@@ -798,8 +759,8 @@ func TestInjectShellShape(t *testing.T) {
 	page := []byte("<!DOCTYPE html><html><head><title>t</title></head><body><h1>hi</h1></body></html>")
 
 	out := string(injectShell(page, "micro"))
-	if !strings.Contains(out, themes["micro"].skin) {
-		t.Fatal("micro skin not injected")
+	if !strings.Contains(out, themes["micro"].css) {
+		t.Fatal("micro theme not injected")
 	}
 	head := strings.Index(out, "</head>")
 	if i := strings.Index(out, "<style>"); i < 0 || i > head {
@@ -817,8 +778,8 @@ func TestInjectShellShape(t *testing.T) {
 		t.Fatal("injectShell dropped the page's own content")
 	}
 
-	// Unknown theme falls back to the default skin, never empty/arbitrary CSS.
-	if !strings.Contains(string(injectShell(page, "bogus")), themes[defaultTheme].skin) {
-		t.Fatal("unknown theme did not fall back to default skin")
+	// Unknown theme falls back to the default theme, never empty/arbitrary CSS.
+	if !strings.Contains(string(injectShell(page, "bogus")), themes[defaultTheme].css) {
+		t.Fatal("unknown theme did not fall back to the default")
 	}
 }
