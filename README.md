@@ -26,6 +26,14 @@ It is experimental. See [Limits](#limits-and-threat-model) before you rely on it
 
 ## Quick start
 
+**Already living in a coding agent?** The fastest path is the
+[agent integration card](AGENTS.md): install `self`, paste one section into
+your project's `CLAUDE.md` / agent instructions, and your sessions gain an
+append-only memory that outlives them — no browser, no config, growth when
+you ask for it. Prebuilt binaries are on the
+[releases page](https://github.com/Wouterbeets/self/releases); or
+`go install github.com/Wouterbeets/self@latest`.
+
 ### 1. See the machinery with no LLM (about 10 seconds)
 
 ```sh
