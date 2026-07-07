@@ -40,4 +40,10 @@ body:has(.msg) form:last-of-type{position:sticky;bottom:0;padding:14px 0 10px;ma
 background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius-sm);box-shadow:var(--shadow);font-family:var(--mono);font-size:11px}
 .self-themes a{padding:2px 7px;border-radius:var(--radius-sm);color:var(--muted);text-decoration:none;line-height:1.4}
 .self-themes a[aria-current]{background:var(--accent);color:var(--accent-ink)}
-@media print{.self-themes{display:none}}
+.self-nav{display:flex;gap:2px;flex-wrap:wrap;align-items:baseline;margin:0 0 18px;padding-bottom:10px;
+border-bottom:var(--line-w) solid var(--line);font-family:var(--mono);font-size:13px}
+.self-nav a{padding:2px 8px;border-radius:var(--radius-sm);color:var(--muted);text-decoration:none}
+.self-nav a:hover{background:var(--wash);color:var(--accent)}
+.self-nav a[aria-current]{background:var(--accent);color:var(--accent-ink)}
+.self-nav .self-brand{font-weight:700;color:var(--ink);margin-right:6px}
+@media print{.self-themes,.self-nav{display:none}}

@@ -1013,18 +1013,23 @@ func TestPickThemePrecedence(t *testing.T) {
 }
 
 // TestInjectShellShape checks the shell is layered onto a page without
-// disturbing it: CSS goes inside <head>, the picker before </body> with the
-// active design marked, and an unknown theme degrades to the default.
+// disturbing it: CSS goes inside <head>, the nav right after <body>, the
+// picker before </body> with the active design marked, and an unknown theme
+// degrades to the default.
 func TestInjectShellShape(t *testing.T) {
 	page := []byte("<!DOCTYPE html><html><head><title>t</title></head><body><h1>hi</h1></body></html>")
+	sampleNav := `<nav class="self-nav"><a href="/">self</a></nav>`
 
-	out := string(injectShell(page, "micro"))
+	out := string(injectShell(page, "micro", sampleNav))
 	if !strings.Contains(out, themes["micro"].css) {
 		t.Fatal("micro theme not injected")
 	}
 	head := strings.Index(out, "</head>")
 	if i := strings.Index(out, "<style>"); i < 0 || i > head {
 		t.Fatal("stylesheet not inside <head>")
+	}
+	if i := strings.Index(out, sampleNav); i < 0 || i < strings.Index(out, "<body>") {
+		t.Fatal("site nav not placed right after <body>")
 	}
 	nav := strings.Index(out, `<nav class="self-themes"`)
 	body := strings.LastIndex(out, "</body>")
@@ -1039,8 +1044,30 @@ func TestInjectShellShape(t *testing.T) {
 	}
 
 	// Unknown theme falls back to the default theme, never empty/arbitrary CSS.
-	if !strings.Contains(string(injectShell(page, "bogus")), themes[defaultTheme].css) {
+	if !strings.Contains(string(injectShell(page, "bogus", "")), themes[defaultTheme].css) {
 		t.Fatal("unknown theme did not fall back to the default")
+	}
+}
+
+// TestSiteNavListsProjections pins the human way around an instance: the
+// injected nav is a replay of the log — every declared projection, in
+// declaration order, plus the kernel surfaces — with the current page marked.
+func TestSiteNavListsProjections(t *testing.T) {
+	home := t.TempDir()
+	for _, n := range []string{"notes", "memory"} {
+		e := newEvent("projector.declared", json.RawMessage(`{"name":"`+n+`","description":"d","consumes":["x"]}`))
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nav := siteNav(home, "memory")
+	for _, want := range []string{`href="/notes"`, `href="/memory" aria-current="true"`, `href="/brief"`, `href="/events"`} {
+		if !strings.Contains(nav, want) {
+			t.Fatalf("nav missing %s:\n%s", want, nav)
+		}
+	}
+	if strings.Index(nav, "/notes") > strings.Index(nav, "/memory") {
+		t.Fatal("nav does not preserve declaration order")
 	}
 }
 

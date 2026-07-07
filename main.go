@@ -1474,6 +1474,36 @@ var orientationHTML string
 // <script> element.
 var shellScript = "<script>" + shellScriptBody + "</script>"
 
+// siteNav is the human way around an instance: one bar of plain links,
+// injected by the kernel on every served page, listing every declared
+// projection plus the kernel's own surfaces (brief, events). Projectors stay
+// bare — explorability is chrome, so it belongs to the shell, not to every
+// script. Like everything served, it is a replay of the log: declared
+// projections in declaration order.
+func siteNav(home, current string) string {
+	events, err := readEvents(home)
+	if err != nil {
+		return ""
+	}
+	_, _, _, projOrder := declaredCaps(events)
+	link := func(href, label string) string {
+		esc := html.EscapeString(label)
+		if label == current {
+			return `<a href="` + href + `" aria-current="true">` + esc + `</a>`
+		}
+		return `<a href="` + href + `">` + esc + `</a>`
+	}
+	var b strings.Builder
+	b.WriteString(`<nav class="self-nav" aria-label="instance"><a class="self-brand" href="/">self</a>`)
+	for _, n := range projOrder {
+		b.WriteString(link("/"+n, n))
+	}
+	b.WriteString(link("/brief", "brief"))
+	b.WriteString(link("/events", "events"))
+	b.WriteString(`</nav>`)
+	return b.String()
+}
+
 // siteFile resolves a path under SELF_HOME/site/ to a file by name, looking for
 // <name>.html, <name>.md, and <name>.txt in order. It returns the file path and
 // the matched extension, or "" if no such file. Used by the server and by
@@ -1492,27 +1522,35 @@ func siteFile(home, name string) (path, ext string) {
 // extension: .html goes through the shell (themed, progressive-enhanced), while
 // .md and .txt are served verbatim as text/plain — plain text is honest about
 // what it is, and the kernel renders no markup it did not itself emit.
-func serveSiteFile(w http.ResponseWriter, r *http.Request, path, ext string) {
+func serveSiteFile(w http.ResponseWriter, r *http.Request, home, current, path, ext string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		http.Error(w, err.Error(), 404)
 		return
 	}
 	if ext == ".html" {
-		writePage(w, r, data)
+		writePage(w, r, home, current, data)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write(data)
 }
 
-func injectShell(page []byte, theme string) []byte {
+func injectShell(page []byte, theme, nav string) []byte {
 	head := themeCSS(theme) + shellScript
 	if i := bytes.Index(page, []byte("<head>")); i >= 0 {
 		i += len("<head>")
 		page = append(page[:i:i], append([]byte(head), page[i:]...)...)
 	} else {
 		page = append([]byte(head), page...)
+	}
+	if nav != "" {
+		if i := bytes.Index(page, []byte("<body>")); i >= 0 {
+			i += len("<body>")
+			page = append(page[:i:i], append([]byte(nav), page[i:]...)...)
+		} else {
+			page = append([]byte(nav), page...)
+		}
 	}
 	picker := themePicker(theme)
 	if j := bytes.LastIndex(page, []byte("</body>")); j >= 0 {
@@ -1523,15 +1561,16 @@ func injectShell(page []byte, theme string) []byte {
 
 // writePage sends an on-disk projection through the shell for one request:
 // resolve the design, remember an explicit choice in a cookie so it persists
-// across pages, and inject theme + script + picker. This is the only place a
-// theme touches a response; nothing is written back to the log or to disk.
-func writePage(w http.ResponseWriter, r *http.Request, page []byte) {
+// across pages, and inject theme + script + nav + picker. This is the only
+// place a theme touches a response; nothing is written back to the log or to
+// disk. current names the page being served so the nav can mark it.
+func writePage(w http.ResponseWriter, r *http.Request, home, current string, page []byte) {
 	theme := pickTheme(r)
 	if q := r.URL.Query().Get("theme"); validTheme(q) {
 		http.SetCookie(w, &http.Cookie{Name: "self_theme", Value: q, Path: "/", MaxAge: 31536000, SameSite: http.SameSiteLaxMode})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(injectShell(page, theme))
+	w.Write(injectShell(page, theme, siteNav(home, current)))
 }
 
 // cmdServe serves the instance: every page re-rendered against current events,
@@ -1566,7 +1605,7 @@ func cmdServe(home, port string) error {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			writePage(w, r, page)
+			writePage(w, r, home, name, page)
 			return
 		}
 		if p, _ := scriptPath(home, "projector", name); fileExists(p) {
@@ -1575,19 +1614,19 @@ func cmdServe(home, port string) error {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			writePage(w, r, page)
+			writePage(w, r, home, name, page)
 			return
 		}
 		// Any on-disk site artifact by bare name: brief, kernel, etc.
-		// .md is rendered to HTML through the shell, .html through the shell
-		// as-is, .txt served verbatim as text/plain. A brain (or human, or
-		// external agent) can reach any kernel-resident surface by name.
+		// .html goes through the shell; .md and .txt are served verbatim as
+		// text/plain. A brain (or human, or external agent) can reach any
+		// kernel-resident surface by name.
 		if p, ext := siteFile(home, name); p != "" {
 			if name == "brief" {
 				renderBriefFile(home) // always fresh when served
 				p, ext = siteFile(home, "brief")
 			}
-			serveSiteFile(w, r, p, ext)
+			serveSiteFile(w, r, home, name, p, ext)
 			return
 		}
 		http.FileServer(http.Dir(filepath.Join(home, "site"))).ServeHTTP(w, r)
