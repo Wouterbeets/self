@@ -2038,6 +2038,17 @@ func installBundledSeed(home, name string) error {
 // different decomposition.
 // growPrompt frames the orchestration ask: decompose the intent into declared
 // capabilities, and hand them back the one way the kernel accepts them.
+// thinkPrompt wraps a think ask with the answer contract. A think is
+// report-only — the kernel returns declarations to the caller instead of
+// ingesting them — but the brain still needs to know its stdout is the only
+// channel: without the contract, a tool-capable brain wastes its session
+// trying to persist its work itself (edit the log, run the CLI) and gets
+// denied. Every event-expecting ask carries the same guidance; this was the
+// one naked ask left.
+func thinkPrompt(prompt string) string {
+	return prompt + "\n\n" + brainAnswerContract
+}
+
 func growPrompt(intent string) string {
 	return "Grow the capabilities that realize this product: declare each one by emitting a command.declared / projector.declared event, then summarize in one line.\n\n" +
 		brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
@@ -2302,7 +2313,7 @@ func cmdThink(home, prompt string) error {
 	if prompt == "" {
 		return fmt.Errorf("usage: self think <prompt> (or pipe it on stdin)")
 	}
-	res, err := pipeBrain(home, "think", prompt)
+	res, err := pipeBrain(home, "think", thinkPrompt(prompt))
 	if err != nil {
 		return fmt.Errorf("brain: %w", err)
 	}
