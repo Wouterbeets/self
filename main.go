@@ -1401,49 +1401,9 @@ func themeLabel(name string) string {
 // layout rule, written entirely against var()s a theme supplies. It never
 // mentions a literal color, font, or radius — that is what makes the embedded
 // themes/*.css skins interchangeable.
-const structuralCSS = `*{box-sizing:border-box}html{scroll-behavior:smooth}
-body{font-family:var(--font);margin:0 auto;max-width:72ch;padding:24px 20px 32px;
-background:var(--bg);color:var(--ink);line-height:1.55}
-h1,h2,h3{font-family:var(--head-font);font-weight:600;line-height:1.25}
-h1{font-size:1.55rem;margin:.2em 0 .6em}h2{margin-top:32px;border-bottom:var(--line-w) solid var(--line);padding-bottom:6px}
-a{color:var(--accent)}.muted{color:var(--muted)}
-.card,article{background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius);padding:12px 16px;margin:10px 0;box-shadow:var(--shadow)}
-.card.danger{border-color:var(--danger);color:var(--danger)}
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:10px}
-.tag{display:inline-block;background:var(--wash);color:var(--accent);border-radius:var(--radius-sm);padding:1px 8px;font-size:12px;font-family:var(--mono)}
-.num{text-align:right;font-variant-numeric:tabular-nums}
-.msg{max-width:85%;width:fit-content;background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius-msg);
-padding:8px 14px;margin:10px 0;box-shadow:var(--shadow);overflow-wrap:break-word}
-.msg .who{display:block;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:1px}
-.msg.user{margin-left:auto;background:var(--user-bg);border-color:var(--user-line);border-bottom-right-radius:var(--radius-sm)}
-.msg.assistant{margin-right:auto;border-bottom-left-radius:var(--radius-sm)}
-.msg.pending{opacity:.65}
-.dots i{display:inline-block;width:5px;height:5px;margin:1px 2px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
-.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
-@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
-table{border-collapse:collapse;width:100%}
-th{text-align:left;color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}
-th,td{border-bottom:var(--line-w) solid var(--line);padding:7px 10px;font-size:14px}
-pre{background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius);padding:12px;overflow-x:auto;font-size:13px}
-code{font-family:var(--mono);background:var(--wash);border-radius:var(--radius-sm);padding:1px 5px;font-size:.9em}
-form{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
-input,textarea{font:inherit;flex:1 1 24ch;min-width:0;padding:9px 12px;border:var(--line-w) solid var(--line);border-radius:var(--radius);background:var(--panel);color:inherit}
-textarea{flex-basis:100%}
-input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
-button{font:inherit;padding:9px 16px;border:var(--line-w) solid var(--accent);border-radius:var(--radius);background:var(--accent);color:var(--accent-ink);cursor:pointer;transition:filter .15s}
-button:hover{filter:brightness(1.08)}
-button.secondary{background:transparent;color:var(--accent)}button.danger{border-color:var(--danger);background:var(--danger);color:#fff}
-form.busy button{opacity:.55;pointer-events:none}
-body:has(.msg) form:last-of-type{position:sticky;bottom:0;padding:14px 0 10px;margin-top:6px;background:linear-gradient(transparent,var(--bg) 35%)}
-.rise{animation:rise .22s ease-out both}
-@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-::view-transition-old(root),::view-transition-new(root){animation-duration:.15s}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
-.self-themes{position:fixed;right:10px;bottom:10px;z-index:9;display:flex;gap:4px;padding:4px;
-background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius-sm);box-shadow:var(--shadow);font-family:var(--mono);font-size:11px}
-.self-themes a{padding:2px 7px;border-radius:var(--radius-sm);color:var(--muted);text-decoration:none;line-height:1.4}
-.self-themes a[aria-current]{background:var(--accent);color:var(--accent-ink)}
-@media print{.self-themes{display:none}}`
+//
+//go:embed shell/structural.css
+var structuralCSS string
 
 // validTheme reports whether name is a known design; selection paths accept
 // only known names, so the injected picker links and cookie can never smuggle
@@ -1503,99 +1463,13 @@ func themePicker(current string) string {
 // state: when the round-trip lands, the page is re-fetched and the log's
 // replay wins. Liveness is the same idea watched from outside — the byte
 // length of /events is the cursor; when the log grows, re-replay.
-const shellScript = `<script>
-(() => {
-"use strict";
-if (!window.fetch || !window.DOMParser) return;
-let busy = false, baseline = null;
+//
+//go:embed shell/shell.js
+var shellScriptBody string
 
-const logSize = () => fetch("/events", {method:"HEAD", cache:"no-store"})
-  .then(r => r.headers.get("content-length")).catch(() => null);
-
-async function refresh(toBottom) {
-  const res = await fetch(location.href, {cache:"no-store"});
-  if (!res.ok) return;
-  const doc = new DOMParser().parseFromString(await res.text(), "text/html");
-  const ae = document.activeElement;
-  const keep = ae && ae.name ? {name: ae.name, value: ae.value} : null;
-  const y = scrollY;
-  const swap = () => {
-    document.body.replaceWith(doc.body);
-    if (toBottom && document.querySelector(".msg")) {
-      [...document.querySelectorAll(".msg")].slice(-2).forEach(m => m.classList.add("rise"));
-      scrollTo(0, document.body.scrollHeight);
-    } else scrollTo(0, y);
-    if (keep) {
-      const el = document.querySelector("[name=\"" + keep.name.replace(/"/g, "") + "\"]");
-      if (el) { if (!toBottom) el.value = keep.value; el.focus(); }
-    }
-  };
-  if (document.startViewTransition) document.startViewTransition(swap); else swap();
-}
-
-document.addEventListener("submit", e => {
-  const f = e.target;
-  const action = new URL(f.getAttribute("action") || "", location.href);
-  if (!action.pathname.startsWith("/run/")) return;
-  e.preventDefault();
-  if (busy) return;
-  busy = true;
-  f.classList.add("busy");
-  const body = new URLSearchParams(new FormData(f));
-  const first = f.querySelector("input,textarea");
-  const text = first ? first.value : "";
-  let ghost, think;
-  const anchor = [...document.querySelectorAll(".msg")].pop();
-  if (anchor && text.trim()) { // a conversation: show the turn in flight, clearly pending
-    const label = (role) => { // borrow the who label the projection already uses
-      const whos = document.querySelectorAll(".msg." + role + " .who");
-      return whos.length ? "<span class='who'></span>" : "";
-    };
-    ghost = document.createElement("div");
-    ghost.className = "msg user pending rise";
-    ghost.innerHTML = label("user");
-    ghost.appendChild(document.createTextNode(text));
-    think = document.createElement("div");
-    think.className = "msg assistant pending rise";
-    think.innerHTML = label("assistant") + "<span class='dots'><i></i><i></i><i></i></span>";
-    for (const role of ["user", "assistant"]) {
-      const whos = document.querySelectorAll(".msg." + role + " .who");
-      const target = (role === "user" ? ghost : think).querySelector(".who");
-      if (whos.length && target) target.textContent = whos[whos.length - 1].textContent;
-    }
-    anchor.after(ghost, think);
-    first.value = "";
-    scrollTo({top: document.body.scrollHeight, behavior: "smooth"});
-  }
-  fetch(action, {method: "POST", body}).then(async r => {
-    if (!r.ok) throw new Error((await r.text()).trim() || r.status);
-    baseline = null;
-    await refresh(true);
-  }).catch(err => { // degrade honestly: say what failed, give the words back
-    if (ghost) { think.remove(); ghost.remove(); first.value = text; }
-    const p = document.createElement("p");
-    p.className = "card danger rise";
-    p.textContent = "could not run " + action.pathname.slice(5) + ": " + err.message;
-    f.before(p);
-    setTimeout(() => p.remove(), 8000);
-  }).finally(() => { busy = false; f.classList.remove("busy"); });
-});
-
-async function tick() {
-  if (document.hidden || busy) return;
-  const n = await logSize();
-  if (n == null) return;
-  if (baseline != null && n !== baseline) {
-    const nearBottom = innerHeight + scrollY > document.body.scrollHeight - 120;
-    await refresh(nearBottom && !!document.querySelector(".msg"));
-  }
-  baseline = n;
-}
-setInterval(tick, 2500);
-addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
-addEventListener("DOMContentLoaded", tick);
-})();
-</script>`
+// shellScript wraps the embedded progressive-enhancement JS as an injectable
+// <script> element.
+var shellScript = "<script>" + shellScriptBody + "</script>"
 
 // renderMarkdown is a small, stdlib-only Markdown→HTML converter for the
 // kernel's own .md artifacts (brief.md, and any plugin a brain writes as
