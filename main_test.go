@@ -639,7 +639,7 @@ func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
 	// think is report-only, but the brain must still be told stdout is the
 	// only channel — a tool-capable brain otherwise tries to persist its work.
 	must("think", thinkPrompt("what is missing here?"), "stdout", "cannot write the log", "no code fences")
-	must("answer contract", brainAnswerContract, "stdout", "cannot write the log", "no code fences")
+	must("answer contract", brainAnswerContract, "stdout", "cannot write the log", "no code fences", "reply is final", "never re-invoked")
 	// compile: the brain may test with its tools, but must not install or persist.
 	must("compile", compilePrompt("", "", "command", "note", `{"name":"note"}`),
 		"do not install", "events.jsonl", "no code fence")
