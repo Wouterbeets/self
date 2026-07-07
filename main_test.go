@@ -445,6 +445,78 @@ func TestAdoptFailedCompileIsAnErrorDespiteStaleScript(t *testing.T) {
 	}
 }
 
+func TestReviseCompilesWithCurrentScriptAndRequest(t *testing.T) {
+	brain := filepath.Join(t.TempDir(), "brain")
+	if err := os.WriteFile(brain, []byte(`#!/usr/bin/env python3
+import os, sys, json
+prompt = sys.argv[-1]
+sys.stdin.read()
+if os.environ.get("SELF_ASK") != "compile":
+    raise SystemExit("unexpected ask")
+if "old sentinel" not in prompt:
+    raise SystemExit("previous script was not provided")
+if "make it revised" not in prompt:
+    raise SystemExit("revision request was not provided")
+script = "#!/bin/sh\necho '{\"name\":\"note.added\",\"payload\":{\"text\":\"revised\"}}'\n"
+print(json.dumps({"name":"script.authored","payload":{"script":script}}))
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_LLM_STUB", "")
+	t.Setenv("SELF_BRAIN", brain)
+	t.Setenv("SELF_BRAIN_ID", "revision brain")
+
+	home := t.TempDir()
+	decl := newEvent("command.declared", json.RawMessage(`{"name":"note","description":"take a note","event":{"name":"note.added","fields":{"text":"string"}}}`))
+	if err := appendEvent(home, &decl); err != nil {
+		t.Fatal(err)
+	}
+	oldScript := "#!/bin/sh\n# old sentinel\necho '{\"name\":\"note.added\",\"payload\":{\"text\":\"old\"}}'\n"
+	if err := installTrustedScript(home, "command", "note", oldScript, "old brain"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmdRevise(home, "command/note", []string{"make", "it", "revised"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisions := 0
+	decls := 0
+	for _, e := range events {
+		switch e.Name {
+		case "capability.revision.requested":
+			revisions++
+			var p struct {
+				Type        string `json:"type"`
+				Name        string `json:"name"`
+				Request     string `json:"request"`
+				FromReceipt string `json:"from_receipt"`
+			}
+			if json.Unmarshal(e.Payload, &p) != nil || p.Type != "command" || p.Name != "note" || p.Request != "make it revised" || p.FromReceipt == "" {
+				t.Fatalf("bad revision event: %s", e.Payload)
+			}
+		case "command.declared":
+			decls++
+		}
+	}
+	if revisions != 1 {
+		t.Fatalf("recorded %d revision requests, want 1", revisions)
+	}
+	if decls != 2 {
+		t.Fatalf("recorded %d declarations, want original + revised", decls)
+	}
+	got, err := os.ReadFile(filepath.Join(home, "capabilities", "commands", "note", "run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "revised") {
+		t.Fatalf("revised script was not installed:\n%s", got)
+	}
+}
+
 // TestPluggableBrain pins the README's oldest promise, now true everywhere:
 // the brain is just a process behind one contract, and the kernel can't tell
 // the difference. A fake external brain — a few lines of python, no HTTP, no

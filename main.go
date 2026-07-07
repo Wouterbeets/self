@@ -575,6 +575,10 @@ type commandDecl struct {
 	// never installed as-is, so precision from the seed author and receiver
 	// adaptation both survive.
 	Implementation string `json:"implementation,omitempty"`
+	Revision       struct {
+		Request     string `json:"request,omitempty"`
+		FromReceipt string `json:"from_receipt,omitempty"`
+	} `json:"revision,omitempty"`
 }
 
 type projectorDecl struct {
@@ -582,6 +586,10 @@ type projectorDecl struct {
 	Description    string   `json:"description"`
 	Consumes       []string `json:"consumes"`
 	Implementation string   `json:"implementation,omitempty"`
+	Revision       struct {
+		Request     string `json:"request,omitempty"`
+		FromReceipt string `json:"from_receipt,omitempty"`
+	} `json:"revision,omitempty"`
 }
 
 // compileDeclarations is the strange-loop hook: every command.declared /
@@ -803,7 +811,7 @@ func compilePrompt(intent, reasoning, exemplarName, exemplarScript, typ, name, d
 DECLARATION (%s %q):
 %s
 
-If the declaration carries an "implementation", it is a reference from another instance: verify it and adapt it here — never copy it blindly. Use your own tools freely to write and TEST the script by execution before answering — but do not install it, edit events.jsonl, or run the self CLI: the kernel installs and signs the script from the one line you print, and nothing else. If this is a projector, emit only bare semantic HTML: no CSS, no JavaScript, no inline style attributes, no external assets.
+If the declaration carries an "implementation", it is a reference script: verify it and adapt it here — never copy it blindly. If it also carries a "revision", preserve the existing behavior except for that requested change. Use your own tools freely to write and TEST the script by execution before answering — but do not install it, edit events.jsonl, or run the self CLI: the kernel installs and signs the script from the one line you print, and nothing else. If this is a projector, emit only bare semantic HTML: no CSS, no JavaScript, no inline style attributes, no external assets.
 
 Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 {"name":"script.authored","payload":{"script":"<the full script>"}}`, pipeContract, typ, name, decl)
@@ -2068,6 +2076,86 @@ func receiptCount(home, typ, name string) int {
 	return n
 }
 
+func parseCapabilityTarget(target string) (typ, name string, err error) {
+	typ, name, ok := strings.Cut(strings.TrimSpace(target), "/")
+	if !ok || name == "" {
+		return "", "", fmt.Errorf("target must be command/<name> or projector/<name>")
+	}
+	if typ != "command" && typ != "projector" {
+		return "", "", fmt.Errorf("target type must be command or projector")
+	}
+	if !validCapabilityName(name) {
+		return "", "", fmt.Errorf("unsafe capability name %q", name)
+	}
+	return typ, name, nil
+}
+
+func latestCapabilitySource(home, typ, name string) (decl json.RawMessage, script, receiptID string, err error) {
+	events, err := readEvents(home)
+	if err != nil {
+		return nil, "", "", err
+	}
+	secret, err := loadSecret(home)
+	if err != nil {
+		return nil, "", "", err
+	}
+	for _, e := range events {
+		if t, n := declName(e); t == typ && n == name {
+			decl = e.Payload
+			continue
+		}
+		if e.Name != "script.compiled" {
+			continue
+		}
+		if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Type == typ && r.Name == name {
+			script = r.Script
+			receiptID = e.ID
+		}
+	}
+	if decl == nil {
+		return nil, "", "", fmt.Errorf("no declaration for %s/%s", typ, name)
+	}
+	if strings.TrimSpace(script) == "" {
+		return nil, "", "", fmt.Errorf("no verified script receipt for %s/%s", typ, name)
+	}
+	return decl, script, receiptID, nil
+}
+
+func cmdRevise(home, target string, words []string) error {
+	typ, name, err := parseCapabilityTarget(target)
+	if err != nil {
+		return err
+	}
+	request := strings.TrimSpace(strings.Join(words, " "))
+	if request == "" {
+		return fmt.Errorf("usage: self revise %s/%s <change request>", typ, name)
+	}
+	declPayload, script, receiptID, err := latestCapabilitySource(home, typ, name)
+	if err != nil {
+		return err
+	}
+	var decl map[string]any
+	if err := json.Unmarshal(declPayload, &decl); err != nil {
+		return fmt.Errorf("latest declaration for %s/%s is not an object: %w", typ, name, err)
+	}
+	decl["implementation"] = script
+	decl["revision"] = map[string]any{"request": request, "from_receipt": receiptID}
+	updatedDecl, _ := json.Marshal(decl)
+	revisionPayload, _ := json.Marshal(map[string]any{"type": typ, "name": name, "request": request, "from_receipt": receiptID})
+	before := receiptCount(home, typ, name)
+	if err := ingest(home, []Event{
+		newEvent("capability.revision.requested", revisionPayload),
+		newEvent(typ+".declared", updatedDecl),
+	}); err != nil {
+		return err
+	}
+	if receiptCount(home, typ, name) <= before {
+		return fmt.Errorf("revision for %s/%s was recorded, but the compile produced no signed receipt", typ, name)
+	}
+	fmt.Printf("revised %s/%s — compiled a fresh signed receipt\n", typ, name)
+	return nil
+}
+
 func cmdAdopt(home, path string) error {
 	var data []byte
 	var err error
@@ -2443,6 +2531,8 @@ usage: self [command] [args]
                        receipts, a verbatim slice of this log
   self adopt <seed>    re-grow a shared capability here ("-" reads stdin) — this
                        instance's own compiler re-authors it; foreign bytes never install
+  self revise <target> <request>
+                       edit an installed local capability with its current script as context
   self protocol        print the brain + capability wire protocol
 
 environment:
@@ -2541,6 +2631,8 @@ func commandHelp(cmd string) (string, bool) {
 		return "usage: self share <capability>\n\nPrint the capability's declarations and receipts as a JSONL seed.\n", true
 	case "adopt":
 		return "usage: self adopt <seed.jsonl>\n       self adopt - < seed.jsonl\n\nRecord a shared seed and re-generate its capability locally; foreign code never installs.\n", true
+	case "revise":
+		return "usage: self revise command/<name> <change request>\n       self revise projector/<name> <change request>\n\nRecord a local revision request, then recompile the installed capability with its latest declaration and verified script as context.\n", true
 	case "protocol":
 		return protocolText(), true
 	}
@@ -2627,6 +2719,12 @@ func main() {
 			err = fmt.Errorf("usage: self adopt <seed.jsonl>")
 		} else {
 			err = cmdAdopt(home, args[0])
+		}
+	case "revise":
+		if len(args) < 2 {
+			err = fmt.Errorf("usage: self revise command/<name> <change request>")
+		} else {
+			err = cmdRevise(home, args[0], args[1:])
 		}
 	case "protocol":
 		fmt.Fprint(os.Stdout, protocolText())
