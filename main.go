@@ -762,7 +762,7 @@ The kernel sets SELF_HOME on every script. Any language with a shebang works; us
 // there, under its own signature. It also emits Markdown by habit; the pipe
 // tolerates fences, but one clean JSON object per line is what actually wants
 // ingesting. Woven into every ask that expects events (grow, heartbeat, compile).
-const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To add capabilities, print declaration events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing.
+const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To persist ordinary state, print the domain event that records it. To add capabilities, print command.declared / projector.declared events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing; ordinary domain events are not capability growth.
 
 THIS REPLY IS FINAL — you run once per ask and are never re-invoked. Explore first, THEN answer completely: never end on a plan or a promise ("I'll explore and then respond") — whatever you have not said when you exit was never said.
 
@@ -795,7 +795,7 @@ func (c *llm) compileProjector(d projectorDecl) (string, error) {
 // compilePrompt is the text of a compile ask: author one script honoring the
 // pipe contract, test it with your own tools, and hand back exactly one
 // script.authored line — the kernel does the installing and signing.
-func compilePrompt(intent, reasoning, typ, name, decl string) string {
+func compilePrompt(intent, reasoning, exemplarName, exemplarScript, typ, name, decl string) string {
 	prompt := fmt.Sprintf(`COMPILE one capability for this instance. Author a complete executable script (any language with a shebang, standard libraries only) honoring the pipe contract, adapted to this instance's state (a brief on your stdin; the full log is at SELF_HOME/events.jsonl if you need it).
 
 %s
@@ -807,6 +807,9 @@ If the declaration carries an "implementation", it is a reference from another i
 
 Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 {"name":"script.authored","payload":{"script":"<the full script>"}}`, pipeContract, typ, name, decl)
+	if strings.TrimSpace(exemplarScript) != "" {
+		prompt = "Here is a recently compiled " + typ + " as an idiom/reference for this instance. Learn its style and pipe-contract shape, but do not copy it blindly.\n\n--- EXEMPLAR " + exemplarName + " ---\n" + exemplarScript + "\n--- END EXEMPLAR ---\n\n" + prompt
+	}
 	if strings.TrimSpace(reasoning) != "" {
 		prompt = "The ORCHESTRATOR that declared this capability explored the instance and explained its plan below (it is also in the log as grow.orchestrated). Compile in line with it.\n\n--- ORCHESTRATOR'S REASONING ---\n" + reasoning + "\n--- END REASONING ---\n\n" + prompt
 	}
@@ -816,8 +819,38 @@ Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 	return prompt
 }
 
+// exemplarScript returns the source of the most recently compiled capability
+// of the same type (excluding the one being compiled, so a recompile is never
+// anchored to its own broken past). Read from the log's verified receipts —
+// traced compiles show a brain spends its first minute rediscovering the
+// instance's idiom from disk; handing it one exemplar removes that phase.
+func exemplarScript(home, typ, name string) (exName, exScript string) {
+	events, err := readEvents(home)
+	if err != nil {
+		return "", ""
+	}
+	secret, err := loadSecret(home)
+	if err != nil {
+		return "", ""
+	}
+	for _, e := range events {
+		if e.Name != "script.compiled" {
+			continue
+		}
+		if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Type == typ && r.Name != name {
+			exName, exScript = r.Name, r.Script
+		}
+	}
+	const cap = 4096
+	if len(exScript) > cap {
+		exScript = exScript[:cap] + "\n… (truncated)"
+	}
+	return exName, exScript
+}
+
 func compileViaBrain(home, intent, reasoning, typ, name, decl string) (string, error) {
-	res, err := pipeBrain(home, "compile", compilePrompt(intent, reasoning, typ, name, decl))
+	exName, exScript := exemplarScript(home, typ, name)
+	res, err := pipeBrain(home, "compile", compilePrompt(intent, reasoning, exName, exScript, typ, name, decl))
 	if err != nil {
 		return "", err
 	}
@@ -865,7 +898,7 @@ func stubProjector(d projectorDecl) string {
 }
 
 func stubBrain(home, kind, prompt string) (*brainResult, error) {
-	res := &brainResult{Declarations: []map[string]any{}}
+	res := &brainResult{Events: []map[string]any{}}
 	switch kind {
 	case "think":
 		res.Response = "stub thought about: " + prompt
@@ -891,7 +924,7 @@ func stubBrain(home, kind, prompt string) (*brainResult, error) {
 		if event == "" {
 			event = command + ".recorded"
 		}
-		res.Declarations = []map[string]any{
+		res.Events = []map[string]any{
 			{"name": "command.declared", "payload": map[string]any{"name": command, "description": "offline stub command grown from " + name, "params": map[string]string{"text": "string"}, "event": map[string]any{"name": event, "fields": map[string]string{"text": "string"}}}},
 			{"name": "projector.declared", "payload": map[string]any{"name": projector, "description": "offline stub projection grown from " + name, "consumes": []string{event}}},
 		}
@@ -993,9 +1026,9 @@ func sanitizeCapabilityName(s string) string {
 // ──────────────────────────────── the brain ─────────────────────────────────
 
 type brainResult struct {
-	Response     string
-	Declarations []map[string]any
-	Script       string // a compile ask's answer, from a script.authored event
+	Response string
+	Events   []map[string]any
+	Script   string // a compile ask's answer, from a script.authored event
 }
 
 // brainExe is the plugged brain, if any: env wins for explicit sessions; if not
@@ -1070,11 +1103,11 @@ func brainEnv(home, kind string) []string {
 // (run, over the given capability catalog), grow (declare). user may be a JSON
 // array of {role, content} turns, so a chat surface can hand the brain real
 // turn-based history.
-// applyDeclarations appends what the brain declared and runs it through the
-// strange loop.
-func applyDeclarations(home string, res *brainResult) {
+// applyEvents appends events the brain returned and runs any capability
+// declarations among them through the strange loop.
+func applyEvents(home string, res *brainResult) {
 	var evs []Event
-	for _, d := range res.Declarations {
+	for _, d := range res.Events {
 		name, _ := d["name"].(string)
 		payload, _ := json.Marshal(d["payload"])
 		if name == "" || string(payload) == "null" {
@@ -1082,7 +1115,7 @@ func applyDeclarations(home string, res *brainResult) {
 		}
 		e := newEvent(name, payload)
 		if err := appendEvent(home, &e); err != nil {
-			fmt.Fprintf(os.Stderr, "self: append declaration: %s\n", err)
+			fmt.Fprintf(os.Stderr, "self: append brain event: %s\n", err)
 			return
 		}
 		evs = append(evs, e)
@@ -1824,12 +1857,11 @@ func installBundledSeed(home, name string) error {
 // growPrompt frames the orchestration ask: decompose the intent into declared
 // capabilities, and hand them back the one way the kernel accepts them.
 // thinkPrompt wraps a think ask with the answer contract. A think is
-// report-only — the kernel returns declarations to the caller instead of
-// ingesting them — but the brain still needs to know its stdout is the only
-// channel: without the contract, a tool-capable brain wastes its session
-// trying to persist its work itself (edit the log, run the CLI) and gets
-// denied. Every event-expecting ask carries the same guidance; this was the
-// one naked ask left.
+// report-only — the kernel returns brain-authored events to the caller instead
+// of ingesting them — but the brain still needs to know its stdout is the only
+// channel: without the contract, a tool-capable brain wastes its session trying
+// to persist its work itself (edit the log, run the CLI) and gets denied. Every
+// event-expecting ask carries the same guidance; this was the one naked ask left.
 func thinkPrompt(prompt string) string {
 	return prompt + "\n\n" + brainAnswerContract
 }
@@ -1896,7 +1928,7 @@ func cmdGrow(home, ref string) error {
 	}
 	c := newLLM(home)
 	c.intent = intent
-	if len(res.Declarations) == 0 {
+	if len(res.Events) == 0 {
 		return fmt.Errorf("the orchestrator declared nothing for %q", name)
 	}
 
@@ -1914,7 +1946,7 @@ func cmdGrow(home, ref string) error {
 	}
 
 	var declEvents []Event
-	for _, d := range res.Declarations {
+	for _, d := range res.Events {
 		n, _ := d["name"].(string)
 		p, _ := json.Marshal(d["payload"])
 		if (n != "command.declared" && n != "projector.declared") || string(p) == "null" {
@@ -2113,7 +2145,7 @@ func cmdRun(home, command string, args []string) error {
 	return nil
 }
 
-// cmdThink asks the brain and prints {response, declarations} JSON. The brain
+// cmdThink asks the brain and prints {response, events} JSON. The brain
 // is a PROCESS the kernel pipes the log to — $SELF_BRAIN is any program honoring
 // the contract (prompt as last arg, event JSONL out), or SELF_LLM_STUB=1 for the
 // offline stub. think appends nothing: the caller owns that.
@@ -2131,7 +2163,7 @@ func cmdThink(home, prompt string) error {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(map[string]any{"response": res.Response, "declarations": res.Declarations})
+	return enc.Encode(map[string]any{"response": res.Response, "events": res.Events, "declarations": res.Events})
 }
 
 // pipeBrain is the ONE seam through which the kernel asks for intelligence —
@@ -2150,7 +2182,7 @@ func cmdThink(home, prompt string) error {
 // a pipe; the tool loop is the brain's concern, never the kernel's. The parse
 // of the brain's stdout is tolerant on purpose: JSON lines with a name are
 // events — script.authored answers a compile, chat.message carries the reply,
-// anything else is a declaration — and bare prose joins the reply. With no
+// anything else is a returned event — and bare prose joins the reply. With no
 // brain plugged in, SELF_LLM_STUB=1 supplies a deterministic offline one;
 // otherwise the ask fails with a hint.
 func pipeBrain(home, kind, prompt string) (*brainResult, error) {
@@ -2179,7 +2211,7 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 		return nil, fmt.Errorf("start brain %s: %w (%s)", filepath.Base(bin), err, brainHint)
 	}
 	feedText(stdin, brief)
-	res := &brainResult{Declarations: []map[string]any{}}
+	res := &brainResult{Events: []map[string]any{}}
 	var prose []string
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1024*1024), 8*1024*1024)
@@ -2212,7 +2244,7 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 				res.Script = p.Script
 			}
 		default:
-			res.Declarations = append(res.Declarations, map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)})
+			res.Events = append(res.Events, map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)})
 		}
 	}
 	if err := cmd.Wait(); err != nil {
@@ -2264,7 +2296,7 @@ func cmdHeartbeat(home string) error {
 	if err != nil {
 		return err
 	}
-	applyDeclarations(home, res)
+	applyEvents(home, res)
 	fmt.Println(res.Response)
 	return nil
 }
@@ -2402,7 +2434,7 @@ usage: self [command] [args]
   self                 rehydrate the instance from the log, then serve it (the default)
   self grow <seed>     grow a seed's intent into capabilities (needs a brain)
   self run <cmd> ...   run a capability — append events, refresh projections
-  self think "..."     ask the brain; returns {response, declarations} JSON
+  self think "..."     ask the brain; returns {response, events} JSON
   self heartbeat       one self-improvement cycle (the brain reflects & grows)
   self show <name>     render a projection to stdout
   self live [port]     serve the instance (default 7777)
@@ -2496,7 +2528,7 @@ func commandHelp(cmd string) (string, bool) {
 	case "run":
 		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then projections re-render.\n", true
 	case "think":
-		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, declarations} JSON and appends nothing.\n", true
+		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, events} JSON and appends nothing.\n", true
 	case "heartbeat":
 		return "usage: self heartbeat\n\nAppend a heartbeat event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
 	case "show":

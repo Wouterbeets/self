@@ -22,9 +22,10 @@ first; first impressions are its spec.
   `chat.message`, and then every declaration verbatim as its own event.
   Re-emitting the declarations is what makes the kernel compile them; a
   declaration left unemitted is growth that never happens.
-- When declarations were made, the assistant's reply must end by naming what
-  grew and where it lives — e.g. "grown: /habits — refresh and it is live." A
-  capability that appears without being announced is a demo that looks broken.
+- When new capabilities were declared, the assistant may name what grew and
+  where it lives if that helps the user orient, but this must be ordinary prose,
+  not a mandatory footer. Do not invent a growth announcement for ordinary
+  events like notes, tasks, memories, or verses.
 - Degrade honestly: if `self think` fails, emit an assistant `chat.message`
   that says a brain is unreachable and how to plug one (`SELF_BRAIN`,
   `SELF_LLM_URL`) — inside the conversation, not as a stack trace. The user's

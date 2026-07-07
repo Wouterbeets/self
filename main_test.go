@@ -582,8 +582,8 @@ else:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Declarations) != 1 || res.Declarations[0]["name"] != "command.declared" {
-		t.Fatalf("backtick-wrapped declaration not parsed: %+v", res.Declarations)
+	if len(res.Events) != 1 || res.Events[0]["name"] != "command.declared" {
+		t.Fatalf("backtick-wrapped event not parsed: %+v", res.Events)
 	}
 	// prose survives, fence markers do not leak into it
 	if !strings.Contains(res.Response, "declare the note command") {
@@ -593,7 +593,7 @@ else:
 		t.Fatalf("fence markers leaked into prose: %q", res.Response)
 	}
 	// the fenced compile answer is found and drives a real install
-	if err := ingest(home, mustEvents(t, res.Declarations)); err != nil {
+	if err := ingest(home, mustEvents(t, res.Events)); err != nil {
 		t.Fatal(err)
 	}
 	if p := filepath.Join(home, "capabilities", "commands", "note", "run"); !fileExists(p) {
@@ -641,13 +641,13 @@ func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
 	must("think", thinkPrompt("what is missing here?"), "stdout", "cannot write the log", "no code fences")
 	must("answer contract", brainAnswerContract, "stdout", "cannot write the log", "no code fences", "reply is final", "never re-invoked")
 	// compile: the brain may test with its tools, but must not install or persist.
-	must("compile", compilePrompt("", "", "command", "note", `{"name":"note"}`),
+	must("compile", compilePrompt("", "", "", "", "command", "note", `{"name":"note"}`),
 		"do not install", "events.jsonl", "no code fence")
 	// the intent-woven variant keeps the same guidance.
-	must("compile+intent", compilePrompt("a product", "", "command", "note", `{"name":"note"}`),
+	must("compile+intent", compilePrompt("a product", "", "", "", "command", "note", `{"name":"note"}`),
 		"do not install", "no code fence")
 	// during a grow the orchestrator's reasoning rides in-band in the prompt.
-	must("compile+reasoning", compilePrompt("a product", "declared note because the intent asks for one", "command", "note", `{"name":"note"}`),
+	must("compile+reasoning", compilePrompt("a product", "declared note because the intent asks for one", "", "", "command", "note", `{"name":"note"}`),
 		"orchestrator", "declared note because the intent asks for one", "do not install")
 }
 
