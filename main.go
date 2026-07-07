@@ -351,8 +351,8 @@ func feedText(stdin io.WriteCloser, text string) {
 //
 // The kernel materializes the brief to SELF_HOME/site/brief.md (see
 // renderBriefFile) so it is explorable on disk like every other piece of
-// state. Markdown on purpose — plain text to `cat`, rendered by the server
-// like any other .md file under site/.
+// state. Markdown on purpose — readable as plain text to a brain, to `cat`, and
+// served verbatim as text/plain like any other .md file under site/.
 func stateBrief(home string) string {
 	events, err := readEvents(home)
 	if err != nil {
@@ -428,8 +428,8 @@ func stateBrief(home string) string {
 // renderBriefFile writes the orientation brief to SELF_HOME/site/brief.md,
 // the kernel-resident surface a brain reads. Called alongside renderKernelHTML
 // whenever the log changes, and re-run immediately before every brain ask (see
-// freshBrief) so a brain never reads stale orientation. Rendered by the server
-// like any other markdown file under site/.
+// freshBrief) so a brain never reads stale orientation. Served verbatim as
+// text/plain like any other .md file under site/.
 func renderBriefFile(home string) {
 	siteDir := filepath.Join(home, "site")
 	os.MkdirAll(siteDir, 0755)
@@ -1471,172 +1471,6 @@ var shellScriptBody string
 // <script> element.
 var shellScript = "<script>" + shellScriptBody + "</script>"
 
-// renderMarkdown is a small, stdlib-only Markdown→HTML converter for the
-// kernel's own .md artifacts (brief.md, and any plugin a brain writes as
-// markdown). It is deliberately minimal — headings, unordered lists, fenced
-// code blocks, blank-line paragraphs, and inline [text](url), `code`,
-// **bold**, *italic* — enough to render the kernel's prose cleanly. It is not
-// a feature-complete Markdown parser; the contract is "graceful rendering of
-// kernel markdown in a browser", not CommonMark conformance. Projectors
-// authored by the brain stay bare semantic HTML (their contract); markdown
-// here is for the kernel-resident surfaces a brain reads and a human might
-// glance at. Escapes all input first; emits no inline styles or scripts.
-func renderMarkdown(src []byte) []byte {
-	lines := strings.Split(string(src), "\n")
-	var out strings.Builder
-	out.WriteString("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"></head><body>\n")
-	var inList, inCode bool
-	var para []string
-	flushPara := func() {
-		if len(para) == 0 {
-			return
-		}
-		out.WriteString("<p>")
-		out.WriteString(strings.Join(para, "<br>"))
-		out.WriteString("</p>\n")
-		para = para[:0]
-	}
-	closeList := func() {
-		if inList {
-			out.WriteString("</ul>\n")
-			inList = false
-		}
-	}
-	closeCode := func() {
-		if inCode {
-			out.WriteString("</code></pre>\n")
-			inCode = false
-		}
-	}
-	for _, raw := range lines {
-		line := raw
-		// fenced code blocks — ``` opens and closes
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			if inCode {
-				closeCode()
-			} else {
-				flushPara()
-				closeList()
-				out.WriteString("<pre><code>")
-				inCode = true
-			}
-			continue
-		}
-		if inCode {
-			out.WriteString(html.EscapeString(line))
-			out.WriteString("\n")
-			continue
-		}
-		t := strings.TrimSpace(line)
-		if t == "" {
-			flushPara()
-			closeList()
-			continue
-		}
-		if strings.HasPrefix(t, "# ") {
-			flushPara()
-			closeList()
-			out.WriteString("<h1>" + renderInlineMD(t[2:]) + "</h1>\n")
-			continue
-		}
-		if strings.HasPrefix(t, "## ") {
-			flushPara()
-			closeList()
-			out.WriteString("<h2>" + renderInlineMD(t[3:]) + "</h2>\n")
-			continue
-		}
-		if strings.HasPrefix(t, "### ") {
-			flushPara()
-			closeList()
-			out.WriteString("<h3>" + renderInlineMD(t[4:]) + "</h3>\n")
-			continue
-		}
-		if strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") {
-			flushPara()
-			if !inList {
-				out.WriteString("<ul>\n")
-				inList = true
-			}
-			out.WriteString("<li>" + renderInlineMD(t[2:]) + "</li>\n")
-			continue
-		}
-		closeList()
-		para = append(para, renderInlineMD(t))
-	}
-	flushPara()
-	closeList()
-	closeCode()
-	out.WriteString("</body></html>\n")
-	return []byte(out.String())
-}
-
-// renderInlineMD handles a single line's inline markdown: `[text](url)`,
-// `code`, **bold**, *italic*. Input is escaped first; patterns are applied
-// after, so URLs never reach the raw HTML.
-func renderInlineMD(s string) string {
-	s = html.EscapeString(s)
-	// [text](url) → <a href="url" rel="noopener">text</a>
-	for {
-		i := strings.Index(s, "[")
-		if i < 0 {
-			break
-		}
-		j := strings.Index(s[i:], "](")
-		if j < 0 {
-			break
-		}
-		j += i
-		k := strings.Index(s[j+2:], ")")
-		if k < 0 {
-			break
-		}
-		text := s[i+1 : j]
-		url := s[j+2 : j+2+k]
-		s = s[:i] + `<a href="` + url + `" rel="noopener">` + text + "</a>" + s[j+3+k:]
-	}
-	// `code` — inline backtick
-	for {
-		i := strings.Index(s, "`")
-		if i < 0 {
-			break
-		}
-		j := strings.Index(s[i+1:], "`")
-		if j < 0 {
-			break
-		}
-		j += i + 1
-		s = s[:i] + "<code>" + s[i+1:j] + "</code>" + s[j+1:]
-	}
-	// **bold**
-	s = strings.ReplaceAll(s, "**", "\x00BOLD\x00") // placeholder to avoid ** collisions
-	for {
-		i := strings.Index(s, "\x00BOLD\x00")
-		if i < 0 {
-			break
-		}
-		j := strings.Index(s[i+6:], "\x00BOLD\x00")
-		if j < 0 {
-			break
-		}
-		j += i + 6
-		s = s[:i] + "<strong>" + s[i+6:j] + "</strong>" + s[j+6:]
-	}
-	// *italic*
-	for {
-		i := strings.Index(s, "*")
-		if i < 0 {
-			break
-		}
-		j := strings.Index(s[i+1:], "*")
-		if j < 0 {
-			break
-		}
-		j += i + 1
-		s = s[:i] + "<em>" + s[i+1:j] + "</em>" + s[j+1:]
-	}
-	return s
-}
-
 // siteFile resolves a path under SELF_HOME/site/ to a file by name, looking for
 // <name>.html, <name>.md, and <name>.txt in order. It returns the file path and
 // the matched extension, or "" if no such file. Used by the server and by
@@ -1652,25 +1486,21 @@ func siteFile(home, name string) (path, ext string) {
 }
 
 // serveSiteFile writes a site file to an HTTP response, dispatching by
-// extension: .md is rendered to HTML and injected through the shell (so a
-// markdown artifact is a first-class page, themed and progressive-enhanced),
-// .html goes through the shell as-is, and .txt is served verbatim as text/plain
-// (the shell doesn't touch it — plain text is honest about what it is).
+// extension: .html goes through the shell (themed, progressive-enhanced), while
+// .md and .txt are served verbatim as text/plain — plain text is honest about
+// what it is, and the kernel renders no markup it did not itself emit.
 func serveSiteFile(w http.ResponseWriter, r *http.Request, path, ext string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		http.Error(w, err.Error(), 404)
 		return
 	}
-	switch ext {
-	case ".md":
-		writePage(w, r, renderMarkdown(data))
-	case ".html":
+	if ext == ".html" {
 		writePage(w, r, data)
-	case ".txt":
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write(data)
+		return
 	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(data)
 }
 
 func injectShell(page []byte, theme string) []byte {
@@ -2373,19 +2203,14 @@ func cmdShow(home, name string) error {
 		return nil
 	}
 	// bare name → on-disk artifact (.html, .md, .txt) under site/, if present
-	if p, ext := siteFile(home, name); p != "" {
+	if p, _ := siteFile(home, name); p != "" {
 		data, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
-		// for .md, render to stdout as HTML the way the server would (minus
-		// the shell); for .html/.txt, write verbatim. Show is for humans and
-		// agents reading the same surface the server serves.
-		if ext == ".md" {
-			os.Stdout.Write(renderMarkdown(data))
-		} else {
-			os.Stdout.Write(data)
-		}
+		// Write verbatim — the same bytes the server serves. .md and .txt are
+		// plain text; .html is the projection's own markup.
+		os.Stdout.Write(data)
 		return nil
 	}
 	return fmt.Errorf("projection %q not found", name)
