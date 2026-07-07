@@ -30,6 +30,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -350,17 +351,15 @@ func feedText(stdin io.WriteCloser, text string) {
 //
 // The kernel materializes the brief to SELF_HOME/site/brief.md (see
 // renderBriefFile) so it is explorable on disk like every other piece of
-// state. Markdown on purpose — plain text to `cat`, rendered by the server
-// like any other .md file under site/.
-func stateBrief(home string) string {
-	events, err := readEvents(home)
-	if err != nil {
-		// a corrupt log is the kernel's failure, not the brain's; surface it
-		return fmt.Sprintf("# self — orientation brief\n\nInstance: `%s`\n\n**ERROR reading the log:** %s\n", home, err)
-	}
-	commands := map[string]commandDecl{}
-	projectors := map[string]projectorDecl{}
-	var cmdOrder, projOrder []string
+// state. Markdown on purpose — readable as plain text to a brain, to `cat`, and
+// served verbatim as text/plain like any other .md file under site/.
+// declaredCaps replays the log into the currently declared commands and
+// projectors, each in first-declared order. The shared walk behind both the
+// orientation brief and the kernel index — the log is the only source, so both
+// see exactly the same capabilities in the same order.
+func declaredCaps(events []Event) (commands map[string]commandDecl, cmdOrder []string, projectors map[string]projectorDecl, projOrder []string) {
+	commands = map[string]commandDecl{}
+	projectors = map[string]projectorDecl{}
 	for _, e := range events {
 		switch e.Name {
 		case "command.declared":
@@ -381,6 +380,16 @@ func stateBrief(home string) string {
 			}
 		}
 	}
+	return commands, cmdOrder, projectors, projOrder
+}
+
+func stateBrief(home string) string {
+	events, err := readEvents(home)
+	if err != nil {
+		// a corrupt log is the kernel's failure, not the brain's; surface it
+		return fmt.Sprintf("# self — orientation brief\n\nInstance: `%s`\n\n**ERROR reading the log:** %s\n", home, err)
+	}
+	commands, cmdOrder, projectors, projOrder := declaredCaps(events)
 
 	oneLine := func(s string) string {
 		return strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
@@ -427,8 +436,8 @@ func stateBrief(home string) string {
 // renderBriefFile writes the orientation brief to SELF_HOME/site/brief.md,
 // the kernel-resident surface a brain reads. Called alongside renderKernelHTML
 // whenever the log changes, and re-run immediately before every brain ask (see
-// freshBrief) so a brain never reads stale orientation. Rendered by the server
-// like any other markdown file under site/.
+// freshBrief) so a brain never reads stale orientation. Served verbatim as
+// text/plain like any other .md file under site/.
 func renderBriefFile(home string) {
 	siteDir := filepath.Join(home, "site")
 	os.MkdirAll(siteDir, 0755)
@@ -1071,36 +1080,17 @@ func renderKernelHTML(home string) {
 	if err != nil {
 		return
 	}
-	commands := map[string]commandDecl{}
-	projectors := map[string]projectorDecl{}
-	var cmdOrder, projOrder []string
+	commands, cmdOrder, projectors, projOrder := declaredCaps(events)
 	// grownBy is provenance: the latest kernel-signed receipt's By per capability.
 	// Verified, not merely read — an unsigned or forged by-line never renders.
 	grownBy := map[string]string{}
-	secret, _ := loadSecret(home)
-	for _, e := range events {
-		switch e.Name {
-		case "script.compiled":
-			if secret != nil {
-				if r, ok := verifiedReceipt(secret, e.Payload); ok && r.By != "" {
-					grownBy[r.Type+"/"+r.Name] = r.By
-				}
+	if secret, _ := loadSecret(home); secret != nil {
+		for _, e := range events {
+			if e.Name != "script.compiled" {
+				continue
 			}
-		case "command.declared":
-			var d commandDecl
-			if json.Unmarshal(e.Payload, &d) == nil && d.Name != "" {
-				if _, ok := commands[d.Name]; !ok {
-					cmdOrder = append(cmdOrder, d.Name)
-				}
-				commands[d.Name] = d
-			}
-		case "projector.declared":
-			var d projectorDecl
-			if json.Unmarshal(e.Payload, &d) == nil && d.Name != "" {
-				if _, ok := projectors[d.Name]; !ok {
-					projOrder = append(projOrder, d.Name)
-				}
-				projectors[d.Name] = d
+			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.By != "" {
+				grownBy[r.Type+"/"+r.Name] = r.By
 			}
 		}
 	}
@@ -1112,7 +1102,7 @@ func renderKernelHTML(home string) {
 	b.WriteString("<p class=\"muted\">a local-first, event-sourced runtime with LLM-generated capabilities</p>\n")
 	b.WriteString("<p>One append-only event log is the only state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log; humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
 	renderSeedCatalog(&b, home, commands, projectors)
-	b.WriteString("<h2>if you are an LLM reading this</h2>\n<p>You are one of two things, and the runtime treats them identically. Either the kernel spawned you as this instance's <strong>brain</strong>: <code>events.jsonl</code> is the only state, <code>site/*.html</code> is its rendered form, and your operations are <strong>read</strong> (inspect projections), <strong>write</strong> (run any command below), and <strong>extend</strong> (declare a capability; the kernel compiles it on ingestion). Or you are an <strong>external agent</strong> — a coding session, another instance's process — using this instance from outside: same state, same operations, through the shell. <code>self run &lt;command&gt; …</code> to write, <code>self show &lt;projection&gt;</code> to read, <code>self think \"…\"</code> / <code>self heartbeat</code> to extend, or <code>POST /run/&lt;command&gt;</code> while this page is served. Set <code>SELF_BRAIN_ID</code> first — every script you cause to be generated is signed with that string as its recorded author.</p>\n<p>The log is append-only, so no operation is destructive — and it is the only state that survives a session: what is not appended is lost. If this instance defines verification or hand-off conventions (claim/verify, awaken/bequeath — see below), follow them: announce your session, attach evidence before marking work done, record a hand-off note when you finish.</p>\n")
+	b.WriteString(orientationHTML)
 
 	b.WriteString("<h2>commands</h2>\n")
 	if len(cmdOrder) == 0 {
@@ -1166,22 +1156,81 @@ func renderKernelHTML(home string) {
 	os.WriteFile(filepath.Join(siteDir, "kernel.html"), []byte(b.String()), 0644)
 }
 
+// seedFS embeds the bundled seeds so a trusted seed installs — and any seed's
+// intent renders — from the binary alone, with no repo checkout on disk. Trusted
+// seeds carry a trusted.json manifest and reviewed scripts; grown seeds carry
+// only an intent.md the configured brain compiles.
+//
+//go:embed seeds
+var seedFS embed.FS
+
+// seedManifest is a trusted seed's install plan: the capabilities it declares,
+// the reviewed script file that realizes each, and the events that seed its
+// initial state. It is data, not code — the kernel installs it verbatim under a
+// signed receipt, so a trusted seed and a grown one rehydrate through the same
+// path.
+type seedManifest struct {
+	Title       string `json:"title"`
+	Kind        string `json:"kind"`
+	Description string `json:"description"`
+	Primary     string `json:"primary"`
+	Notes       string `json:"notes"`
+	Commands    []struct {
+		commandDecl
+		Script string `json:"script"`
+	} `json:"commands"`
+	Projectors []struct {
+		projectorDecl
+		Script string `json:"script"`
+	} `json:"projectors"`
+	Bootstrap []struct {
+		Name    string          `json:"name"`
+		Payload json.RawMessage `json:"payload"`
+	} `json:"bootstrap"`
+}
+
+// loadSeedManifest reads a trusted seed's install plan from the embedded FS. A
+// seed with no manifest is a grown seed (intent only) and returns ok=false.
+func loadSeedManifest(name string) (seedManifest, bool) {
+	var m seedManifest
+	data, err := seedFS.ReadFile(path.Join("seeds", name, "trusted.json"))
+	if err != nil {
+		return m, false
+	}
+	if json.Unmarshal(data, &m) != nil {
+		return m, false
+	}
+	return m, true
+}
+
 type seedCard struct {
 	Name        string
 	Title       string
 	Kind        string
 	Description string
-	Path        string
 	Primary     string
+	Trusted     bool
 }
 
 func bundledSeeds() []seedCard {
-	return []seedCard{
-		{Name: "settings", Title: "settings", Kind: "trusted bundled", Description: "Configure the brain from the browser. This seed is shipped as reviewed kernel data so it can install before any brain exists.", Path: repoFile("seeds", "settings"), Primary: "configure-brain"},
-		{Name: "chat", Title: "chat", Kind: "grown from intent", Description: "Conversational front door that can grow new capabilities mid-chat.", Path: repoFile("seeds", "chat"), Primary: "chat"},
-		{Name: "notes", Title: "notes", Kind: "grown from intent", Description: "Minimal append-only note taking example: one command and one page.", Path: repoFile("seeds", "notes"), Primary: "note"},
-		{Name: "memory", Title: "memory", Kind: "grown from intent", Description: "Durable memory for a stateless brain: remember writes facts to the log; a cold brain orients from /memory.", Path: repoFile("seeds", "memory"), Primary: "remember"},
+	cards := []seedCard{{Name: "settings"}}
+	cards = append(cards,
+		seedCard{Name: "chat", Title: "chat", Kind: "grown from intent", Description: "Conversational front door that can grow new capabilities mid-chat.", Primary: "chat"},
+		seedCard{Name: "notes", Title: "notes", Kind: "grown from intent", Description: "Minimal append-only note taking example: one command and one page.", Primary: "note"},
+		seedCard{Name: "memory", Title: "memory", Kind: "grown from intent", Description: "Durable memory for a stateless brain: remember writes facts to the log; a cold brain orients from /memory.", Primary: "remember"},
+	)
+	// A trusted seed's card is data: its title, blurb, and primary come from the
+	// manifest, so adding a trusted seed never touches the kernel.
+	for i := range cards {
+		if m, ok := loadSeedManifest(cards[i].Name); ok {
+			cards[i].Trusted = true
+			cards[i].Title = m.Title
+			cards[i].Kind = m.Kind
+			cards[i].Description = m.Description
+			cards[i].Primary = m.Primary
+		}
 	}
+	return cards
 }
 
 func renderSeedCatalog(b *strings.Builder, home string, commands map[string]commandDecl, projectors map[string]projectorDecl) {
@@ -1209,19 +1258,19 @@ func renderSeedCatalog(b *strings.Builder, home string, commands map[string]comm
 		b.WriteString("<article class=\"card\"><h3>" + esc(seed.Title) + "</h3>")
 		b.WriteString("<p>" + esc(seed.Description) + "</p>")
 		b.WriteString("<p class=\"muted\">" + esc(seed.Kind) + "</p>")
-		if seed.Name == "settings" {
-			b.WriteString("<details><summary>intent.md</summary><pre>" + esc(seedIntent(seed.Path)) + "</pre></details>")
-			b.WriteString("<details><summary>what will be installed?</summary><pre>command: configure-brain -> brain.configured\nprojection: /settings consumes brain.configured\nsecret handling: API keys are written to SELF_HOME/.brain-key, never events.jsonl</pre></details>")
-		} else if seed.Path != "" {
-			b.WriteString("<details><summary>intent.md</summary><pre>" + esc(seedIntent(seed.Path)) + "</pre></details>")
+		b.WriteString("<details><summary>intent.md</summary><pre>" + esc(seedIntent(seed.Name)) + "</pre></details>")
+		if seed.Trusted {
+			if m, ok := loadSeedManifest(seed.Name); ok {
+				b.WriteString("<details><summary>what will be installed?</summary><pre>" + esc(trustedSeedPlan(m)) + "</pre></details>")
+			}
 		}
 		if installed {
 			b.WriteString("<p class=\"tag\">installed</p>")
-			if seed.Name == "settings" {
-				b.WriteString("<p><a href=\"/settings\">Open settings</a></p>")
+			if view := trustedSeedView(seed); view != "" {
+				b.WriteString("<p><a href=\"/" + esc(view) + "\">Open " + esc(seed.Title) + "</a></p>")
 			}
-		} else if seed.Name == "settings" {
-			b.WriteString("<form method=\"post\" action=\"/install-seed\"><input type=\"hidden\" name=\"seed\" value=\"settings\"><button>Install settings</button></form>")
+		} else if seed.Trusted {
+			b.WriteString("<form method=\"post\" action=\"/install-seed\"><input type=\"hidden\" name=\"seed\" value=\"" + esc(seed.Name) + "\"><button>Install " + esc(seed.Title) + "</button></form>")
 		} else if brain == "" && !stubBrain {
 			b.WriteString("<p class=\"muted\">Install settings and configure a brain before growing this seed.</p>")
 		} else {
@@ -1232,21 +1281,43 @@ func renderSeedCatalog(b *strings.Builder, home string, commands map[string]comm
 	b.WriteString("</div>\n")
 }
 
-func seedIntent(seedDir string) string {
-	data, err := os.ReadFile(filepath.Join(seedDir, "intent.md"))
+// seedIntent reads a bundled seed's intent.md from the embedded FS, so it
+// renders from the binary alone with no repo checkout on disk.
+func seedIntent(name string) string {
+	data, err := seedFS.ReadFile(path.Join("seeds", name, "intent.md"))
 	if err != nil {
 		return err.Error()
 	}
 	return string(data)
 }
 
-func seedPathByName(name string) (string, bool) {
-	for _, seed := range bundledSeeds() {
-		if seed.Name == name && seed.Path != "" {
-			return seed.Path, true
-		}
+// trustedSeedPlan summarizes, from the manifest alone, exactly what installing a
+// trusted seed will declare — shown to the human who is the brain before any
+// brain exists, so they can decide whether they trust it.
+func trustedSeedPlan(m seedManifest) string {
+	var b strings.Builder
+	for _, c := range m.Commands {
+		fmt.Fprintf(&b, "command: %s -> %s\n", c.Name, c.Event.Name)
 	}
-	return "", false
+	for _, p := range m.Projectors {
+		fmt.Fprintf(&b, "projection: /%s consumes %s\n", p.Name, strings.Join(p.Consumes, ", "))
+	}
+	if m.Notes != "" {
+		b.WriteString(m.Notes + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// trustedSeedView is the projection route a trusted seed's "Open" link points
+// at: its first declared projector.
+func trustedSeedView(seed seedCard) string {
+	if !seed.Trusted {
+		return ""
+	}
+	if m, ok := loadSeedManifest(seed.Name); ok && len(m.Projectors) > 0 {
+		return m.Projectors[0].Name
+	}
+	return ""
 }
 
 // ─────────────────────────────── the surface ────────────────────────────────
@@ -1327,49 +1398,9 @@ func themeLabel(name string) string {
 // layout rule, written entirely against var()s a theme supplies. It never
 // mentions a literal color, font, or radius — that is what makes the embedded
 // themes/*.css skins interchangeable.
-const structuralCSS = `*{box-sizing:border-box}html{scroll-behavior:smooth}
-body{font-family:var(--font);margin:0 auto;max-width:72ch;padding:24px 20px 32px;
-background:var(--bg);color:var(--ink);line-height:1.55}
-h1,h2,h3{font-family:var(--head-font);font-weight:600;line-height:1.25}
-h1{font-size:1.55rem;margin:.2em 0 .6em}h2{margin-top:32px;border-bottom:var(--line-w) solid var(--line);padding-bottom:6px}
-a{color:var(--accent)}.muted{color:var(--muted)}
-.card,article{background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius);padding:12px 16px;margin:10px 0;box-shadow:var(--shadow)}
-.card.danger{border-color:var(--danger);color:var(--danger)}
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:10px}
-.tag{display:inline-block;background:var(--wash);color:var(--accent);border-radius:var(--radius-sm);padding:1px 8px;font-size:12px;font-family:var(--mono)}
-.num{text-align:right;font-variant-numeric:tabular-nums}
-.msg{max-width:85%;width:fit-content;background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius-msg);
-padding:8px 14px;margin:10px 0;box-shadow:var(--shadow);overflow-wrap:break-word}
-.msg .who{display:block;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:1px}
-.msg.user{margin-left:auto;background:var(--user-bg);border-color:var(--user-line);border-bottom-right-radius:var(--radius-sm)}
-.msg.assistant{margin-right:auto;border-bottom-left-radius:var(--radius-sm)}
-.msg.pending{opacity:.65}
-.dots i{display:inline-block;width:5px;height:5px;margin:1px 2px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
-.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
-@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
-table{border-collapse:collapse;width:100%}
-th{text-align:left;color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}
-th,td{border-bottom:var(--line-w) solid var(--line);padding:7px 10px;font-size:14px}
-pre{background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius);padding:12px;overflow-x:auto;font-size:13px}
-code{font-family:var(--mono);background:var(--wash);border-radius:var(--radius-sm);padding:1px 5px;font-size:.9em}
-form{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
-input,textarea{font:inherit;flex:1 1 24ch;min-width:0;padding:9px 12px;border:var(--line-w) solid var(--line);border-radius:var(--radius);background:var(--panel);color:inherit}
-textarea{flex-basis:100%}
-input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
-button{font:inherit;padding:9px 16px;border:var(--line-w) solid var(--accent);border-radius:var(--radius);background:var(--accent);color:var(--accent-ink);cursor:pointer;transition:filter .15s}
-button:hover{filter:brightness(1.08)}
-button.secondary{background:transparent;color:var(--accent)}button.danger{border-color:var(--danger);background:var(--danger);color:#fff}
-form.busy button{opacity:.55;pointer-events:none}
-body:has(.msg) form:last-of-type{position:sticky;bottom:0;padding:14px 0 10px;margin-top:6px;background:linear-gradient(transparent,var(--bg) 35%)}
-.rise{animation:rise .22s ease-out both}
-@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-::view-transition-old(root),::view-transition-new(root){animation-duration:.15s}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
-.self-themes{position:fixed;right:10px;bottom:10px;z-index:9;display:flex;gap:4px;padding:4px;
-background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius-sm);box-shadow:var(--shadow);font-family:var(--mono);font-size:11px}
-.self-themes a{padding:2px 7px;border-radius:var(--radius-sm);color:var(--muted);text-decoration:none;line-height:1.4}
-.self-themes a[aria-current]{background:var(--accent);color:var(--accent-ink)}
-@media print{.self-themes{display:none}}`
+//
+//go:embed shell/structural.css
+var structuralCSS string
 
 // validTheme reports whether name is a known design; selection paths accept
 // only known names, so the injected picker links and cookie can never smuggle
@@ -1429,265 +1460,19 @@ func themePicker(current string) string {
 // state: when the round-trip lands, the page is re-fetched and the log's
 // replay wins. Liveness is the same idea watched from outside — the byte
 // length of /events is the cursor; when the log grows, re-replay.
-const shellScript = `<script>
-(() => {
-"use strict";
-if (!window.fetch || !window.DOMParser) return;
-let busy = false, baseline = null;
+//
+//go:embed shell/shell.js
+var shellScriptBody string
 
-const logSize = () => fetch("/events", {method:"HEAD", cache:"no-store"})
-  .then(r => r.headers.get("content-length")).catch(() => null);
+// orientationHTML is the kernel index's static "if you are an LLM" briefing —
+// self-description copy, kept as data beside the shell it renders with.
+//
+//go:embed shell/orientation.html
+var orientationHTML string
 
-async function refresh(toBottom) {
-  const res = await fetch(location.href, {cache:"no-store"});
-  if (!res.ok) return;
-  const doc = new DOMParser().parseFromString(await res.text(), "text/html");
-  const ae = document.activeElement;
-  const keep = ae && ae.name ? {name: ae.name, value: ae.value} : null;
-  const y = scrollY;
-  const swap = () => {
-    document.body.replaceWith(doc.body);
-    if (toBottom && document.querySelector(".msg")) {
-      [...document.querySelectorAll(".msg")].slice(-2).forEach(m => m.classList.add("rise"));
-      scrollTo(0, document.body.scrollHeight);
-    } else scrollTo(0, y);
-    if (keep) {
-      const el = document.querySelector("[name=\"" + keep.name.replace(/"/g, "") + "\"]");
-      if (el) { if (!toBottom) el.value = keep.value; el.focus(); }
-    }
-  };
-  if (document.startViewTransition) document.startViewTransition(swap); else swap();
-}
-
-document.addEventListener("submit", e => {
-  const f = e.target;
-  const action = new URL(f.getAttribute("action") || "", location.href);
-  if (!action.pathname.startsWith("/run/")) return;
-  e.preventDefault();
-  if (busy) return;
-  busy = true;
-  f.classList.add("busy");
-  const body = new URLSearchParams(new FormData(f));
-  const first = f.querySelector("input,textarea");
-  const text = first ? first.value : "";
-  let ghost, think;
-  const anchor = [...document.querySelectorAll(".msg")].pop();
-  if (anchor && text.trim()) { // a conversation: show the turn in flight, clearly pending
-    const label = (role) => { // borrow the who label the projection already uses
-      const whos = document.querySelectorAll(".msg." + role + " .who");
-      return whos.length ? "<span class='who'></span>" : "";
-    };
-    ghost = document.createElement("div");
-    ghost.className = "msg user pending rise";
-    ghost.innerHTML = label("user");
-    ghost.appendChild(document.createTextNode(text));
-    think = document.createElement("div");
-    think.className = "msg assistant pending rise";
-    think.innerHTML = label("assistant") + "<span class='dots'><i></i><i></i><i></i></span>";
-    for (const role of ["user", "assistant"]) {
-      const whos = document.querySelectorAll(".msg." + role + " .who");
-      const target = (role === "user" ? ghost : think).querySelector(".who");
-      if (whos.length && target) target.textContent = whos[whos.length - 1].textContent;
-    }
-    anchor.after(ghost, think);
-    first.value = "";
-    scrollTo({top: document.body.scrollHeight, behavior: "smooth"});
-  }
-  fetch(action, {method: "POST", body}).then(async r => {
-    if (!r.ok) throw new Error((await r.text()).trim() || r.status);
-    baseline = null;
-    await refresh(true);
-  }).catch(err => { // degrade honestly: say what failed, give the words back
-    if (ghost) { think.remove(); ghost.remove(); first.value = text; }
-    const p = document.createElement("p");
-    p.className = "card danger rise";
-    p.textContent = "could not run " + action.pathname.slice(5) + ": " + err.message;
-    f.before(p);
-    setTimeout(() => p.remove(), 8000);
-  }).finally(() => { busy = false; f.classList.remove("busy"); });
-});
-
-async function tick() {
-  if (document.hidden || busy) return;
-  const n = await logSize();
-  if (n == null) return;
-  if (baseline != null && n !== baseline) {
-    const nearBottom = innerHeight + scrollY > document.body.scrollHeight - 120;
-    await refresh(nearBottom && !!document.querySelector(".msg"));
-  }
-  baseline = n;
-}
-setInterval(tick, 2500);
-addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
-addEventListener("DOMContentLoaded", tick);
-})();
-</script>`
-
-// renderMarkdown is a small, stdlib-only Markdown→HTML converter for the
-// kernel's own .md artifacts (brief.md, and any plugin a brain writes as
-// markdown). It is deliberately minimal — headings, unordered lists, fenced
-// code blocks, blank-line paragraphs, and inline [text](url), `code`,
-// **bold**, *italic* — enough to render the kernel's prose cleanly. It is not
-// a feature-complete Markdown parser; the contract is "graceful rendering of
-// kernel markdown in a browser", not CommonMark conformance. Projectors
-// authored by the brain stay bare semantic HTML (their contract); markdown
-// here is for the kernel-resident surfaces a brain reads and a human might
-// glance at. Escapes all input first; emits no inline styles or scripts.
-func renderMarkdown(src []byte) []byte {
-	lines := strings.Split(string(src), "\n")
-	var out strings.Builder
-	out.WriteString("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"></head><body>\n")
-	var inList, inCode bool
-	var para []string
-	flushPara := func() {
-		if len(para) == 0 {
-			return
-		}
-		out.WriteString("<p>")
-		out.WriteString(strings.Join(para, "<br>"))
-		out.WriteString("</p>\n")
-		para = para[:0]
-	}
-	closeList := func() {
-		if inList {
-			out.WriteString("</ul>\n")
-			inList = false
-		}
-	}
-	closeCode := func() {
-		if inCode {
-			out.WriteString("</code></pre>\n")
-			inCode = false
-		}
-	}
-	for _, raw := range lines {
-		line := raw
-		// fenced code blocks — ``` opens and closes
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			if inCode {
-				closeCode()
-			} else {
-				flushPara()
-				closeList()
-				out.WriteString("<pre><code>")
-				inCode = true
-			}
-			continue
-		}
-		if inCode {
-			out.WriteString(html.EscapeString(line))
-			out.WriteString("\n")
-			continue
-		}
-		t := strings.TrimSpace(line)
-		if t == "" {
-			flushPara()
-			closeList()
-			continue
-		}
-		if strings.HasPrefix(t, "# ") {
-			flushPara()
-			closeList()
-			out.WriteString("<h1>" + renderInlineMD(t[2:]) + "</h1>\n")
-			continue
-		}
-		if strings.HasPrefix(t, "## ") {
-			flushPara()
-			closeList()
-			out.WriteString("<h2>" + renderInlineMD(t[3:]) + "</h2>\n")
-			continue
-		}
-		if strings.HasPrefix(t, "### ") {
-			flushPara()
-			closeList()
-			out.WriteString("<h3>" + renderInlineMD(t[4:]) + "</h3>\n")
-			continue
-		}
-		if strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") {
-			flushPara()
-			if !inList {
-				out.WriteString("<ul>\n")
-				inList = true
-			}
-			out.WriteString("<li>" + renderInlineMD(t[2:]) + "</li>\n")
-			continue
-		}
-		closeList()
-		para = append(para, renderInlineMD(t))
-	}
-	flushPara()
-	closeList()
-	closeCode()
-	out.WriteString("</body></html>\n")
-	return []byte(out.String())
-}
-
-// renderInlineMD handles a single line's inline markdown: `[text](url)`,
-// `code`, **bold**, *italic*. Input is escaped first; patterns are applied
-// after, so URLs never reach the raw HTML.
-func renderInlineMD(s string) string {
-	s = html.EscapeString(s)
-	// [text](url) → <a href="url" rel="noopener">text</a>
-	for {
-		i := strings.Index(s, "[")
-		if i < 0 {
-			break
-		}
-		j := strings.Index(s[i:], "](")
-		if j < 0 {
-			break
-		}
-		j += i
-		k := strings.Index(s[j+2:], ")")
-		if k < 0 {
-			break
-		}
-		text := s[i+1 : j]
-		url := s[j+2 : j+2+k]
-		s = s[:i] + `<a href="` + url + `" rel="noopener">` + text + "</a>" + s[j+3+k:]
-	}
-	// `code` — inline backtick
-	for {
-		i := strings.Index(s, "`")
-		if i < 0 {
-			break
-		}
-		j := strings.Index(s[i+1:], "`")
-		if j < 0 {
-			break
-		}
-		j += i + 1
-		s = s[:i] + "<code>" + s[i+1:j] + "</code>" + s[j+1:]
-	}
-	// **bold**
-	s = strings.ReplaceAll(s, "**", "\x00BOLD\x00") // placeholder to avoid ** collisions
-	for {
-		i := strings.Index(s, "\x00BOLD\x00")
-		if i < 0 {
-			break
-		}
-		j := strings.Index(s[i+6:], "\x00BOLD\x00")
-		if j < 0 {
-			break
-		}
-		j += i + 6
-		s = s[:i] + "<strong>" + s[i+6:j] + "</strong>" + s[j+6:]
-	}
-	// *italic*
-	for {
-		i := strings.Index(s, "*")
-		if i < 0 {
-			break
-		}
-		j := strings.Index(s[i+1:], "*")
-		if j < 0 {
-			break
-		}
-		j += i + 1
-		s = s[:i] + "<em>" + s[i+1:j] + "</em>" + s[j+1:]
-	}
-	return s
-}
+// shellScript wraps the embedded progressive-enhancement JS as an injectable
+// <script> element.
+var shellScript = "<script>" + shellScriptBody + "</script>"
 
 // siteFile resolves a path under SELF_HOME/site/ to a file by name, looking for
 // <name>.html, <name>.md, and <name>.txt in order. It returns the file path and
@@ -1704,25 +1489,21 @@ func siteFile(home, name string) (path, ext string) {
 }
 
 // serveSiteFile writes a site file to an HTTP response, dispatching by
-// extension: .md is rendered to HTML and injected through the shell (so a
-// markdown artifact is a first-class page, themed and progressive-enhanced),
-// .html goes through the shell as-is, and .txt is served verbatim as text/plain
-// (the shell doesn't touch it — plain text is honest about what it is).
+// extension: .html goes through the shell (themed, progressive-enhanced), while
+// .md and .txt are served verbatim as text/plain — plain text is honest about
+// what it is, and the kernel renders no markup it did not itself emit.
 func serveSiteFile(w http.ResponseWriter, r *http.Request, path, ext string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		http.Error(w, err.Error(), 404)
 		return
 	}
-	switch ext {
-	case ".md":
-		writePage(w, r, renderMarkdown(data))
-	case ".html":
+	if ext == ".html" {
 		writePage(w, r, data)
-	case ".txt":
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write(data)
+		return
 	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(data)
 }
 
 func injectShell(page []byte, theme string) []byte {
@@ -1842,12 +1623,12 @@ func cmdServe(home, port string) error {
 			http.Error(w, "bad form", 400)
 			return
 		}
-		seedDir, ok := seedPathByName(r.FormValue("seed"))
-		if !ok {
+		seed := r.FormValue("seed")
+		if _, err := seedFS.ReadFile(path.Join("seeds", seed, "intent.md")); err != nil {
 			http.Error(w, "unknown seed", 404)
 			return
 		}
-		if err := cmdGrow(home, seedDir); err != nil {
+		if err := cmdGrow(home, seed); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -1903,128 +1684,55 @@ func cmdServe(home, port string) error {
 	return http.ListenAndServe(addr, mux)
 }
 
-// ────────────────────────────── the commands ────────────────────────────────
+// ──────────────────────────── trusted seeds ─────────────────────────────────
+//
+// A trusted seed is reviewed data bundled with the kernel: a trusted.json
+// install plan plus the scripts it names. It installs before any brain exists
+// (the human is the brain for this step), through the same declare + signed
+// receipt path as a grown capability — so it rehydrates from the log alone like
+// everything else. settings is the first; adding another means adding a
+// directory, not kernel code.
 
-const settingsConfigureScript = `#!/usr/bin/env python3
-import json
-import os
-import sys
-
-provider = sys.argv[1] if len(sys.argv) > 1 else ""
-command = sys.argv[2] if len(sys.argv) > 2 else ""
-base_url = sys.argv[3] if len(sys.argv) > 3 else ""
-model = sys.argv[4] if len(sys.argv) > 4 else ""
-key = sys.argv[5] if len(sys.argv) > 5 else ""
-
-for _ in sys.stdin:
-    pass
-
-home = os.environ.get("SELF_HOME", ".")
-keyfile = os.path.join(home, ".brain-key")
-if key.strip():
-    with open(keyfile, "w") as f:
-        f.write(key.strip())
-    os.chmod(keyfile, 0o600)
-
-key_set = os.path.exists(keyfile) and os.path.getsize(keyfile) > 0
-print(json.dumps({"name": "brain.configured", "payload": {
-    "provider": provider,
-    "command": command,
-    "base_url": base_url,
-    "model": model,
-    "key_set": key_set,
-}}))
-`
-
-const settingsProjectorScript = `#!/usr/bin/env python3
-import html
-import json
-import sys
-
-cfg = {"provider": "", "command": "", "base_url": "", "model": "", "key_set": False}
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    event = json.loads(line)
-    if event.get("name") == "brain.configured":
-        payload = event.get("payload") or {}
-        cfg.update(payload)
-
-def esc(value):
-    return html.escape(str(value or ""), quote=True)
-
-print("<!doctype html>")
-print('<html lang="en"><head><meta charset="utf-8"><title>settings</title></head><body>')
-print("<h1>settings</h1>")
-print("<p class=\"muted\">Configure the brain process used by think, grow, heartbeat, and compile. Environment variable SELF_BRAIN still wins for explicit shell sessions.</p>")
-if cfg.get("provider") or cfg.get("command"):
-    print('<article class="card"><h2>current brain</h2>')
-    print("<p><strong>provider</strong> %s</p>" % esc(cfg.get("provider") or "custom"))
-    if cfg.get("command"):
-        print("<p><strong>command</strong> <code>%s</code></p>" % esc(cfg.get("command")))
-    if cfg.get("base_url"):
-        print("<p><strong>base URL</strong> <code>%s</code></p>" % esc(cfg.get("base_url")))
-    if cfg.get("model"):
-        print("<p><strong>model</strong> <code>%s</code></p>" % esc(cfg.get("model")))
-    print("<p><strong>API key</strong> %s</p>" % ("set" if cfg.get("key_set") else "not set"))
-    print("</article>")
-else:
-    print('<p class="tag">no saved brain configured yet</p>')
-print('<form method="post" action="/run/configure-brain">')
-print('<label>provider <input name="provider" placeholder="opencode, openai, custom" value="%s"></label>' % esc(cfg.get("provider")))
-print('<label>command <input name="command" placeholder="optional exact SELF_BRAIN command" value="%s"></label>' % esc(cfg.get("command")))
-print('<label>base URL <input name="base_url" placeholder="https://api.openai.com or local endpoint" value="%s"></label>' % esc(cfg.get("base_url")))
-print('<label>model <input name="model" placeholder="model name" value="%s"></label>' % esc(cfg.get("model")))
-print('<label>API key <input name="key" type="password" placeholder="blank keeps existing key"></label>')
-print('<button>save brain</button>')
-print('</form>')
-print('<h2>common choices</h2>')
-print('<ul>')
-print('<li><strong>OpenCode (recommended):</strong> provider <code>opencode</code>, model optional. Uses bundled <code>examples/brain-opencode</code>. Tool-capable — can inspect SELF_HOME itself, which the contract requires.</li>')
-print('<li><strong>OpenAI-compatible (reference only):</strong> provider <code>openai</code> or <code>custom</code>, base URL, model, key. Uses bundled <code>examples/brain-openai</code>, which illustrates the wire shape but has no tool loop of its own — incomplete by spec; do not expect real capabilities from it.</li>')
-print('<li><strong>Any process:</strong> put the full command in command; it receives SELF_ASK, an orientation brief on stdin, the prompt as argv. A brain without tools to inspect SELF_HOME cannot do the job.</li>')
-print('</ul>')
-print('<p><a href="/">Back to home</a></p>')
-print('</body></html>')
-`
-
-func settingsCommandDecl() commandDecl {
-	var d commandDecl
-	d.Name = "configure-brain"
-	d.Description = "Configure the brain process used by think/grow/compile; secrets are stored outside the event log."
-	d.Params = map[string]string{"provider": "string", "command": "string", "base_url": "string", "model": "string", "key": "string"}
-	d.Event.Name = "brain.configured"
-	d.Event.Fields = map[string]string{"provider": "string", "command": "string", "base_url": "string", "model": "string", "key_set": "bool"}
-	return d
-}
-
-func settingsProjectorDecl() projectorDecl {
-	return projectorDecl{Name: "settings", Description: "Configure this instance's brain and inspect the saved non-secret settings.", Consumes: []string{"brain.configured"}}
-}
-
+// installBundledSeed installs a trusted seed by name from its embedded manifest.
 func installBundledSeed(home, name string) error {
-	if name != "settings" {
+	m, ok := loadSeedManifest(name)
+	if !ok {
 		return fmt.Errorf("unknown bundled seed %q", name)
 	}
-	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "configure-brain")); err == nil {
-		return fmt.Errorf("settings is already installed")
+	for _, c := range m.Commands {
+		if p, _ := scriptPath(home, "command", c.Name); fileExists(p) {
+			return fmt.Errorf("%s is already installed", name)
+		}
 	}
-	if err := declareCommand(home, settingsCommandDecl()); err != nil {
-		return err
+	by := "bundled seed: " + name
+	for _, c := range m.Commands {
+		script, err := seedFS.ReadFile(path.Join("seeds", name, c.Script))
+		if err != nil {
+			return err
+		}
+		if err := declareCommand(home, c.commandDecl); err != nil {
+			return err
+		}
+		if err := installTrustedScript(home, "command", c.Name, string(script), by); err != nil {
+			return err
+		}
 	}
-	if err := declareProjector(home, settingsProjectorDecl()); err != nil {
-		return err
+	for _, p := range m.Projectors {
+		script, err := seedFS.ReadFile(path.Join("seeds", name, p.Script))
+		if err != nil {
+			return err
+		}
+		if err := declareProjector(home, p.projectorDecl); err != nil {
+			return err
+		}
+		if err := installTrustedScript(home, "projector", p.Name, string(script), by); err != nil {
+			return err
+		}
 	}
-	by := "bundled seed: settings"
-	if err := installTrustedScript(home, "command", "configure-brain", settingsConfigureScript, by); err != nil {
-		return err
-	}
-	if err := installTrustedScript(home, "projector", "settings", settingsProjectorScript, by); err != nil {
-		return err
-	}
-	if err := ingest(home, []Event{newEvent("brain.configured", json.RawMessage(`{"provider":"","command":"","base_url":"","model":"","key_set":false}`))}); err != nil {
-		return err
+	for _, b := range m.Bootstrap {
+		if err := ingest(home, []Event{newEvent(b.Name, b.Payload)}); err != nil {
+			return err
+		}
 	}
 	refreshSite(home)
 	return nil
@@ -2054,13 +1762,49 @@ func growPrompt(intent string) string {
 		brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
 }
 
-func cmdGrow(home, seedDir string) error {
-	raw, err := os.ReadFile(filepath.Join(seedDir, "intent.md"))
-	if err != nil {
-		return fmt.Errorf("a seed is a directory with an intent.md: %w", err)
+// parseDeposit reads a seed.jsonl initial deposit into events.
+func parseDeposit(raw []byte) ([]Event, error) {
+	var evs []Event
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		var e Event
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			return nil, fmt.Errorf("parse seed.jsonl: %w", err)
+		}
+		evs = append(evs, e)
 	}
-	intent := strings.TrimSpace(string(raw))
-	name := filepath.Base(seedDir)
+	return evs, nil
+}
+
+// readSeedSource resolves a grow reference to its intent and initial deposit. A
+// bare name matches a bundled seed in the embedded FS (so grow works from the
+// binary alone); anything else is read as a directory on disk.
+func readSeedSource(ref string) (name, intent string, deposit []Event, err error) {
+	if data, e := seedFS.ReadFile(path.Join("seeds", ref, "intent.md")); e == nil {
+		name, intent = ref, strings.TrimSpace(string(data))
+		if raw, e := seedFS.ReadFile(path.Join("seeds", ref, "seed.jsonl")); e == nil {
+			deposit, err = parseDeposit(raw)
+		}
+		return name, intent, deposit, err
+	}
+	data, e := os.ReadFile(filepath.Join(ref, "intent.md"))
+	if e != nil {
+		return "", "", nil, fmt.Errorf("a seed is a directory with an intent.md: %w", e)
+	}
+	name, intent = filepath.Base(ref), strings.TrimSpace(string(data))
+	if raw, e := os.ReadFile(filepath.Join(ref, "seed.jsonl")); e == nil {
+		deposit, err = parseDeposit(raw)
+	}
+	return name, intent, deposit, err
+}
+
+func cmdGrow(home, ref string) error {
+	name, intent, deposit, err := readSeedSource(ref)
+	if err != nil {
+		return err
+	}
 
 	payload, _ := json.Marshal(map[string]any{"name": name, "intent": intent})
 	ie := newEvent("intent.declared", payload)
@@ -2109,19 +1853,10 @@ func cmdGrow(home, seedDir string) error {
 
 	// The initial deposit: content laid once, so the surface has
 	// something to render from the first moment.
-	if raw, err := os.ReadFile(filepath.Join(seedDir, "seed.jsonl")); err == nil {
-		for _, line := range strings.Split(string(raw), "\n") {
-			if line = strings.TrimSpace(line); line == "" {
-				continue
-			}
-			var e Event
-			if err := json.Unmarshal([]byte(line), &e); err != nil {
-				return fmt.Errorf("parse seed.jsonl: %w", err)
-			}
-			fresh := newEvent(e.Name, e.Payload)
-			if err := appendEvent(home, &fresh); err != nil {
-				return err
-			}
+	for _, e := range deposit {
+		fresh := newEvent(e.Name, e.Payload)
+		if err := appendEvent(home, &fresh); err != nil {
+			return err
 		}
 	}
 
@@ -2524,19 +2259,14 @@ func cmdShow(home, name string) error {
 		return nil
 	}
 	// bare name → on-disk artifact (.html, .md, .txt) under site/, if present
-	if p, ext := siteFile(home, name); p != "" {
+	if p, _ := siteFile(home, name); p != "" {
 		data, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
-		// for .md, render to stdout as HTML the way the server would (minus
-		// the shell); for .html/.txt, write verbatim. Show is for humans and
-		// agents reading the same surface the server serves.
-		if ext == ".md" {
-			os.Stdout.Write(renderMarkdown(data))
-		} else {
-			os.Stdout.Write(data)
-		}
+		// Write verbatim — the same bytes the server serves. .md and .txt are
+		// plain text; .html is the projection's own markup.
+		os.Stdout.Write(data)
 		return nil
 	}
 	return fmt.Errorf("projection %q not found", name)
