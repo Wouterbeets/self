@@ -1106,7 +1106,7 @@ func renderKernelHTML(home string) {
 	b.WriteString("<p class=\"muted\">a local-first, event-sourced runtime with LLM-generated capabilities</p>\n")
 	b.WriteString("<p>One append-only event log is the only state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log; humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
 	renderSeedCatalog(&b, home, commands, projectors)
-	b.WriteString("<h2>if you are an LLM reading this</h2>\n<p>You are one of two things, and the runtime treats them identically. Either the kernel spawned you as this instance's <strong>brain</strong>: <code>events.jsonl</code> is the only state, <code>site/*.html</code> is its rendered form, and your operations are <strong>read</strong> (inspect projections), <strong>write</strong> (run any command below), and <strong>extend</strong> (declare a capability; the kernel compiles it on ingestion). Or you are an <strong>external agent</strong> — a coding session, another instance's process — using this instance from outside: same state, same operations, through the shell. <code>self run &lt;command&gt; …</code> to write, <code>self show &lt;projection&gt;</code> to read, <code>self think \"…\"</code> / <code>self heartbeat</code> to extend, or <code>POST /run/&lt;command&gt;</code> while this page is served. Set <code>SELF_BRAIN_ID</code> first — every script you cause to be generated is signed with that string as its recorded author.</p>\n<p>The log is append-only, so no operation is destructive — and it is the only state that survives a session: what is not appended is lost. If this instance defines verification or hand-off conventions (claim/verify, awaken/bequeath — see below), follow them: announce your session, attach evidence before marking work done, record a hand-off note when you finish.</p>\n")
+	b.WriteString(orientationHTML)
 
 	b.WriteString("<h2>commands</h2>\n")
 	if len(cmdOrder) == 0 {
@@ -1466,6 +1466,12 @@ func themePicker(current string) string {
 //
 //go:embed shell/shell.js
 var shellScriptBody string
+
+// orientationHTML is the kernel index's static "if you are an LLM" briefing —
+// self-description copy, kept as data beside the shell it renders with.
+//
+//go:embed shell/orientation.html
+var orientationHTML string
 
 // shellScript wraps the embedded progressive-enhancement JS as an injectable
 // <script> element.
