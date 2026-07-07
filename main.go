@@ -353,15 +353,13 @@ func feedText(stdin io.WriteCloser, text string) {
 // renderBriefFile) so it is explorable on disk like every other piece of
 // state. Markdown on purpose — readable as plain text to a brain, to `cat`, and
 // served verbatim as text/plain like any other .md file under site/.
-func stateBrief(home string) string {
-	events, err := readEvents(home)
-	if err != nil {
-		// a corrupt log is the kernel's failure, not the brain's; surface it
-		return fmt.Sprintf("# self — orientation brief\n\nInstance: `%s`\n\n**ERROR reading the log:** %s\n", home, err)
-	}
-	commands := map[string]commandDecl{}
-	projectors := map[string]projectorDecl{}
-	var cmdOrder, projOrder []string
+// declaredCaps replays the log into the currently declared commands and
+// projectors, each in first-declared order. The shared walk behind both the
+// orientation brief and the kernel index — the log is the only source, so both
+// see exactly the same capabilities in the same order.
+func declaredCaps(events []Event) (commands map[string]commandDecl, cmdOrder []string, projectors map[string]projectorDecl, projOrder []string) {
+	commands = map[string]commandDecl{}
+	projectors = map[string]projectorDecl{}
 	for _, e := range events {
 		switch e.Name {
 		case "command.declared":
@@ -382,6 +380,16 @@ func stateBrief(home string) string {
 			}
 		}
 	}
+	return commands, cmdOrder, projectors, projOrder
+}
+
+func stateBrief(home string) string {
+	events, err := readEvents(home)
+	if err != nil {
+		// a corrupt log is the kernel's failure, not the brain's; surface it
+		return fmt.Sprintf("# self — orientation brief\n\nInstance: `%s`\n\n**ERROR reading the log:** %s\n", home, err)
+	}
+	commands, cmdOrder, projectors, projOrder := declaredCaps(events)
 
 	oneLine := func(s string) string {
 		return strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
@@ -1065,36 +1073,17 @@ func renderKernelHTML(home string) {
 	if err != nil {
 		return
 	}
-	commands := map[string]commandDecl{}
-	projectors := map[string]projectorDecl{}
-	var cmdOrder, projOrder []string
+	commands, cmdOrder, projectors, projOrder := declaredCaps(events)
 	// grownBy is provenance: the latest kernel-signed receipt's By per capability.
 	// Verified, not merely read — an unsigned or forged by-line never renders.
 	grownBy := map[string]string{}
-	secret, _ := loadSecret(home)
-	for _, e := range events {
-		switch e.Name {
-		case "script.compiled":
-			if secret != nil {
-				if r, ok := verifiedReceipt(secret, e.Payload); ok && r.By != "" {
-					grownBy[r.Type+"/"+r.Name] = r.By
-				}
+	if secret, _ := loadSecret(home); secret != nil {
+		for _, e := range events {
+			if e.Name != "script.compiled" {
+				continue
 			}
-		case "command.declared":
-			var d commandDecl
-			if json.Unmarshal(e.Payload, &d) == nil && d.Name != "" {
-				if _, ok := commands[d.Name]; !ok {
-					cmdOrder = append(cmdOrder, d.Name)
-				}
-				commands[d.Name] = d
-			}
-		case "projector.declared":
-			var d projectorDecl
-			if json.Unmarshal(e.Payload, &d) == nil && d.Name != "" {
-				if _, ok := projectors[d.Name]; !ok {
-					projOrder = append(projOrder, d.Name)
-				}
-				projectors[d.Name] = d
+			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.By != "" {
+				grownBy[r.Type+"/"+r.Name] = r.By
 			}
 		}
 	}
