@@ -30,6 +30,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -1159,21 +1160,80 @@ func renderKernelHTML(home string) {
 	os.WriteFile(filepath.Join(siteDir, "kernel.html"), []byte(b.String()), 0644)
 }
 
+// seedFS embeds the bundled seeds so a trusted seed installs — and any seed's
+// intent renders — from the binary alone, with no repo checkout on disk. Trusted
+// seeds carry a trusted.json manifest and reviewed scripts; grown seeds carry
+// only an intent.md the configured brain compiles.
+//
+//go:embed seeds
+var seedFS embed.FS
+
+// seedManifest is a trusted seed's install plan: the capabilities it declares,
+// the reviewed script file that realizes each, and the events that seed its
+// initial state. It is data, not code — the kernel installs it verbatim under a
+// signed receipt, so a trusted seed and a grown one rehydrate through the same
+// path.
+type seedManifest struct {
+	Title       string `json:"title"`
+	Kind        string `json:"kind"`
+	Description string `json:"description"`
+	Primary     string `json:"primary"`
+	Notes       string `json:"notes"`
+	Commands    []struct {
+		commandDecl
+		Script string `json:"script"`
+	} `json:"commands"`
+	Projectors []struct {
+		projectorDecl
+		Script string `json:"script"`
+	} `json:"projectors"`
+	Bootstrap []struct {
+		Name    string          `json:"name"`
+		Payload json.RawMessage `json:"payload"`
+	} `json:"bootstrap"`
+}
+
+// loadSeedManifest reads a trusted seed's install plan from the embedded FS. A
+// seed with no manifest is a grown seed (intent only) and returns ok=false.
+func loadSeedManifest(name string) (seedManifest, bool) {
+	var m seedManifest
+	data, err := seedFS.ReadFile(path.Join("seeds", name, "trusted.json"))
+	if err != nil {
+		return m, false
+	}
+	if json.Unmarshal(data, &m) != nil {
+		return m, false
+	}
+	return m, true
+}
+
 type seedCard struct {
 	Name        string
 	Title       string
 	Kind        string
 	Description string
-	Path        string
 	Primary     string
+	Trusted     bool
 }
 
 func bundledSeeds() []seedCard {
-	return []seedCard{
-		{Name: "settings", Title: "settings", Kind: "trusted bundled", Description: "Configure the brain from the browser. This seed is shipped as reviewed kernel data so it can install before any brain exists.", Path: repoFile("seeds", "settings"), Primary: "configure-brain"},
-		{Name: "chat", Title: "chat", Kind: "grown from intent", Description: "Conversational front door that can grow new capabilities mid-chat.", Path: repoFile("seeds", "chat"), Primary: "chat"},
-		{Name: "notes", Title: "notes", Kind: "grown from intent", Description: "Minimal append-only note taking example: one command and one page.", Path: repoFile("seeds", "notes"), Primary: "note"},
+	cards := []seedCard{{Name: "settings"}}
+	cards = append(cards,
+		seedCard{Name: "chat", Title: "chat", Kind: "grown from intent", Description: "Conversational front door that can grow new capabilities mid-chat.", Primary: "chat"},
+		seedCard{Name: "notes", Title: "notes", Kind: "grown from intent", Description: "Minimal append-only note taking example: one command and one page.", Primary: "note"},
+	)
+	// A trusted seed's card is data: its title, blurb, and primary come from the
+	// manifest, so adding a trusted seed never touches the kernel.
+	for i := range cards {
+		if m, ok := loadSeedManifest(cards[i].Name); ok {
+			cards[i].Trusted = true
+			cards[i].Title = m.Title
+			cards[i].Kind = m.Kind
+			cards[i].Description = m.Description
+			cards[i].Primary = m.Primary
+		}
 	}
+	return cards
 }
 
 func renderSeedCatalog(b *strings.Builder, home string, commands map[string]commandDecl, projectors map[string]projectorDecl) {
@@ -1201,19 +1261,19 @@ func renderSeedCatalog(b *strings.Builder, home string, commands map[string]comm
 		b.WriteString("<article class=\"card\"><h3>" + esc(seed.Title) + "</h3>")
 		b.WriteString("<p>" + esc(seed.Description) + "</p>")
 		b.WriteString("<p class=\"muted\">" + esc(seed.Kind) + "</p>")
-		if seed.Name == "settings" {
-			b.WriteString("<details><summary>intent.md</summary><pre>" + esc(seedIntent(seed.Path)) + "</pre></details>")
-			b.WriteString("<details><summary>what will be installed?</summary><pre>command: configure-brain -> brain.configured\nprojection: /settings consumes brain.configured\nsecret handling: API keys are written to SELF_HOME/.brain-key, never events.jsonl</pre></details>")
-		} else if seed.Path != "" {
-			b.WriteString("<details><summary>intent.md</summary><pre>" + esc(seedIntent(seed.Path)) + "</pre></details>")
+		b.WriteString("<details><summary>intent.md</summary><pre>" + esc(seedIntent(seed.Name)) + "</pre></details>")
+		if seed.Trusted {
+			if m, ok := loadSeedManifest(seed.Name); ok {
+				b.WriteString("<details><summary>what will be installed?</summary><pre>" + esc(trustedSeedPlan(m)) + "</pre></details>")
+			}
 		}
 		if installed {
 			b.WriteString("<p class=\"tag\">installed</p>")
-			if seed.Name == "settings" {
-				b.WriteString("<p><a href=\"/settings\">Open settings</a></p>")
+			if view := trustedSeedView(seed); view != "" {
+				b.WriteString("<p><a href=\"/" + esc(view) + "\">Open " + esc(seed.Title) + "</a></p>")
 			}
-		} else if seed.Name == "settings" {
-			b.WriteString("<form method=\"post\" action=\"/install-seed\"><input type=\"hidden\" name=\"seed\" value=\"settings\"><button>Install settings</button></form>")
+		} else if seed.Trusted {
+			b.WriteString("<form method=\"post\" action=\"/install-seed\"><input type=\"hidden\" name=\"seed\" value=\"" + esc(seed.Name) + "\"><button>Install " + esc(seed.Title) + "</button></form>")
 		} else if brain == "" && !stubBrain {
 			b.WriteString("<p class=\"muted\">Install settings and configure a brain before growing this seed.</p>")
 		} else {
@@ -1224,21 +1284,43 @@ func renderSeedCatalog(b *strings.Builder, home string, commands map[string]comm
 	b.WriteString("</div>\n")
 }
 
-func seedIntent(seedDir string) string {
-	data, err := os.ReadFile(filepath.Join(seedDir, "intent.md"))
+// seedIntent reads a bundled seed's intent.md from the embedded FS, so it
+// renders from the binary alone with no repo checkout on disk.
+func seedIntent(name string) string {
+	data, err := seedFS.ReadFile(path.Join("seeds", name, "intent.md"))
 	if err != nil {
 		return err.Error()
 	}
 	return string(data)
 }
 
-func seedPathByName(name string) (string, bool) {
-	for _, seed := range bundledSeeds() {
-		if seed.Name == name && seed.Path != "" {
-			return seed.Path, true
-		}
+// trustedSeedPlan summarizes, from the manifest alone, exactly what installing a
+// trusted seed will declare — shown to the human who is the brain before any
+// brain exists, so they can decide whether they trust it.
+func trustedSeedPlan(m seedManifest) string {
+	var b strings.Builder
+	for _, c := range m.Commands {
+		fmt.Fprintf(&b, "command: %s -> %s\n", c.Name, c.Event.Name)
 	}
-	return "", false
+	for _, p := range m.Projectors {
+		fmt.Fprintf(&b, "projection: /%s consumes %s\n", p.Name, strings.Join(p.Consumes, ", "))
+	}
+	if m.Notes != "" {
+		b.WriteString(m.Notes + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// trustedSeedView is the projection route a trusted seed's "Open" link points
+// at: its first declared projector.
+func trustedSeedView(seed seedCard) string {
+	if !seed.Trusted {
+		return ""
+	}
+	if m, ok := loadSeedManifest(seed.Name); ok && len(m.Projectors) > 0 {
+		return m.Projectors[0].Name
+	}
+	return ""
 }
 
 // ─────────────────────────────── the surface ────────────────────────────────
@@ -1834,12 +1916,12 @@ func cmdServe(home, port string) error {
 			http.Error(w, "bad form", 400)
 			return
 		}
-		seedDir, ok := seedPathByName(r.FormValue("seed"))
-		if !ok {
+		seed := r.FormValue("seed")
+		if _, err := seedFS.ReadFile(path.Join("seeds", seed, "intent.md")); err != nil {
 			http.Error(w, "unknown seed", 404)
 			return
 		}
-		if err := cmdGrow(home, seedDir); err != nil {
+		if err := cmdGrow(home, seed); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -1895,128 +1977,55 @@ func cmdServe(home, port string) error {
 	return http.ListenAndServe(addr, mux)
 }
 
-// ────────────────────────────── the commands ────────────────────────────────
+// ──────────────────────────── trusted seeds ─────────────────────────────────
+//
+// A trusted seed is reviewed data bundled with the kernel: a trusted.json
+// install plan plus the scripts it names. It installs before any brain exists
+// (the human is the brain for this step), through the same declare + signed
+// receipt path as a grown capability — so it rehydrates from the log alone like
+// everything else. settings is the first; adding another means adding a
+// directory, not kernel code.
 
-const settingsConfigureScript = `#!/usr/bin/env python3
-import json
-import os
-import sys
-
-provider = sys.argv[1] if len(sys.argv) > 1 else ""
-command = sys.argv[2] if len(sys.argv) > 2 else ""
-base_url = sys.argv[3] if len(sys.argv) > 3 else ""
-model = sys.argv[4] if len(sys.argv) > 4 else ""
-key = sys.argv[5] if len(sys.argv) > 5 else ""
-
-for _ in sys.stdin:
-    pass
-
-home = os.environ.get("SELF_HOME", ".")
-keyfile = os.path.join(home, ".brain-key")
-if key.strip():
-    with open(keyfile, "w") as f:
-        f.write(key.strip())
-    os.chmod(keyfile, 0o600)
-
-key_set = os.path.exists(keyfile) and os.path.getsize(keyfile) > 0
-print(json.dumps({"name": "brain.configured", "payload": {
-    "provider": provider,
-    "command": command,
-    "base_url": base_url,
-    "model": model,
-    "key_set": key_set,
-}}))
-`
-
-const settingsProjectorScript = `#!/usr/bin/env python3
-import html
-import json
-import sys
-
-cfg = {"provider": "", "command": "", "base_url": "", "model": "", "key_set": False}
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    event = json.loads(line)
-    if event.get("name") == "brain.configured":
-        payload = event.get("payload") or {}
-        cfg.update(payload)
-
-def esc(value):
-    return html.escape(str(value or ""), quote=True)
-
-print("<!doctype html>")
-print('<html lang="en"><head><meta charset="utf-8"><title>settings</title></head><body>')
-print("<h1>settings</h1>")
-print("<p class=\"muted\">Configure the brain process used by think, grow, heartbeat, and compile. Environment variable SELF_BRAIN still wins for explicit shell sessions.</p>")
-if cfg.get("provider") or cfg.get("command"):
-    print('<article class="card"><h2>current brain</h2>')
-    print("<p><strong>provider</strong> %s</p>" % esc(cfg.get("provider") or "custom"))
-    if cfg.get("command"):
-        print("<p><strong>command</strong> <code>%s</code></p>" % esc(cfg.get("command")))
-    if cfg.get("base_url"):
-        print("<p><strong>base URL</strong> <code>%s</code></p>" % esc(cfg.get("base_url")))
-    if cfg.get("model"):
-        print("<p><strong>model</strong> <code>%s</code></p>" % esc(cfg.get("model")))
-    print("<p><strong>API key</strong> %s</p>" % ("set" if cfg.get("key_set") else "not set"))
-    print("</article>")
-else:
-    print('<p class="tag">no saved brain configured yet</p>')
-print('<form method="post" action="/run/configure-brain">')
-print('<label>provider <input name="provider" placeholder="opencode, openai, custom" value="%s"></label>' % esc(cfg.get("provider")))
-print('<label>command <input name="command" placeholder="optional exact SELF_BRAIN command" value="%s"></label>' % esc(cfg.get("command")))
-print('<label>base URL <input name="base_url" placeholder="https://api.openai.com or local endpoint" value="%s"></label>' % esc(cfg.get("base_url")))
-print('<label>model <input name="model" placeholder="model name" value="%s"></label>' % esc(cfg.get("model")))
-print('<label>API key <input name="key" type="password" placeholder="blank keeps existing key"></label>')
-print('<button>save brain</button>')
-print('</form>')
-print('<h2>common choices</h2>')
-print('<ul>')
-print('<li><strong>OpenCode (recommended):</strong> provider <code>opencode</code>, model optional. Uses bundled <code>examples/brain-opencode</code>. Tool-capable — can inspect SELF_HOME itself, which the contract requires.</li>')
-print('<li><strong>OpenAI-compatible (reference only):</strong> provider <code>openai</code> or <code>custom</code>, base URL, model, key. Uses bundled <code>examples/brain-openai</code>, which illustrates the wire shape but has no tool loop of its own — incomplete by spec; do not expect real capabilities from it.</li>')
-print('<li><strong>Any process:</strong> put the full command in command; it receives SELF_ASK, an orientation brief on stdin, the prompt as argv. A brain without tools to inspect SELF_HOME cannot do the job.</li>')
-print('</ul>')
-print('<p><a href="/">Back to home</a></p>')
-print('</body></html>')
-`
-
-func settingsCommandDecl() commandDecl {
-	var d commandDecl
-	d.Name = "configure-brain"
-	d.Description = "Configure the brain process used by think/grow/compile; secrets are stored outside the event log."
-	d.Params = map[string]string{"provider": "string", "command": "string", "base_url": "string", "model": "string", "key": "string"}
-	d.Event.Name = "brain.configured"
-	d.Event.Fields = map[string]string{"provider": "string", "command": "string", "base_url": "string", "model": "string", "key_set": "bool"}
-	return d
-}
-
-func settingsProjectorDecl() projectorDecl {
-	return projectorDecl{Name: "settings", Description: "Configure this instance's brain and inspect the saved non-secret settings.", Consumes: []string{"brain.configured"}}
-}
-
+// installBundledSeed installs a trusted seed by name from its embedded manifest.
 func installBundledSeed(home, name string) error {
-	if name != "settings" {
+	m, ok := loadSeedManifest(name)
+	if !ok {
 		return fmt.Errorf("unknown bundled seed %q", name)
 	}
-	if _, err := os.Stat(filepath.Join(home, "capabilities", "commands", "configure-brain")); err == nil {
-		return fmt.Errorf("settings is already installed")
+	for _, c := range m.Commands {
+		if p, _ := scriptPath(home, "command", c.Name); fileExists(p) {
+			return fmt.Errorf("%s is already installed", name)
+		}
 	}
-	if err := declareCommand(home, settingsCommandDecl()); err != nil {
-		return err
+	by := "bundled seed: " + name
+	for _, c := range m.Commands {
+		script, err := seedFS.ReadFile(path.Join("seeds", name, c.Script))
+		if err != nil {
+			return err
+		}
+		if err := declareCommand(home, c.commandDecl); err != nil {
+			return err
+		}
+		if err := installTrustedScript(home, "command", c.Name, string(script), by); err != nil {
+			return err
+		}
 	}
-	if err := declareProjector(home, settingsProjectorDecl()); err != nil {
-		return err
+	for _, p := range m.Projectors {
+		script, err := seedFS.ReadFile(path.Join("seeds", name, p.Script))
+		if err != nil {
+			return err
+		}
+		if err := declareProjector(home, p.projectorDecl); err != nil {
+			return err
+		}
+		if err := installTrustedScript(home, "projector", p.Name, string(script), by); err != nil {
+			return err
+		}
 	}
-	by := "bundled seed: settings"
-	if err := installTrustedScript(home, "command", "configure-brain", settingsConfigureScript, by); err != nil {
-		return err
-	}
-	if err := installTrustedScript(home, "projector", "settings", settingsProjectorScript, by); err != nil {
-		return err
-	}
-	if err := ingest(home, []Event{newEvent("brain.configured", json.RawMessage(`{"provider":"","command":"","base_url":"","model":"","key_set":false}`))}); err != nil {
-		return err
+	for _, b := range m.Bootstrap {
+		if err := ingest(home, []Event{newEvent(b.Name, b.Payload)}); err != nil {
+			return err
+		}
 	}
 	refreshSite(home)
 	return nil
@@ -2035,13 +2044,49 @@ func growPrompt(intent string) string {
 		brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
 }
 
-func cmdGrow(home, seedDir string) error {
-	raw, err := os.ReadFile(filepath.Join(seedDir, "intent.md"))
-	if err != nil {
-		return fmt.Errorf("a seed is a directory with an intent.md: %w", err)
+// parseDeposit reads a seed.jsonl initial deposit into events.
+func parseDeposit(raw []byte) ([]Event, error) {
+	var evs []Event
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		var e Event
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			return nil, fmt.Errorf("parse seed.jsonl: %w", err)
+		}
+		evs = append(evs, e)
 	}
-	intent := strings.TrimSpace(string(raw))
-	name := filepath.Base(seedDir)
+	return evs, nil
+}
+
+// readSeedSource resolves a grow reference to its intent and initial deposit. A
+// bare name matches a bundled seed in the embedded FS (so grow works from the
+// binary alone); anything else is read as a directory on disk.
+func readSeedSource(ref string) (name, intent string, deposit []Event, err error) {
+	if data, e := seedFS.ReadFile(path.Join("seeds", ref, "intent.md")); e == nil {
+		name, intent = ref, strings.TrimSpace(string(data))
+		if raw, e := seedFS.ReadFile(path.Join("seeds", ref, "seed.jsonl")); e == nil {
+			deposit, err = parseDeposit(raw)
+		}
+		return name, intent, deposit, err
+	}
+	data, e := os.ReadFile(filepath.Join(ref, "intent.md"))
+	if e != nil {
+		return "", "", nil, fmt.Errorf("a seed is a directory with an intent.md: %w", e)
+	}
+	name, intent = filepath.Base(ref), strings.TrimSpace(string(data))
+	if raw, e := os.ReadFile(filepath.Join(ref, "seed.jsonl")); e == nil {
+		deposit, err = parseDeposit(raw)
+	}
+	return name, intent, deposit, err
+}
+
+func cmdGrow(home, ref string) error {
+	name, intent, deposit, err := readSeedSource(ref)
+	if err != nil {
+		return err
+	}
 
 	payload, _ := json.Marshal(map[string]any{"name": name, "intent": intent})
 	ie := newEvent("intent.declared", payload)
@@ -2077,19 +2122,10 @@ func cmdGrow(home, seedDir string) error {
 
 	// The initial deposit: content laid once, so the surface has
 	// something to render from the first moment.
-	if raw, err := os.ReadFile(filepath.Join(seedDir, "seed.jsonl")); err == nil {
-		for _, line := range strings.Split(string(raw), "\n") {
-			if line = strings.TrimSpace(line); line == "" {
-				continue
-			}
-			var e Event
-			if err := json.Unmarshal([]byte(line), &e); err != nil {
-				return fmt.Errorf("parse seed.jsonl: %w", err)
-			}
-			fresh := newEvent(e.Name, e.Payload)
-			if err := appendEvent(home, &fresh); err != nil {
-				return err
-			}
+	for _, e := range deposit {
+		fresh := newEvent(e.Name, e.Payload)
+		if err := appendEvent(home, &fresh); err != nil {
+			return err
 		}
 	}
 
