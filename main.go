@@ -219,18 +219,38 @@ func verifiedReceipt(secret []byte, payload json.RawMessage) (receipt, bool) {
 	return r, hmac.Equal([]byte(sign(secret, r.Type, r.Name, r.Script, r.By)), []byte(r.Sig))
 }
 
+// scriptPath is where a capability's executable lives: a directory per
+// capability with the script at <name>/run, so the script tree mirrors the
+// page tree and a nested name (finances/bills) needs no special case — the
+// parent's directory simply holds both its own run and its children.
 func scriptPath(home, typ, name string) (string, error) {
 	switch typ {
 	case "command":
-		return filepath.Join(home, "capabilities", "commands", name), nil
+		return filepath.Join(home, "capabilities", "commands", name, "run"), nil
 	case "projector":
-		return filepath.Join(home, "capabilities", "projectors", name), nil
+		return filepath.Join(home, "capabilities", "projectors", name, "run"), nil
 	}
 	return "", fmt.Errorf("unknown capability type %q", typ)
 }
 
+// validCapabilityName admits nested names (finances/bills): slash-separated
+// segments, no traversal, no backslash, nothing hidden. A nested projector
+// renders to a nested page — progressive unfolding for whoever explores the
+// surface: the parent page links down, the front page stays small.
+func validCapabilityName(name string) bool {
+	if name == "" || strings.Contains(name, `\`) {
+		return false
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, ".") {
+			return false
+		}
+	}
+	return true
+}
+
 func installScript(home, typ, name, script string) error {
-	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+	if !validCapabilityName(name) {
 		return fmt.Errorf("unsafe capability name %q", name)
 	}
 	p, err := scriptPath(home, typ, name)
@@ -295,6 +315,11 @@ func rehydrate(home string) error {
 		}
 		latest[key] = r
 	}
+	// capabilities/ and site/ are derived state: rebuild them from nothing so
+	// a rehydrate is also a migration — stale files from an older layout (or
+	// from receipts later superseded) cannot linger and shadow the log.
+	os.RemoveAll(filepath.Join(home, "capabilities"))
+	os.RemoveAll(filepath.Join(home, "site"))
 	for _, key := range order {
 		r := latest[key]
 		if err := installScript(home, r.Type, r.Name, r.Script); err != nil {
@@ -642,26 +667,25 @@ func projectToSite(home, name string) error {
 	if err != nil {
 		return err
 	}
-	siteDir := filepath.Join(home, "site")
-	if err := os.MkdirAll(siteDir, 0755); err != nil {
+	out := filepath.Join(home, "site", name+".html")
+	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(siteDir, name+".html"), page, 0644)
+	return os.WriteFile(out, page, 0644)
 }
 
 func refreshProjections(home string) {
-	entries, err := os.ReadDir(filepath.Join(home, "capabilities", "projectors"))
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	root := filepath.Join(home, "capabilities", "projectors")
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "run" {
+			return nil
 		}
-		if err := projectToSite(home, e.Name()); err != nil {
-			fmt.Fprintf(os.Stderr, "self: projection %q failed: %s\n", e.Name(), err)
+		name, _ := filepath.Rel(root, filepath.Dir(p)) // the dir is the name; nesting nests
+		if err := projectToSite(home, name); err != nil {
+			fmt.Fprintf(os.Stderr, "self: projection %q failed: %s\n", name, err)
 		}
-	}
+		return nil
+	})
 }
 
 // refreshSite writes every kernel-resident view of state and re-runs every
@@ -1488,7 +1512,8 @@ func siteNav(home, current string) string {
 	_, _, _, projOrder := declaredCaps(events)
 	link := func(href, label string) string {
 		esc := html.EscapeString(label)
-		if label == current {
+		// a nested page (finances/bills) marks its top-level entry (finances)
+		if label == current || strings.HasPrefix(current, label+"/") {
 			return `<a href="` + href + `" aria-current="true">` + esc + `</a>`
 		}
 		return `<a href="` + href + `">` + esc + `</a>`
@@ -1496,6 +1521,9 @@ func siteNav(home, current string) string {
 	var b strings.Builder
 	b.WriteString(`<nav class="self-nav" aria-label="instance"><a class="self-brand" href="/">self</a>`)
 	for _, n := range projOrder {
+		if strings.Contains(n, "/") {
+			continue // nested pages unfold from their parents, not the nav
+		}
 		b.WriteString(link("/"+n, n))
 	}
 	b.WriteString(link("/brief", "brief"))
@@ -1590,6 +1618,10 @@ func cmdServe(home, port string) error {
 	// anything else    → static site/ files
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimSuffix(strings.Trim(r.URL.Path, "/"), ".html")
+		if name != "" && !validCapabilityName(name) {
+			http.Error(w, "not found", 404)
+			return
+		}
 		if name == "" {
 			if p, _ := scriptPath(home, "projector", "welcome"); fileExists(p) {
 				name = "welcome"
@@ -1683,6 +1715,10 @@ func cmdServe(home, port string) error {
 			return
 		}
 		command := strings.TrimPrefix(r.URL.Path, "/run/")
+		if !validCapabilityName(command) {
+			http.Error(w, "not found", 404)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		var args []string
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {

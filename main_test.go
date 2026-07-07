@@ -101,8 +101,8 @@ func TestStrangeLoop(t *testing.T) {
 	}
 
 	for _, p := range []string{
-		filepath.Join(home, "capabilities", "commands", "note"),
-		filepath.Join(home, "capabilities", "projectors", "board"),
+		filepath.Join(home, "capabilities", "commands", "note", "run"),
+		filepath.Join(home, "capabilities", "projectors", "board", "run"),
 	} {
 		if !fileExists(p) {
 			t.Fatalf("strange loop did not install %s", p)
@@ -157,7 +157,7 @@ func TestForgedReceiptIsInert(t *testing.T) {
 	if err := rehydrate(home); err != nil {
 		t.Fatal(err)
 	}
-	if fileExists(filepath.Join(home, "capabilities", "commands", "evil")) {
+	if fileExists(filepath.Join(home, "capabilities", "commands", "evil", "run")) {
 		t.Fatal("a forged receipt installed")
 	}
 }
@@ -195,8 +195,8 @@ func TestRehydrateRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range []string{
-		filepath.Join("capabilities", "commands", "entry"),
-		filepath.Join("capabilities", "projectors", "journal"),
+		filepath.Join("capabilities", "commands", "entry", "run"),
+		filepath.Join("capabilities", "projectors", "journal", "run"),
 		filepath.Join("site", "journal.html"),
 	} {
 		a, err := os.ReadFile(filepath.Join(src, p))
@@ -228,8 +228,8 @@ func TestRehydrateTypeCollision(t *testing.T) {
 	if err := ingest(home, decls); err != nil {
 		t.Fatal(err)
 	}
-	cmd := filepath.Join(home, "capabilities", "commands", "chat")
-	proj := filepath.Join(home, "capabilities", "projectors", "chat")
+	cmd := filepath.Join(home, "capabilities", "commands", "chat", "run")
+	proj := filepath.Join(home, "capabilities", "projectors", "chat", "run")
 	os.Remove(cmd)
 	os.Remove(proj)
 	if err := rehydrate(home); err != nil {
@@ -310,7 +310,7 @@ func TestShareAdopt(t *testing.T) {
 	if err := cmdAdopt(receiver, seedPath); err != nil {
 		t.Fatal(err)
 	}
-	if !fileExists(filepath.Join(receiver, "capabilities", "commands", "note")) {
+	if !fileExists(filepath.Join(receiver, "capabilities", "commands", "note", "run")) {
 		t.Fatal("adopt did not install the re-compiled capability")
 	}
 
@@ -368,7 +368,7 @@ func TestShareAdopt(t *testing.T) {
 	if adoptErr != nil {
 		t.Fatal(adoptErr)
 	}
-	if !fileExists(filepath.Join(second, "capabilities", "commands", "note")) {
+	if !fileExists(filepath.Join(second, "capabilities", "commands", "note", "run")) {
 		t.Fatal("adopting a seed from stdin did not install")
 	}
 }
@@ -394,7 +394,7 @@ func TestAdoptNeverInstallsForeignBytes(t *testing.T) {
 	if err := cmdAdopt(home, path); err != nil {
 		t.Fatal(err)
 	}
-	installed := filepath.Join(home, "capabilities", "commands", "gift")
+	installed := filepath.Join(home, "capabilities", "commands", "gift", "run")
 	got, err := os.ReadFile(installed)
 	if err != nil {
 		t.Fatal(err)
@@ -480,7 +480,7 @@ else:
 	}
 
 	// the declaration compiled through the external brain, not HTTP, not stubs
-	installed := filepath.Join(home, "capabilities", "commands", "ping")
+	installed := filepath.Join(home, "capabilities", "commands", "ping", "run")
 	data, err := os.ReadFile(installed)
 	if err != nil {
 		t.Fatalf("the external brain's capability did not install: %s", err)
@@ -596,7 +596,7 @@ else:
 	if err := ingest(home, mustEvents(t, res.Declarations)); err != nil {
 		t.Fatal(err)
 	}
-	if p := filepath.Join(home, "capabilities", "commands", "note"); !fileExists(p) {
+	if p := filepath.Join(home, "capabilities", "commands", "note", "run"); !fileExists(p) {
 		t.Fatal("the note capability compiled via the fenced brain did not install")
 	}
 }
@@ -721,10 +721,10 @@ func TestStubBrainCoversThinkAndGrow(t *testing.T) {
 	if err := cmdGrow(home, seed); err != nil {
 		t.Fatal(err)
 	}
-	if !fileExists(filepath.Join(home, "capabilities", "commands", "entry")) {
+	if !fileExists(filepath.Join(home, "capabilities", "commands", "entry", "run")) {
 		t.Fatal("stub grow did not install the declared command")
 	}
-	if !fileExists(filepath.Join(home, "capabilities", "projectors", "journal")) {
+	if !fileExists(filepath.Join(home, "capabilities", "projectors", "journal", "run")) {
 		t.Fatal("stub grow did not install the declared projector")
 	}
 	if _, err := runCommand(home, "entry", []string{"hello", "offline", "world"}); err != nil {
@@ -868,7 +868,7 @@ func TestBundledSettingsInstallsWithoutBrain(t *testing.T) {
 	if !fileExists(filepath.Join(home, "capabilities", "commands", "configure-brain")) {
 		t.Fatal("settings command did not install")
 	}
-	if !fileExists(filepath.Join(home, "capabilities", "projectors", "settings")) {
+	if !fileExists(filepath.Join(home, "capabilities", "projectors", "settings", "run")) {
 		t.Fatal("settings projector did not install")
 	}
 	if err := rehydrate(home); err != nil {
@@ -1046,6 +1046,53 @@ func TestInjectShellShape(t *testing.T) {
 	// Unknown theme falls back to the default theme, never empty/arbitrary CSS.
 	if !strings.Contains(string(injectShell(page, "bogus", "")), themes[defaultTheme].css) {
 		t.Fatal("unknown theme did not fall back to the default")
+	}
+}
+
+// TestNestedProjectionsUnfold pins progressive unfolding: a projector may
+// declare a nested name (finances/bills); it compiles, renders to a nested
+// page under site/, survives rehydrate, and stays OFF the top nav — depth is
+// reached from the parent page, so the surface unfolds instead of flooding.
+func TestNestedProjectionsUnfold(t *testing.T) {
+	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", "")
+	home := t.TempDir()
+
+	for _, n := range []string{"finances", "finances/bills"} {
+		decl := newEvent("projector.declared", json.RawMessage(`{"name":"`+n+`","description":"d","consumes":["bill.paid"]}`))
+		if err := ingest(home, []Event{decl}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !fileExists(filepath.Join(home, "site", "finances", "bills.html")) {
+		t.Fatal("nested projection did not render to a nested page")
+	}
+
+	// the whole thing rebuilds from the log alone
+	os.RemoveAll(filepath.Join(home, "capabilities"))
+	os.RemoveAll(filepath.Join(home, "site"))
+	if err := rehydrate(home); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(filepath.Join(home, "capabilities", "projectors", "finances", "bills")) {
+		t.Fatal("rehydrate did not reinstall the nested projector")
+	}
+
+	// the nav unfolds: top level only, and a nested page marks its parent
+	nav := siteNav(home, "finances/bills")
+	if strings.Contains(nav, `href="/finances/bills"`) {
+		t.Fatalf("nested page leaked into the top nav:\n%s", nav)
+	}
+	if !strings.Contains(nav, `href="/finances" aria-current="true"`) {
+		t.Fatalf("nested page did not mark its top-level parent:\n%s", nav)
+	}
+
+	// traversal never installs, whatever declares it
+	if err := installScript(home, "projector", "../escape", "#!/bin/sh\n"); err == nil {
+		t.Fatal("traversal name was installed")
+	}
+	if err := installScript(home, "projector", "a/.hidden", "#!/bin/sh\n"); err == nil {
+		t.Fatal("hidden segment was installed")
 	}
 }
 

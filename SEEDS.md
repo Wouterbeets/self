@@ -44,6 +44,12 @@ describe capabilities that can be built this way:
   stdout. The kernel saves it to `site/<name>.html`. A projection is a pure
   function of the log: same log in, same bytes out. Do not read the clock, the
   network, or anything else — determinism is what makes rebuilds reproducible.
+- **Names may nest.** A projector named `finances/bills` renders to
+  `site/finances/bills.html` and serves at `/finances/bills`. Only top-level
+  pages appear in the shell's nav; the parent page links down. This is the
+  surface's progressive unfolding: a front page that stays small (`finances` —
+  the global balance), with depth one link away for whoever wants it — human
+  or agent. Commands nest the same way (`finances/add-bill`).
 - Any language with a shebang works; use only its standard library.
 
 ## Writing a good `intent.md`
