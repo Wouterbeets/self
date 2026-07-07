@@ -20,6 +20,9 @@ import sys
 
 def opencode_command():
     cmd = [os.environ.get("SELF_OPENCODE", "opencode"), "run", "--format", "json"]
+    home = os.environ.get("SELF_HOME", "")
+    if home:
+        cmd.extend(["--dir", home])
     if os.environ.get("SELF_OPENCODE_PURE", "1") != "0":
         cmd.append("--pure")
     model = os.environ.get("SELF_OPENCODE_MODEL", "")
@@ -50,7 +53,9 @@ def run_opencode(message, brief):
 
 
 def collect_text(stream):
-    chunks = []
+    messages = []
+    current_message = None
+    current_chunks = []
     fallback = []
     for raw in stream.splitlines():
         if not raw.strip():
@@ -62,9 +67,18 @@ def collect_text(stream):
             continue
         part = obj.get("part") if isinstance(obj, dict) else None
         if isinstance(part, dict) and part.get("type") == "text":
-            chunks.append(part.get("text", ""))
-    if chunks:
-        return "".join(chunks).strip()
+            message_id = part.get("messageID", "")
+            if message_id != current_message:
+                if current_chunks:
+                    messages.append("".join(current_chunks))
+                current_message = message_id
+                current_chunks = []
+            current_chunks.append(part.get("text", ""))
+    if current_chunks:
+        messages.append("".join(current_chunks))
+    for message in reversed(messages):
+        if message.strip():
+            return message.strip()
     return "\n".join(fallback).strip()
 
 
