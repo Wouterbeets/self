@@ -2188,6 +2188,31 @@ func cmdShare(home, name string) error {
 	return nil
 }
 
+// receiptCount counts locally-verified script.compiled receipts for one
+// capability. It is the "did a compile actually land" signal: script files
+// are derived state and may predate a failed recompile, but a receipt only
+// exists if this instance signed fresh bytes.
+func receiptCount(home, typ, name string) int {
+	secret, err := loadSecret(home)
+	if err != nil {
+		return 0
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range events {
+		if e.Name != "script.compiled" {
+			continue
+		}
+		if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Type == typ && r.Name == name {
+			n++
+		}
+	}
+	return n
+}
+
 func cmdAdopt(home, path string) error {
 	var data []byte
 	var err error
@@ -2237,14 +2262,18 @@ func cmdAdopt(home, path string) error {
 		declPayload, _ = json.Marshal(m)
 	}
 	ap, _ := json.Marshal(map[string]any{"type": typ, "name": name, "seed": seed})
+	before := receiptCount(home, typ, name)
 	if err := ingest(home, []Event{
 		newEvent("capability.adopted", ap),
 		newEvent(typ+".declared", declPayload),
 	}); err != nil {
 		return err
 	}
-	if p, _ := scriptPath(home, typ, name); !fileExists(p) {
-		return fmt.Errorf("adopted %q into the log, but no compiler produced a script — wire a brain (or SELF_LLM_STUB=1) and declare it again", name)
+	// A stale script from an earlier receipt can outlive a failed recompile,
+	// so "the file exists" proves nothing. The honest signal is the log: this
+	// adopt succeeded only if it minted a fresh signed receipt.
+	if receiptCount(home, typ, name) <= before {
+		return fmt.Errorf("adopted %q into the log, but the compile produced no signed receipt (any script on disk is from an earlier receipt) — wire a brain (or SELF_LLM_STUB=1) and declare it again", name)
 	}
 	fmt.Printf("adopted %q — re-authored by this instance's own compiler, signed by its own key\n", name)
 	return nil

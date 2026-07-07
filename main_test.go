@@ -421,6 +421,30 @@ func TestAdoptNeverInstallsForeignBytes(t *testing.T) {
 	}
 }
 
+// A script file on disk is derived state and can predate a failed recompile.
+// Adopt must judge success by the log — a fresh signed receipt — not by the
+// file's existence, or a failed compile silently masquerades as an upgrade
+// while the stale script keeps running.
+func TestAdoptFailedCompileIsAnErrorDespiteStaleScript(t *testing.T) {
+	t.Setenv("SELF_LLM_STUB", "")
+	t.Setenv("SELF_BRAIN", "false") // a brain that always exits nonzero
+	home := t.TempDir()
+
+	// an earlier receipt legitimately installed a script under the same name
+	if err := installTrustedScript(home, "projector", "page", "#!/bin/sh\necho '<p>old</p>'\n", "an earlier brain"); err != nil {
+		t.Fatal(err)
+	}
+
+	slice := `{"name":"projector.declared","payload":{"name":"page","description":"a page","consumes":["thing.happened"]}}`
+	path := filepath.Join(t.TempDir(), "page.seed.jsonl")
+	if err := os.WriteFile(path, []byte(slice+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdAdopt(home, path); err == nil {
+		t.Fatal("adopt reported success though the compile failed and only a stale script exists")
+	}
+}
+
 // TestPluggableBrain pins the README's oldest promise, now true everywhere:
 // the brain is just a process behind one contract, and the kernel can't tell
 // the difference. A fake external brain — a few lines of python, no HTTP, no
