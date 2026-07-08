@@ -1125,42 +1125,36 @@ func TestThemesShareOneClassContract(t *testing.T) {
 	}
 }
 
-// TestPickThemePrecedence pins selection: an explicit ?theme wins, then the
-// cookie, then SELF_THEME, then the built-in default — and unknown values are
-// ignored at every level so a bad cookie or env can never inject arbitrary CSS.
+// TestPickThemePrecedence pins selection: an explicit ?theme wins, then
+// SELF_THEME, then the built-in default — and unknown values are ignored at
+// both levels so a bad link or env can never inject arbitrary CSS. No cookie,
+// no remembered state: a theme is presentation for one request.
 func TestPickThemePrecedence(t *testing.T) {
 	t.Setenv("SELF_THEME", "")
 
-	req := func(url string, cookie string) *http.Request {
-		r := httptest.NewRequest(http.MethodGet, url, nil)
-		if cookie != "" {
-			r.AddCookie(&http.Cookie{Name: "self_theme", Value: cookie})
-		}
-		return r
+	req := func(url string) *http.Request {
+		return httptest.NewRequest(http.MethodGet, url, nil)
 	}
 
-	if got := pickTheme(req("/", "")); got != defaultTheme {
+	if got := pickTheme(req("/")); got != defaultTheme {
 		t.Fatalf("no signal → %q, want default %q", got, defaultTheme)
 	}
-	if got := pickTheme(req("/?theme=micro", "paper")); got != "micro" {
+	if got := pickTheme(req("/?theme=micro")); got != "micro" {
 		t.Fatalf("query should win: got %q", got)
 	}
-	if got := pickTheme(req("/?theme=bogus", "paper")); got != "paper" {
-		t.Fatalf("invalid query should fall through to cookie: got %q", got)
-	}
-	if got := pickTheme(req("/", "paper")); got != "paper" {
-		t.Fatalf("cookie should apply: got %q", got)
-	}
-	if got := pickTheme(req("/", "bogus")); got != defaultTheme {
-		t.Fatalf("invalid cookie should be ignored: got %q", got)
+	if got := pickTheme(req("/?theme=bogus")); got != defaultTheme {
+		t.Fatalf("invalid query should fall through to the default: got %q", got)
 	}
 
 	t.Setenv("SELF_THEME", "micro")
-	if got := pickTheme(req("/", "")); got != "micro" {
+	if got := pickTheme(req("/")); got != "micro" {
 		t.Fatalf("SELF_THEME should apply: got %q", got)
 	}
+	if got := pickTheme(req("/?theme=paper")); got != "paper" {
+		t.Fatalf("query should override SELF_THEME: got %q", got)
+	}
 	t.Setenv("SELF_THEME", "nonsense")
-	if got := pickTheme(req("/", "")); got != defaultTheme {
+	if got := pickTheme(req("/")); got != defaultTheme {
 		t.Fatalf("invalid SELF_THEME should be ignored: got %q", got)
 	}
 }

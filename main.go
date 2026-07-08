@@ -1557,7 +1557,7 @@ func themeLabel(name string) string {
 var structuralCSS string
 
 // validTheme reports whether name is a known design; selection paths accept
-// only known names, so the injected picker links and cookie can never smuggle
+// only known names, so the injected picker links can never smuggle
 // arbitrary CSS in.
 func validTheme(name string) bool { _, ok := themes[name]; return ok }
 
@@ -1572,15 +1572,13 @@ func themeCSS(name string) string {
 	return shellMeta + "<style>" + structuralCSS + "\n" + t.css + "\n</style>"
 }
 
-// pickTheme resolves the design for one request, most specific first: an
-// explicit ?theme= wins (and the handler remembers it in a cookie), then the
-// cookie, then the SELF_THEME instance default, then the built-in default.
+// pickTheme resolves the design for one request: an explicit ?theme= wins,
+// then the SELF_THEME instance default, then the built-in default. Two
+// mechanisms, no remembered state — a theme is presentation for one request,
+// like prefers-color-scheme, never something the server holds for you.
 func pickTheme(r *http.Request) string {
 	if t := r.URL.Query().Get("theme"); validTheme(t) {
 		return t
-	}
-	if c, err := r.Cookie("self_theme"); err == nil && validTheme(c.Value) {
-		return c.Value
 	}
 	if t := strings.TrimSpace(os.Getenv("SELF_THEME")); validTheme(t) {
 		return t
@@ -1718,27 +1716,20 @@ func injectShell(page []byte, theme, nav string) []byte {
 }
 
 // writePage sends an on-disk projection through the shell for one request:
-// resolve the design, remember an explicit choice in a cookie so it persists
-// across pages, and inject theme + script + nav + picker. This is the only
-// place a theme touches a response; nothing is written back to the log or to
-// disk. current names the page being served so the nav can mark it.
+// resolve the design and inject theme + script + nav + picker. This is the
+// only place a theme touches a response; nothing is written back to the log,
+// to disk, or to the client. current names the page being served so the nav
+// can mark it.
 func writePage(w http.ResponseWriter, r *http.Request, home, current string, page []byte) {
-	theme := pickTheme(r)
-	if q := r.URL.Query().Get("theme"); validTheme(q) {
-		http.SetCookie(w, &http.Cookie{Name: "self_theme", Value: q, Path: "/", MaxAge: 31536000, SameSite: http.SameSiteLaxMode})
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(injectShell(page, theme, siteNav(home, current)))
+	w.Write(injectShell(page, pickTheme(r), siteNav(home, current)))
 }
 
 // cmdServe serves the instance: every page re-rendered against current events,
 // every affordance a plain HTML form. The injected shell layers feel on top —
 // pending turns, live re-replay, theme — but carries no state and grants no
 // power: strip it and every page still works, because the forms do.
-func cmdServe(home, port string) error {
-	if port == "" {
-		port = "7777"
-	}
+func cmdServe(home string) error {
 	refreshSite(home)
 
 	mux := http.NewServeMux()
@@ -1878,9 +1869,13 @@ func cmdServe(home, port string) error {
 	})
 
 	// Loopback by default: the write path (/run/<command>) has no auth, and
-	// local-first means local. SELF_BIND=0.0.0.0 opens it to the network for
-	// anyone who knowingly wants that.
-	addr := envOr("SELF_BIND", "127.0.0.1") + ":" + port
+	// local-first means local. SELF_BIND is the whole bind address, host or
+	// host:port (default 127.0.0.1:7777) — 0.0.0.0 opens it to the network
+	// for anyone who knowingly wants that.
+	addr := envOr("SELF_BIND", "127.0.0.1")
+	if !strings.Contains(addr, ":") {
+		addr += ":7777"
+	}
 	fmt.Fprintf(os.Stderr, "self: serving at http://%s (home %s)\n", addr, home)
 	fmt.Fprintf(os.Stderr, "  /              my identity — capabilities, paths, contract\n")
 	fmt.Fprintf(os.Stderr, "  /<projection>  a projection, re-rendered live\n")
@@ -2645,7 +2640,6 @@ usage: self [command] [args]
   self think "..."     ask the brain; returns {response, events} JSON
   self heartbeat       one self-improvement cycle (the brain reflects & grows)
   self show <name>     render a projection to stdout
-  self live [port]     serve the instance (default 7777)
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
   self share <cap>     print a seed to stdout — the capability's declarations and
                        receipts, a verbatim slice of this log
@@ -2750,8 +2744,6 @@ func commandHelp(cmd string) (string, bool) {
 		return "usage: self heartbeat\n\nAppend a heartbeat event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
 	case "show":
 		return "usage: self show <projection>\n\nRender a projection to stdout by replaying the current log. Use 'kernel' for the instance index.\n", true
-	case "live":
-		return "usage: self live [port]\n\nServe the instance on 127.0.0.1 (or SELF_BIND) with /, /<projection>, /run/<command>, and /events.\n", true
 	case "rehydrate":
 		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a brain.\n", true
 	case "share":
@@ -2785,7 +2777,7 @@ func main() {
 			err = rehydrate(home)
 		}
 		if err == nil {
-			err = cmdServe(home, "")
+			err = cmdServe(home)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "self: %s\n", err)
@@ -2826,14 +2818,6 @@ func main() {
 			err = fmt.Errorf("usage: self show <projection>")
 		} else {
 			err = cmdShow(home, args[0])
-		}
-	case "live":
-		port := ""
-		if len(args) > 0 {
-			port = args[0]
-		}
-		if err = ensureHome(home); err == nil {
-			err = cmdServe(home, port)
 		}
 	case "rehydrate":
 		err = rehydrate(home)

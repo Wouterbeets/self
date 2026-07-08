@@ -136,7 +136,6 @@ self run <cmd> ...   run a command: append its events, re-render projections
 self think "..."     query the brain; returns {response, declarations} JSON
 self heartbeat       one improvement cycle: the brain inspects the log and may declare
 self show <name>     render a projection to stdout
-self live [port]     serve the instance (default 7777)
 self rehydrate       rebuild capabilities/ + site/ from the log (offline)
 self share <cap>     print a capability's declarations + receipts as JSONL to stdout
 self adopt <seed>    re-generate a shared capability locally ("-" reads stdin)
@@ -146,7 +145,8 @@ self retire <t>/<n>  retire a capability: script + page leave the surface, the
 
 Server routes: `/` (instance self-description), `/<projection>`,
 `/run/<command>` (plain HTML forms), `/events` (raw log). The server binds
-`127.0.0.1` by default; set `SELF_BIND=0.0.0.0` to expose it (see
+`127.0.0.1:7777` by default; `SELF_BIND` is the whole bind address, host or
+`host:port` — set `SELF_BIND=0.0.0.0` to expose it (see
 [Limits](#limits-and-threat-model)).
 
 **The shell.** When serving, the kernel adds one shared stylesheet and a small
@@ -287,7 +287,8 @@ SELF_BRAIN        brain executable (e.g. "claude -p"); the kernel spawns it for
                   every request kind. It overrides saved /settings config.
                   Without either, set SELF_LLM_STUB=1 for demos/tests.
 SELF_LLM_STUB     "1" → offline stub generation (no brain, no network)
-SELF_BIND         serve address (default 127.0.0.1; set 0.0.0.0 to expose)
+SELF_BIND         bind address, host or host:port (default 127.0.0.1:7777;
+                  set 0.0.0.0 to expose)
 SELF_BRAIN_ID     author string signed into receipts
                   (default: the brain executable, or "stub (no LLM)")
 SELF_THEME        default page design: grove | micro | paper | spec
