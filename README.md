@@ -41,9 +41,10 @@ git clone https://github.com/wouterbeets/self && cd self
 ./demo.sh
 ```
 
-`demo.sh` runs the whole loop offline using the built-in stub compiler (no API
-key, no model): a declaration compiles into a script, running a command appends
-an event, a projection renders it, and the instance rebuilds from
+`demo.sh` runs the whole loop offline using `examples/brain-stub` (no API key,
+no model — a deterministic brain plugged through the same seam as any real
+one): a declaration compiles into a script, running a command appends an
+event, a projection renders it, and the instance rebuilds from
 `events.jsonl` + `.secret` alone — byte for byte. The stub writes trivial
 scripts; this shows the machinery, not the intelligence.
 
@@ -78,8 +79,9 @@ self grow seeds/chat                 # generate a capability set from its intent
 self                                 # rebuild from the log, then serve at :7777
 ```
 
-`grow` needs a brain; `SELF_LLM_STUB=1` supplies a deterministic offline one for
-mechanical tests and demos, while real capabilities need a real model or agent.
+`grow` needs a brain; `examples/brain-stub` supplies a deterministic offline
+one for mechanical tests and demos, while real capabilities need a real model
+or agent.
 To make every coding-agent session in a project use one instance as shared
 persistent state, paste the card in [`AGENTS.md`](AGENTS.md) into the project's
 agent instructions. To write your own capability sets, see [`SEEDS.md`](SEEDS.md).
@@ -175,12 +177,12 @@ or `SELF_THEME` for the instance default. The choice is presentation only, chose
 ## The brain
 
 Every request for intelligence — `think`, `heartbeat`, `grow`, and each
-compile — goes through one interface. The kernel holds no model; the brain is
-always a **process** you supply, or the built-in offline stub:
+compile — goes through one interface. The kernel holds no model — not even a
+fake one; the brain is always a **process** you supply:
 
 ```sh
-SELF_BRAIN="claude -p"     # any executable (agent CLI, script, human shim)
-SELF_LLM_STUB=1            # or deterministic offline stubs (testing, demos)
+SELF_BRAIN="claude -p"                      # any executable (agent CLI, script, human shim)
+SELF_BRAIN="$PWD/examples/brain-stub"       # or the deterministic offline stub (testing, demos)
 ```
 
 A tool-capable agent CLI needs no adapter: `SELF_BRAIN="claude -p"` is a
@@ -203,10 +205,11 @@ the seam, then plug a tool-capable agent (`examples/brain-opencode`, or
 `claude -p`) for real capabilities. It used to live inside the kernel; it is a
 reference file now, so the core stays model-free.
 
-The stub path is deliberately dumb but complete: `think` returns a fixed reply,
-`grow` declares a minimal command + projection from names in `intent.md`, and
-compile emits scripts that honor the pipe contract. It proves the machinery, not
-the intelligence.
+The stub brain is deliberately dumb but complete: `think` returns a fixed
+reply, `grow` declares a minimal command + projection from names in
+`intent.md`, and compile answers with scripts that honor the pipe contract. It
+proves the machinery, not the intelligence — and it is a process behind the
+same seam as every real brain, because the kernel carries no brain of its own.
 
 The `SELF_BRAIN` process contract:
 
@@ -282,13 +285,12 @@ scripts then run without a sandbox — see Limits.
 SELF_HOME         instance directory (default: current working directory; set in
                   your shell rc to pin one shared home, e.g. ~/.self)
 SELF_BRAIN        brain executable (e.g. "claude -p"); the kernel spawns it for
-                  every request kind. Without one, set SELF_LLM_STUB=1 for
-                  demos/tests.
-SELF_LLM_STUB     "1" → offline stub generation (no brain, no network)
+                  every request kind. For offline demos/tests, point it at
+                  examples/brain-stub (no LLM, no network).
 SELF_BIND         bind address, host or host:port (default 127.0.0.1:7777;
                   set 0.0.0.0 to expose)
 SELF_BRAIN_ID     author string signed into receipts
-                  (default: the brain executable, or "stub (no LLM)")
+                  (default: the brain executable)
 SELF_THEME        default page design: grove | micro | paper | spec
                   (default grove); ?theme= or the on-page picker overrides it
 ```
@@ -300,8 +302,9 @@ SELF_THEME        default page design: grove | micro | paper | spec
 - `main_test.go` — the pinned invariants: log semantics, offline runtime
   generation, the forged-receipt gate, receipt provenance, share/adopt
   independence, the pluggable brain, and byte-stable reconstruction.
-- `examples/` — brain adapters that plug in through `SELF_BRAIN`.
-  `brain-opencode` is a working tool-capable brain (it delegates to
+- `examples/` — brains that plug in through `SELF_BRAIN`. `brain-stub` is the
+  deterministic offline brain the tests and `demo.sh` use (no LLM, no
+  network); `brain-opencode` is a working tool-capable brain (it delegates to
   `opencode run`, which can inspect `SELF_HOME`); `brain-openai` is a reference
   adapter that illustrates the contract's wire shape but is incomplete by spec
   (no tool loop of its own). Not part of the kernel.

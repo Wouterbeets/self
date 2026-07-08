@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""brain-stub — a deterministic, offline SELF_BRAIN. No LLM, no network.
+
+This is the brain the tests and demo.sh plug in. It honors the same contract
+as every real brain — $SELF_ASK on the environment, the prompt as the last
+argument, an orientation brief on stdin, event JSONL on stdout — and it is
+deliberately dumb: it proves the machinery, not the intelligence. It used to
+live inside the kernel as a special case; it is a process now, because the
+kernel holds no brain, not even a fake one.
+
+    export SELF_BRAIN="$PWD/examples/brain-stub"
+
+think/heartbeat answer with fixed prose. grow reads the latest intent.declared
+from the instance's own log and declares one command and one projection named
+in the intent's backticks. compile answers with a trivial script that honors
+the pipe contract.
+"""
+
+import json
+import os
+import re
+import sys
+
+
+def backticked(s):
+    return re.findall(r"`([^`]*)`", s)
+
+
+def sanitize(s):
+    s = s.strip()
+    if s.startswith("self-seed-"):
+        s = s[len("self-seed-"):]
+    if s.endswith("-seed"):
+        s = s[: -len("-seed")]
+    s = s.strip("`/ <>.,:;()[]{}\t\n")
+    out, dash = [], False
+    for ch in s.lower():
+        if ch.isascii() and (ch.isalnum() or ch == "_"):
+            out.append(ch)
+            dash = False
+        elif not dash:
+            out.append("-")
+            dash = True
+    return "".join(out).strip("-")
+
+
+def first_command(intent):
+    for tok in backticked(intent):
+        if tok.startswith("self run "):
+            rest = tok[len("self run "):].split()
+            if rest:
+                return sanitize(rest[0])
+    return ""
+
+
+def first_projection(intent):
+    for tok in backticked(intent):
+        if tok.startswith("/") and len(tok) > 1:
+            return sanitize(tok[1:])
+    return ""
+
+
+def first_event(intent):
+    for tok in backticked(intent):
+        if "." in tok and " " not in tok and not tok.startswith("/"):
+            return tok
+    return ""
+
+
+def latest_intent(home):
+    """The stub explores like any brain: it reads the instance's own log."""
+    name = intent = ""
+    try:
+        with open(os.path.join(home, "events.jsonl")) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("name") == "intent.declared":
+                    p = e.get("payload") or {}
+                    name = p.get("name", "")
+                    intent = p.get("intent", "")
+    except OSError:
+        pass
+    return name, intent
+
+
+def payload_field(fields):
+    fields = fields or {}
+    if "title" in fields:
+        return "title"
+    if "text" in fields:
+        return "text"
+    keys = sorted(k for k in fields if k.strip())
+    return keys[0] if keys else "title"
+
+
+def command_script(decl):
+    event = (decl.get("event") or {}).get("name", "").strip() or decl.get("name", "") + ".ran"
+    field = payload_field((decl.get("event") or {}).get("fields"))
+    return (
+        "#!/usr/bin/env python3\n"
+        "# STUB (no LLM) — " + decl.get("description", "") + "\n"
+        "import sys, json\n"
+        "print(json.dumps({\"name\": " + json.dumps(event)
+        + ", \"payload\": {" + json.dumps(field)
+        + ": \" \".join(sys.argv[1:]) or \"(untitled)\"}}))\n"
+    )
+
+
+def projector_script(decl):
+    return (
+        "#!/usr/bin/env python3\n"
+        "# STUB (no LLM) — " + decl.get("description", "") + "\n"
+        "import sys, json\n"
+        "from html import escape\n"
+        "consumes = " + json.dumps(decl.get("consumes") or []) + "\n"
+        "print(\"<h1>" + decl.get("name", "") + "</h1><ul>\")\n"
+        "for line in sys.stdin:\n"
+        "    line = line.strip()\n"
+        "    if not line:\n"
+        "        continue\n"
+        "    e = json.loads(line)\n"
+        "    if not consumes or e.get(\"name\") in consumes:\n"
+        "        payload = e.get('payload', {}) or {}\n"
+        "        value = payload.get('title', payload.get('text'))\n"
+        "        if value is None and payload:\n"
+        "            value = payload[sorted(payload)[0]]\n"
+        "        print(f\"<li>{escape(str(value if value is not None else '(untitled)'))}</li>\")\n"
+        "print(\"</ul>\")\n"
+    )
+
+
+def compile_ask(prompt):
+    """Parse the declaration out of the compile prompt: the kernel prints a
+    'DECLARATION (<type> "<name>"):' header with the declaration JSON on the
+    next line."""
+    m = re.search(r'DECLARATION \((command|projector) "', prompt)
+    if not m:
+        raise SystemExit("compile ask carries no DECLARATION header")
+    typ = m.group(1)
+    decl = None
+    for line in prompt[m.start():].splitlines()[1:]:
+        line = line.strip()
+        if line.startswith("{"):
+            decl = json.loads(line)
+            break
+    if decl is None:
+        raise SystemExit("compile ask carries no declaration JSON")
+    script = command_script(decl) if typ == "command" else projector_script(decl)
+    print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
+
+
+def grow_ask(home, prompt):
+    name, intent = latest_intent(home)
+    if not intent:
+        intent = prompt
+    command = first_command(intent) or sanitize(name) or "entry"
+    projector = first_projection(intent) or command + "s"
+    event = first_event(intent) or command + ".recorded"
+    print(json.dumps({"name": "command.declared", "payload": {
+        "name": command,
+        "description": "offline stub command grown from " + name,
+        "params": {"text": "string"},
+        "event": {"name": event, "fields": {"text": "string"}}}}))
+    print(json.dumps({"name": "projector.declared", "payload": {
+        "name": projector,
+        "description": "offline stub projection grown from " + name,
+        "consumes": [event]}}))
+    print('stub declared "%s" and "%s"' % (command, projector))
+
+
+def main():
+    sys.stdin.read()  # the orientation brief; the stub reads the log directly
+    ask = os.environ.get("SELF_ASK", "")
+    prompt = sys.argv[-1] if len(sys.argv) > 1 else ""
+    home = os.environ.get("SELF_HOME", ".")
+    if ask == "compile":
+        compile_ask(prompt)
+    elif ask == "grow":
+        grow_ask(home, prompt)
+    elif ask == "heartbeat":
+        print("stub heartbeat: no changes")
+    else:
+        print("stub thought about: " + prompt)
+
+
+if __name__ == "__main__":
+    main()

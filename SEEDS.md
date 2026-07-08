@@ -22,7 +22,7 @@ myseed/
 
 1. It records an `intent.declared` event.
 2. It hands `intent.md` to the brain (a real brain writes real capabilities;
-   `SELF_LLM_STUB=1` supplies a deterministic offline one that declares a
+   `examples/brain-stub` is a deterministic offline one that declares a
    minimal command + projection, enough to exercise the loop). The brain reads
    the intent, looks at what the instance already has, and decides how to
    decompose it into **commands** (verbs that emit events) and **projections**

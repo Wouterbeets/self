@@ -775,18 +775,18 @@ func refreshSite(home string) {
 
 // ──────────────────────────────── the brain ─────────────────────────────────
 //
-// The kernel holds no model. Every ask — think, heartbeat, grow, and each
-// compile — is handed to a brain PROCESS (SELF_BRAIN, e.g. "claude -p"), which
-// explores and writes scripts with its own tools; the kernel only installs and
-// signs what comes back. SELF_LLM_STUB=1 supplies a deterministic offline brain
-// for demos and tests. The llm value carries just enough to route a compile:
-// stub-or-process, the home it runs against, and — during a grow — the whole
-// intent plus the orchestrator's stated reasoning, woven into each compile so
-// no piece is authored in a dark room. The reasoning travels in-band, through
-// the prompt and the log, never through a session store outside the log.
+// The kernel holds no model — not even a fake one. Every ask — think,
+// heartbeat, grow, and each compile — is handed to a brain PROCESS
+// (SELF_BRAIN, e.g. "claude -p"; examples/brain-stub is a deterministic
+// offline one for demos and tests), which explores and writes scripts with
+// its own tools; the kernel only installs and signs what comes back. The llm
+// value carries just enough to route a compile: the home it runs against,
+// and — during a grow — the whole intent plus the orchestrator's stated
+// reasoning, woven into each compile so no piece is authored in a dark room.
+// The reasoning travels in-band, through the prompt and the log, never
+// through a session store outside the log.
 
 type llm struct {
-	stub      bool
 	home      string
 	intent    string
 	reasoning string
@@ -794,13 +794,10 @@ type llm struct {
 
 // identity names the brain for provenance: who authored the bytes a receipt
 // carries. SELF_BRAIN_ID lets an agent name itself; otherwise the brain
-// executable is the honest mechanical answer, and a stub says so.
+// executable is the honest mechanical answer.
 func (c *llm) identity() string {
 	if id := strings.TrimSpace(os.Getenv("SELF_BRAIN_ID")); id != "" {
 		return id
-	}
-	if c.stub {
-		return "stub (no LLM)"
 	}
 	if exe := brainExe(); exe != "" {
 		return exe
@@ -809,7 +806,7 @@ func (c *llm) identity() string {
 }
 
 func newLLM(home string) *llm {
-	return &llm{stub: os.Getenv("SELF_LLM_STUB") == "1", home: home}
+	return &llm{home: home}
 }
 
 // ─────────────────────────────── the prompts ────────────────────────────────
@@ -834,16 +831,10 @@ WHAT YOU ARE GIVEN — your stdin is an orientation brief: where you are, what c
 // ────────────────────────────── the compiler ────────────────────────────────
 
 func (c *llm) compileCommand(d commandDecl) (string, error) {
-	if c.stub {
-		return stubCommand(d), nil
-	}
 	return compileViaBrain(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d))
 }
 
 func (c *llm) compileProjector(d projectorDecl) (string, error) {
-	if c.stub {
-		return stubProjector(d), nil
-	}
 	return compileViaBrain(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d))
 }
 
@@ -921,169 +912,6 @@ func compileViaBrain(home, intent, reasoning, typ, name, decl string) (string, e
 		return "", fmt.Errorf("the brain answered a compile ask without a script.authored event")
 	}
 	return res.Script, nil
-}
-
-// Stub scripts (SELF_LLM_STUB=1) keep the whole loop testable offline: no LLM,
-// no network, real pipe-contract binaries.
-func payloadField(fields map[string]string) string {
-	if _, ok := fields["title"]; ok {
-		return "title"
-	}
-	if _, ok := fields["text"]; ok {
-		return "text"
-	}
-	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		if strings.TrimSpace(k) != "" {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	if len(keys) > 0 {
-		return keys[0]
-	}
-	return "title"
-}
-
-func stubCommand(d commandDecl) string {
-	eventName := d.Event.Name
-	if strings.TrimSpace(eventName) == "" {
-		eventName = d.Name + ".ran"
-	}
-	field := payloadField(d.Event.Fields)
-	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nprint(json.dumps({\"name\": %q, \"payload\": {%q: \" \".join(sys.argv[1:]) or \"(untitled)\"}}))\n",
-		d.Description, eventName, field)
-}
-
-func stubProjector(d projectorDecl) string {
-	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nfrom html import escape\nconsumes = %s\nprint(\"<h1>%s</h1><ul>\")\nfor line in sys.stdin:\n    line = line.strip()\n    if not line:\n        continue\n    e = json.loads(line)\n    if not consumes or e.get(\"name\") in consumes:\n        payload = e.get('payload', {}) or {}\n        value = payload.get('title', payload.get('text'))\n        if value is None and payload:\n            value = payload[sorted(payload)[0]]\n        print(f\"<li>{escape(str(value if value is not None else '(untitled)'))}</li>\")\nprint(\"</ul>\")\n",
-		d.Description, jsonRepr(d.Consumes), d.Name)
-}
-
-func stubBrain(home, kind, prompt string) (*brainResult, error) {
-	res := &brainResult{Events: []map[string]any{}}
-	switch kind {
-	case "think":
-		res.Response = "stub thought about: " + prompt
-	case "heartbeat":
-		res.Response = "stub heartbeat: no changes"
-	case "grow":
-		name, intent := latestIntent(home)
-		if intent == "" {
-			intent = prompt
-		}
-		command := firstCommandName(intent)
-		if command == "" {
-			command = sanitizeCapabilityName(name)
-		}
-		if command == "" {
-			command = "entry"
-		}
-		projector := firstProjectionName(intent)
-		if projector == "" {
-			projector = command + "s"
-		}
-		event := firstEventName(intent)
-		if event == "" {
-			event = command + ".recorded"
-		}
-		res.Events = []map[string]any{
-			{"name": "command.declared", "payload": map[string]any{"name": command, "description": "offline stub command grown from " + name, "params": map[string]string{"text": "string"}, "event": map[string]any{"name": event, "fields": map[string]string{"text": "string"}}}},
-			{"name": "projector.declared", "payload": map[string]any{"name": projector, "description": "offline stub projection grown from " + name, "consumes": []string{event}}},
-		}
-		res.Response = fmt.Sprintf("stub declared %q and %q", command, projector)
-	case "compile":
-		return nil, fmt.Errorf("stub compile is handled by the built-in stub compiler, not the brain process")
-	default:
-		res.Response = "stub received " + kind
-	}
-	return res, nil
-}
-
-func latestIntent(home string) (name, intent string) {
-	events, err := readEvents(home)
-	if err != nil {
-		return "", ""
-	}
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Name != "intent.declared" {
-			continue
-		}
-		var p struct {
-			Name   string `json:"name"`
-			Intent string `json:"intent"`
-		}
-		if json.Unmarshal(events[i].Payload, &p) == nil {
-			return p.Name, p.Intent
-		}
-	}
-	return "", ""
-}
-
-func backticked(s string) []string {
-	var out []string
-	for {
-		start := strings.IndexByte(s, '`')
-		if start < 0 {
-			return out
-		}
-		s = s[start+1:]
-		end := strings.IndexByte(s, '`')
-		if end < 0 {
-			return out
-		}
-		out = append(out, s[:end])
-		s = s[end+1:]
-	}
-}
-
-func firstCommandName(intent string) string {
-	for _, token := range backticked(intent) {
-		if rest, ok := strings.CutPrefix(token, "self run "); ok {
-			if fields := strings.Fields(rest); len(fields) > 0 {
-				return sanitizeCapabilityName(fields[0])
-			}
-		}
-	}
-	return ""
-}
-
-func firstProjectionName(intent string) string {
-	for _, token := range backticked(intent) {
-		if strings.HasPrefix(token, "/") && len(token) > 1 {
-			return sanitizeCapabilityName(strings.TrimPrefix(token, "/"))
-		}
-	}
-	return ""
-}
-
-func firstEventName(intent string) string {
-	for _, token := range backticked(intent) {
-		if strings.Contains(token, ".") && !strings.Contains(token, " ") && !strings.HasPrefix(token, "/") {
-			return token
-		}
-	}
-	return ""
-}
-
-func sanitizeCapabilityName(s string) string {
-	s = strings.TrimSpace(strings.TrimPrefix(s, "self-seed-"))
-	s = strings.TrimSuffix(s, "-seed")
-	s = strings.Trim(s, "`/ <>.,:;()[]{}\t\n")
-	var b strings.Builder
-	lastDash := false
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
 }
 
 // ──────────────────────────────── the brain ─────────────────────────────────
@@ -1980,7 +1808,7 @@ func cmdAdopt(home, path string) error {
 	// so "the file exists" proves nothing. The honest signal is the log: this
 	// adopt succeeded only if it minted a fresh signed receipt.
 	if receiptCount(home, typ, name) <= before {
-		return fmt.Errorf("adopted %q into the log, but the compile produced no signed receipt (any script on disk is from an earlier receipt) — wire a brain (or SELF_LLM_STUB=1) and declare it again", name)
+		return fmt.Errorf("adopted %q into the log, but the compile produced no signed receipt (any script on disk is from an earlier receipt) — wire a brain and declare it again", name)
 	}
 	fmt.Printf("adopted %q — re-authored by this instance's own compiler, signed by its own key\n", name)
 	return nil
@@ -1999,8 +1827,8 @@ func cmdRun(home, command string, args []string) error {
 
 // cmdThink asks the brain and prints {response, events} JSON. The brain
 // is a PROCESS the kernel pipes the log to — $SELF_BRAIN is any program honoring
-// the contract (prompt as last arg, event JSONL out), or SELF_LLM_STUB=1 for the
-// offline stub. think appends nothing: the caller owns that.
+// the contract (prompt as last arg, event JSONL out). think appends nothing:
+// the caller owns that.
 func cmdThink(home, prompt string) error {
 	if prompt == "" {
 		data, _ := io.ReadAll(os.Stdin)
@@ -2035,14 +1863,10 @@ func cmdThink(home, prompt string) error {
 // of the brain's stdout is tolerant on purpose: JSON lines with a name are
 // events — script.authored answers a compile, chat.message carries the reply,
 // anything else is a returned event — and bare prose joins the reply. With no
-// brain plugged in, SELF_LLM_STUB=1 supplies a deterministic offline one;
-// otherwise the ask fails with a hint.
+// brain plugged in, the ask fails with a hint.
 func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	exe := brainExe()
 	if exe == "" {
-		if os.Getenv("SELF_LLM_STUB") == "1" {
-			return stubBrain(home, kind, prompt)
-		}
 		return nil, fmt.Errorf("no brain is plugged in — %s", brainHint)
 	}
 	brief := freshBrief(home)
@@ -2106,7 +1930,7 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	return res, nil
 }
 
-const brainHint = `plug a brain: SELF_BRAIN=<a tool-capable executable, e.g. "claude -p" or examples/brain-opencode>; the brain must inspect SELF_HOME itself. See examples/README.md. Or SELF_LLM_STUB=1 for offline stubs.`
+const brainHint = `plug a brain: SELF_BRAIN=<a tool-capable executable, e.g. "claude -p" or examples/brain-opencode>; the brain must inspect SELF_HOME itself. See examples/README.md. For offline demos/tests, examples/brain-stub is a deterministic no-LLM brain.`
 
 // brainCommand splits a configured executable into command and args, appending
 // the prompt as the last argument.
@@ -2312,12 +2136,13 @@ environment:
                     orientation brief on stdin; it answers in event JSONL,
                     prose tolerated. The brain must inspect SELF_HOME itself
                     (site/*.html, events.jsonl, capabilities/) with its own
-                    tools. See examples/README.md. examples/brain-openai is a
-                    reference adapter that illustrates the wire shape but is
-                    incomplete by spec (no tool loop).
-  SELF_LLM_STUB     "1" → offline stub scripts (no brain, no network)
+                    tools. See examples/README.md. examples/brain-stub is a
+                    deterministic offline brain for demos/tests;
+                    examples/brain-openai is a reference adapter that
+                    illustrates the wire shape but is incomplete by spec
+                    (no tool loop).
   SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
-                    (default: the brain executable, or "stub (no LLM)")
+                    (default: the brain executable)
   SELF_THEME        default page design when serving: grove | micro | paper |
                     spec (default grove); a ?theme= link or the on-page picker
                     overrides it per viewer. Presentation only — never logged.

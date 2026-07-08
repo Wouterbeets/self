@@ -12,3 +12,6 @@
 .secret
 events.jsonl
 .self/
+
+# python bytecode (brain adapters are scripts)
+__pycache__/

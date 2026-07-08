@@ -87,7 +87,7 @@ func TestConcurrentAppendsDoNotCollide(t *testing.T) {
 // signed receipt, running the command appends its event, and the projection
 // re-renders to site/ showing it. This is the core loop in one test.
 func TestStrangeLoop(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
 
 	decls := []Event{
@@ -166,7 +166,7 @@ func TestForgedReceiptIsInert(t *testing.T) {
 // rebuilt from events.jsonl + .secret alone reproduces its installed scripts
 // and rendered projections byte-for-byte.
 func TestRehydrateRoundTrip(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 	src := t.TempDir()
 	decls := []Event{
 		newEvent("command.declared", json.RawMessage(
@@ -217,7 +217,7 @@ func TestRehydrateRoundTrip(t *testing.T) {
 // name both reconstruct: receipts are keyed by (type, name), not name. The
 // chat seed (a chat command and a chat projector) is the natural collision.
 func TestRehydrateTypeCollision(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
 	decls := []Event{
 		newEvent("command.declared", json.RawMessage(
@@ -248,7 +248,7 @@ func TestRehydrateTypeCollision(t *testing.T) {
 // (the tombstone outranks earlier receipts), and a later re-declaration
 // revives it — deletion is a fold rule, not an erasure.
 func TestRetireRemovesDerivedStateAndSurvivesRehydrate(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
 	decls := []Event{
 		newEvent("command.declared", json.RawMessage(
@@ -357,7 +357,7 @@ func shareToFile(t *testing.T, home, name, path string) error {
 // own compiler authors what installs, signed by its own key — two instances stay
 // sovereign even while one learns from the other.
 func TestShareAdopt(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 
 	// the sender grows a capability, then re-teaches it — a real history
 	sender := t.TempDir()
@@ -468,7 +468,7 @@ func TestShareAdopt(t *testing.T) {
 // from a seed either, because foreign receipts ride inside capability.adopted
 // where it does not look. Garbage that is not event JSONL is refused.
 func TestAdoptNeverInstallsForeignBytes(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 
 	decl, _ := json.Marshal(map[string]any{"name": "command.declared",
 		"payload": map[string]any{"name": "gift", "description": "a gift", "event": map[string]any{"name": "gift.given"}}})
@@ -515,7 +515,6 @@ func TestAdoptNeverInstallsForeignBytes(t *testing.T) {
 // file's existence, or a failed compile silently masquerades as an upgrade
 // while the stale script keeps running.
 func TestAdoptFailedCompileIsAnErrorDespiteStaleScript(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "")
 	t.Setenv("SELF_BRAIN", "false") // a brain that always exits nonzero
 	home := t.TempDir()
 
@@ -551,7 +550,6 @@ print(json.dumps({"name":"script.authored","payload":{"script":script}}))
 `), 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SELF_LLM_STUB", "")
 	t.Setenv("SELF_BRAIN", brain)
 	t.Setenv("SELF_BRAIN_ID", "revision brain")
 
@@ -633,7 +631,6 @@ else:
 	}
 	t.Setenv("SELF_BRAIN", brain)
 	t.Setenv("SELF_BRAIN_ID", "an external brain, plugged in whole")
-	t.Setenv("SELF_LLM_STUB", "")
 
 	home := t.TempDir()
 	if err := cmdHeartbeat(home); err != nil {
@@ -736,7 +733,6 @@ else:
 	}
 	t.Setenv("SELF_BRAIN", brain)
 	t.Setenv("SELF_BRAIN_ID", "a markdown-speaking brain")
-	t.Setenv("SELF_LLM_STUB", "")
 
 	home := t.TempDir()
 	res, err := pipeBrain(home, "grow", "grow a note capability")
@@ -771,6 +767,18 @@ func mustEvents(t *testing.T, decls []map[string]any) []Event {
 		evs = append(evs, newEvent(name, payload))
 	}
 	return evs
+}
+
+// stubBrain returns the absolute path of examples/brain-stub — the
+// deterministic offline brain the tests plug in through the one seam every
+// real brain uses. There is no in-kernel stub: a brain is a process.
+func stubBrain(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(wd, "examples", "brain-stub")
 }
 
 // installTrustedScript simulates an earlier legitimate install: a script on
@@ -818,8 +826,7 @@ func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
 // in-band alternative to remembering through a session store outside the log:
 // rehydrate replays it, share carries it, audit can read it.
 func TestGrowLogsOrchestratorReasoning(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
-	t.Setenv("SELF_BRAIN", "")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
 
 	seed := filepath.Join(t.TempDir(), "notes")
@@ -860,8 +867,7 @@ func TestGrowLogsOrchestratorReasoning(t *testing.T) {
 }
 
 func TestStubBrainCoversThinkAndGrow(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
-	t.Setenv("SELF_BRAIN", "")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
 
 	res, err := pipeBrain(home, "think", "are you there?")
@@ -902,7 +908,7 @@ func TestStubBrainCoversThinkAndGrow(t *testing.T) {
 }
 
 func TestStubCommandHonorsDeclaredField(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
 	decl := newEvent("command.declared", json.RawMessage(
 		`{"name":"memo","description":"record a memo","event":{"name":"memo.added","fields":{"text":"string"}}}`))
@@ -961,10 +967,11 @@ func TestReceiptProvenance(t *testing.T) {
 	}
 
 	// and a receipt the kernel mints carries the brain's identity
-	c := &llm{stub: true, home: home}
+	c := newLLM(home)
 	t.Setenv("SELF_BRAIN_ID", "")
-	if got := c.identity(); got != "stub (no LLM)" {
-		t.Fatalf("stub identity = %q", got)
+	t.Setenv("SELF_BRAIN", "some-brain")
+	if got := c.identity(); got != "some-brain" {
+		t.Fatalf("brain identity = %q, want the executable", got)
 	}
 	t.Setenv("SELF_BRAIN_ID", "an agent-chosen identity")
 	if got := c.identity(); got != "an agent-chosen identity" {
@@ -1145,8 +1152,7 @@ func TestInjectShellShape(t *testing.T) {
 // page under site/, survives rehydrate, and stays OFF the top nav — depth is
 // reached from the parent page, so the surface unfolds instead of flooding.
 func TestNestedProjectionsUnfold(t *testing.T) {
-	t.Setenv("SELF_LLM_STUB", "1")
-	t.Setenv("SELF_BRAIN", "")
+	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
 
 	for _, n := range []string{"finances", "finances/bills"} {
@@ -1215,7 +1221,7 @@ func TestSiteNavListsProjections(t *testing.T) {
 // SELF_HOME for depth (the raw log and rendered pages live on disk). A brain
 // reads state, not a firehose; an instance's brain prompt stays O(state), not
 // O(history), so a long-lived instance doesn't grow an unbounded ask. The stub
-// brain (SELF_LLM_STUB=1) ignores stdin, so this pins the wired-brain path only.
+// brain (examples/brain-stub) ignores stdin too, so this pins the seam itself.
 func TestBrainReceivesStateBriefNotRawLog(t *testing.T) {
 	// A brain that records its stdin to a file so we can inspect what the kernel
 	// actually fed it. It answers a think ask with one prose line.
@@ -1232,9 +1238,6 @@ print("read " + str(len(data)) + " bytes on stdin")
 	}
 	t.Setenv("SELF_BRAIN", brain)
 	t.Setenv("SELF_BRAIN_ID", "the recorder brain")
-	t.Setenv("SELF_LLM_STUB", "")
-	// and don't let a SELF_LLM_API_KEY leak in via .brain-key
-
 	home := t.TempDir()
 	// lay down a small, recognizable log: a declaration + a couple of events
 	decl := newEvent("command.declared", json.RawMessage(`{"name":"note","description":"take a note","event":{"name":"note.taken","fields":{"title":"string"}}}`))
