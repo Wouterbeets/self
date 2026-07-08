@@ -30,9 +30,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -171,32 +169,21 @@ type receipt struct {
 	// By is the provenance of the bytes: which brain authored this compile —
 	// a model at an endpoint, a stub, a named agent. The signature covers it,
 	// so authorship can no more be forged or relabeled than the script itself.
-	// Receipts minted before provenance existed have no By and verify by the
-	// legacy formula.
 	By  string `json:"by,omitempty"`
 	Sig string `json:"sig"`
 }
 
 // sign binds the receipt's fields so none can be relabeled — one capability's
 // bytes can't install under another's name, and authorship can't be moved.
-// The v2 formula is domain-separated and length-prefixed (no concatenation of
-// adjacent fields can collide); the legacy formula survives so instances minted
-// before provenance still rehydrate. Type names are kernel-vocabulary
-// ("command"/"projector"), so a legacy mac can never alias a v2 one.
+// One formula: domain-separated and length-prefixed, so no concatenation of
+// adjacent fields can collide. Instances signed under older formulas re-earn
+// their receipts by declaring again — experimental means free to break.
 func sign(secret []byte, typ, name, script, by string) string {
 	m := hmac.New(sha256.New, secret)
-	if by == "" { // legacy: receipts from before authorship was recorded
-		m.Write([]byte(typ))
-		m.Write([]byte{0})
-		m.Write([]byte(name))
-		m.Write([]byte{0})
-		m.Write([]byte(script))
-	} else {
-		m.Write([]byte("self.receipt.v2\x00"))
-		for _, field := range []string{typ, name, script, by} {
-			fmt.Fprintf(m, "%d:", len(field))
-			m.Write([]byte(field))
-		}
+	m.Write([]byte("self.receipt.v2\x00"))
+	for _, field := range []string{typ, name, script, by} {
+		fmt.Fprintf(m, "%d:", len(field))
+		m.Write([]byte(field))
 	}
 	return hex.EncodeToString(m.Sum(nil))
 }
@@ -261,25 +248,6 @@ func installScript(home, typ, name, script string) error {
 		return err
 	}
 	return os.WriteFile(p, []byte(script), 0755)
-}
-
-func installTrustedScript(home, typ, name, script, by string) error {
-	if err := installScript(home, typ, name, script); err != nil {
-		return err
-	}
-	return appendReceipt(home, typ, name, script, by)
-}
-
-func declareCommand(home string, d commandDecl) error {
-	payload, _ := json.Marshal(d)
-	e := newEvent("command.declared", payload)
-	return appendEvent(home, &e)
-}
-
-func declareProjector(home string, d projectorDecl) error {
-	payload, _ := json.Marshal(d)
-	e := newEvent("projector.declared", payload)
-	return appendEvent(home, &e)
 }
 
 // retirement is the payload of a capability.retired tombstone: which
@@ -807,49 +775,38 @@ func refreshSite(home string) {
 
 // ──────────────────────────────── the brain ─────────────────────────────────
 //
-// The kernel holds no model. Every ask — think, heartbeat, grow, and each
-// compile — is handed to a brain PROCESS (SELF_BRAIN, e.g. "claude -p"), which
-// explores and writes scripts with its own tools; the kernel only installs and
-// signs what comes back. SELF_LLM_STUB=1 supplies a deterministic offline brain
-// for demos and tests. The llm value carries just enough to route a compile:
-// stub-or-process, the home it runs against, and — during a grow — the whole
-// intent plus the orchestrator's stated reasoning, woven into each compile so
-// no piece is authored in a dark room. The reasoning travels in-band, through
-// the prompt and the log, never through a session store outside the log.
+// The kernel holds no model — not even a fake one. Every ask — think,
+// heartbeat, grow, and each compile — is handed to a brain PROCESS
+// (SELF_BRAIN, e.g. "claude -p"; examples/brain-stub is a deterministic
+// offline one for demos and tests), which explores and writes scripts with
+// its own tools; the kernel only installs and signs what comes back. The llm
+// value carries just enough to route a compile: the home it runs against,
+// and — during a grow — the whole intent plus the orchestrator's stated
+// reasoning, woven into each compile so no piece is authored in a dark room.
+// The reasoning travels in-band, through the prompt and the log, never
+// through a session store outside the log.
 
 type llm struct {
-	stub      bool
 	home      string
 	intent    string
 	reasoning string
 }
 
-type brainConfig struct {
-	Provider string `json:"provider"`
-	Command  string `json:"command"`
-	BaseURL  string `json:"base_url"`
-	Model    string `json:"model"`
-	KeySet   bool   `json:"key_set"`
-}
-
 // identity names the brain for provenance: who authored the bytes a receipt
 // carries. SELF_BRAIN_ID lets an agent name itself; otherwise the brain
-// executable is the honest mechanical answer, and a stub says so.
+// executable is the honest mechanical answer.
 func (c *llm) identity() string {
 	if id := strings.TrimSpace(os.Getenv("SELF_BRAIN_ID")); id != "" {
 		return id
 	}
-	if c.stub {
-		return "stub (no LLM)"
-	}
-	if exe := brainExe(c.home); exe != "" {
+	if exe := brainExe(); exe != "" {
 		return exe
 	}
 	return "brain"
 }
 
 func newLLM(home string) *llm {
-	return &llm{stub: os.Getenv("SELF_LLM_STUB") == "1", home: home}
+	return &llm{home: home}
 }
 
 // ─────────────────────────────── the prompts ────────────────────────────────
@@ -874,16 +831,10 @@ WHAT YOU ARE GIVEN — your stdin is an orientation brief: where you are, what c
 // ────────────────────────────── the compiler ────────────────────────────────
 
 func (c *llm) compileCommand(d commandDecl) (string, error) {
-	if c.stub {
-		return stubCommand(d), nil
-	}
 	return compileViaBrain(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d))
 }
 
 func (c *llm) compileProjector(d projectorDecl) (string, error) {
-	if c.stub {
-		return stubProjector(d), nil
-	}
 	return compileViaBrain(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d))
 }
 
@@ -963,169 +914,6 @@ func compileViaBrain(home, intent, reasoning, typ, name, decl string) (string, e
 	return res.Script, nil
 }
 
-// Stub scripts (SELF_LLM_STUB=1) keep the whole loop testable offline: no LLM,
-// no network, real pipe-contract binaries.
-func payloadField(fields map[string]string) string {
-	if _, ok := fields["title"]; ok {
-		return "title"
-	}
-	if _, ok := fields["text"]; ok {
-		return "text"
-	}
-	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		if strings.TrimSpace(k) != "" {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	if len(keys) > 0 {
-		return keys[0]
-	}
-	return "title"
-}
-
-func stubCommand(d commandDecl) string {
-	eventName := d.Event.Name
-	if strings.TrimSpace(eventName) == "" {
-		eventName = d.Name + ".ran"
-	}
-	field := payloadField(d.Event.Fields)
-	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nprint(json.dumps({\"name\": %q, \"payload\": {%q: \" \".join(sys.argv[1:]) or \"(untitled)\"}}))\n",
-		d.Description, eventName, field)
-}
-
-func stubProjector(d projectorDecl) string {
-	return fmt.Sprintf("#!/usr/bin/env python3\n# STUB (no LLM configured) — %s\nimport sys, json\nfrom html import escape\nconsumes = %s\nprint(\"<h1>%s</h1><ul>\")\nfor line in sys.stdin:\n    line = line.strip()\n    if not line:\n        continue\n    e = json.loads(line)\n    if not consumes or e.get(\"name\") in consumes:\n        payload = e.get('payload', {}) or {}\n        value = payload.get('title', payload.get('text'))\n        if value is None and payload:\n            value = payload[sorted(payload)[0]]\n        print(f\"<li>{escape(str(value if value is not None else '(untitled)'))}</li>\")\nprint(\"</ul>\")\n",
-		d.Description, jsonRepr(d.Consumes), d.Name)
-}
-
-func stubBrain(home, kind, prompt string) (*brainResult, error) {
-	res := &brainResult{Events: []map[string]any{}}
-	switch kind {
-	case "think":
-		res.Response = "stub thought about: " + prompt
-	case "heartbeat":
-		res.Response = "stub heartbeat: no changes"
-	case "grow":
-		name, intent := latestIntent(home)
-		if intent == "" {
-			intent = prompt
-		}
-		command := firstCommandName(intent)
-		if command == "" {
-			command = sanitizeCapabilityName(name)
-		}
-		if command == "" {
-			command = "entry"
-		}
-		projector := firstProjectionName(intent)
-		if projector == "" {
-			projector = command + "s"
-		}
-		event := firstEventName(intent)
-		if event == "" {
-			event = command + ".recorded"
-		}
-		res.Events = []map[string]any{
-			{"name": "command.declared", "payload": map[string]any{"name": command, "description": "offline stub command grown from " + name, "params": map[string]string{"text": "string"}, "event": map[string]any{"name": event, "fields": map[string]string{"text": "string"}}}},
-			{"name": "projector.declared", "payload": map[string]any{"name": projector, "description": "offline stub projection grown from " + name, "consumes": []string{event}}},
-		}
-		res.Response = fmt.Sprintf("stub declared %q and %q", command, projector)
-	case "compile":
-		return nil, fmt.Errorf("stub compile is handled by the built-in stub compiler, not the brain process")
-	default:
-		res.Response = "stub received " + kind
-	}
-	return res, nil
-}
-
-func latestIntent(home string) (name, intent string) {
-	events, err := readEvents(home)
-	if err != nil {
-		return "", ""
-	}
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Name != "intent.declared" {
-			continue
-		}
-		var p struct {
-			Name   string `json:"name"`
-			Intent string `json:"intent"`
-		}
-		if json.Unmarshal(events[i].Payload, &p) == nil {
-			return p.Name, p.Intent
-		}
-	}
-	return "", ""
-}
-
-func backticked(s string) []string {
-	var out []string
-	for {
-		start := strings.IndexByte(s, '`')
-		if start < 0 {
-			return out
-		}
-		s = s[start+1:]
-		end := strings.IndexByte(s, '`')
-		if end < 0 {
-			return out
-		}
-		out = append(out, s[:end])
-		s = s[end+1:]
-	}
-}
-
-func firstCommandName(intent string) string {
-	for _, token := range backticked(intent) {
-		if rest, ok := strings.CutPrefix(token, "self run "); ok {
-			if fields := strings.Fields(rest); len(fields) > 0 {
-				return sanitizeCapabilityName(fields[0])
-			}
-		}
-	}
-	return ""
-}
-
-func firstProjectionName(intent string) string {
-	for _, token := range backticked(intent) {
-		if strings.HasPrefix(token, "/") && len(token) > 1 {
-			return sanitizeCapabilityName(strings.TrimPrefix(token, "/"))
-		}
-	}
-	return ""
-}
-
-func firstEventName(intent string) string {
-	for _, token := range backticked(intent) {
-		if strings.Contains(token, ".") && !strings.Contains(token, " ") && !strings.HasPrefix(token, "/") {
-			return token
-		}
-	}
-	return ""
-}
-
-func sanitizeCapabilityName(s string) string {
-	s = strings.TrimSpace(strings.TrimPrefix(s, "self-seed-"))
-	s = strings.TrimSuffix(s, "-seed")
-	s = strings.Trim(s, "`/ <>.,:;()[]{}\t\n")
-	var b strings.Builder
-	lastDash := false
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
-
 // ──────────────────────────────── the brain ─────────────────────────────────
 
 type brainResult struct {
@@ -1134,72 +922,14 @@ type brainResult struct {
 	Script   string // a compile ask's answer, from a script.authored event
 }
 
-// brainExe is the plugged brain, if any: env wins for explicit sessions; if not
-// set, the optional settings seed can resolve a latest brain.configured event
-// into a process command. The process still honors the same brain contract.
-func brainExe(home string) string {
-	if v := strings.TrimSpace(os.Getenv("SELF_BRAIN")); v != "" {
-		return v
-	}
-	cfg := latestBrainConfig(home)
-	if strings.TrimSpace(cfg.Command) != "" {
-		return cfg.Command
-	}
-	switch strings.TrimSpace(cfg.Provider) {
-	case "opencode":
-		return repoFile("examples", "brain-opencode")
-	case "openai", "custom":
-		return repoFile("examples", "brain-openai")
-	}
-	return ""
-}
-
-func latestBrainConfig(home string) brainConfig {
-	events, err := readEvents(home)
-	if err != nil {
-		return brainConfig{}
-	}
-	var cfg brainConfig
-	for _, e := range events {
-		if e.Name == "brain.configured" {
-			json.Unmarshal(e.Payload, &cfg)
-		}
-	}
-	return cfg
-}
-
-func repoRoot() string {
-	if _, file, _, ok := runtime.Caller(0); ok {
-		return filepath.Dir(file)
-	}
-	if wd, err := os.Getwd(); err == nil {
-		return wd
-	}
-	return "."
-}
-
-func repoFile(elem ...string) string {
-	return filepath.Join(append([]string{repoRoot()}, elem...)...)
+// brainExe is the plugged brain, if any: SELF_BRAIN is the one way a brain is
+// named, and a process behind it honors the one brain contract.
+func brainExe() string {
+	return strings.TrimSpace(os.Getenv("SELF_BRAIN"))
 }
 
 func brainEnv(home, kind string) []string {
-	env := append(os.Environ(), "SELF_HOME="+home, "SELF_ASK="+kind)
-	if os.Getenv("SELF_BRAIN") != "" {
-		return env
-	}
-	cfg := latestBrainConfig(home)
-	if cfg.BaseURL != "" {
-		env = append(env, "SELF_LLM_URL="+cfg.BaseURL)
-	}
-	if cfg.Model != "" {
-		env = append(env, "SELF_LLM_MODEL="+cfg.Model)
-	}
-	if key, err := os.ReadFile(filepath.Join(home, ".brain-key")); err == nil {
-		if s := strings.TrimSpace(string(key)); s != "" {
-			env = append(env, "SELF_LLM_API_KEY="+s)
-		}
-	}
-	return env
+	return append(os.Environ(), "SELF_HOME="+home, "SELF_ASK="+kind)
 }
 
 // agent runs one brain conversation with the three powers: read (bash), act
@@ -1266,7 +996,6 @@ func renderKernelHTML(home string) {
 	b.WriteString("<h1>self</h1>\n")
 	b.WriteString("<p class=\"muted\">a local-first, event-sourced runtime with LLM-generated capabilities</p>\n")
 	b.WriteString("<p>One append-only event log is the only state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log; humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
-	renderSeedCatalog(&b, home, commands, projectors)
 	b.WriteString(orientationHTML)
 
 	b.WriteString("<h2>commands</h2>\n")
@@ -1319,170 +1048,6 @@ func renderKernelHTML(home string) {
 	siteDir := filepath.Join(home, "site")
 	os.MkdirAll(siteDir, 0755)
 	os.WriteFile(filepath.Join(siteDir, "kernel.html"), []byte(b.String()), 0644)
-}
-
-// seedFS embeds the bundled seeds so a trusted seed installs — and any seed's
-// intent renders — from the binary alone, with no repo checkout on disk. Trusted
-// seeds carry a trusted.json manifest and reviewed scripts; grown seeds carry
-// only an intent.md the configured brain compiles.
-//
-//go:embed seeds
-var seedFS embed.FS
-
-// seedManifest is a trusted seed's install plan: the capabilities it declares,
-// the reviewed script file that realizes each, and the events that seed its
-// initial state. It is data, not code — the kernel installs it verbatim under a
-// signed receipt, so a trusted seed and a grown one rehydrate through the same
-// path.
-type seedManifest struct {
-	Title       string `json:"title"`
-	Kind        string `json:"kind"`
-	Description string `json:"description"`
-	Primary     string `json:"primary"`
-	Notes       string `json:"notes"`
-	Commands    []struct {
-		commandDecl
-		Script string `json:"script"`
-	} `json:"commands"`
-	Projectors []struct {
-		projectorDecl
-		Script string `json:"script"`
-	} `json:"projectors"`
-	Bootstrap []struct {
-		Name    string          `json:"name"`
-		Payload json.RawMessage `json:"payload"`
-	} `json:"bootstrap"`
-}
-
-// loadSeedManifest reads a trusted seed's install plan from the embedded FS. A
-// seed with no manifest is a grown seed (intent only) and returns ok=false.
-func loadSeedManifest(name string) (seedManifest, bool) {
-	var m seedManifest
-	data, err := seedFS.ReadFile(path.Join("seeds", name, "trusted.json"))
-	if err != nil {
-		return m, false
-	}
-	if json.Unmarshal(data, &m) != nil {
-		return m, false
-	}
-	return m, true
-}
-
-type seedCard struct {
-	Name        string
-	Title       string
-	Kind        string
-	Description string
-	Primary     string
-	Trusted     bool
-}
-
-func bundledSeeds() []seedCard {
-	cards := []seedCard{{Name: "settings"}}
-	cards = append(cards,
-		seedCard{Name: "chat", Title: "chat", Kind: "grown from intent", Description: "Conversational front door that can grow new capabilities mid-chat.", Primary: "chat"},
-		seedCard{Name: "notes", Title: "notes", Kind: "grown from intent", Description: "Minimal append-only note taking example: one command and one page.", Primary: "note"},
-		seedCard{Name: "memory", Title: "memory", Kind: "grown from intent", Description: "Durable memory for a stateless brain: remember writes facts to the log; a cold brain orients from /memory.", Primary: "remember"},
-	)
-	// A trusted seed's card is data: its title, blurb, and primary come from the
-	// manifest, so adding a trusted seed never touches the kernel.
-	for i := range cards {
-		if m, ok := loadSeedManifest(cards[i].Name); ok {
-			cards[i].Trusted = true
-			cards[i].Title = m.Title
-			cards[i].Kind = m.Kind
-			cards[i].Description = m.Description
-			cards[i].Primary = m.Primary
-		}
-	}
-	return cards
-}
-
-func renderSeedCatalog(b *strings.Builder, home string, commands map[string]commandDecl, projectors map[string]projectorDecl) {
-	esc := html.EscapeString
-	brain := brainExe(home)
-	stubBrain := brain == "" && os.Getenv("SELF_LLM_STUB") == "1"
-	b.WriteString("<h2>start here</h2>\n")
-	b.WriteString("<p>This home starts small on purpose. Before a brain is configured, you are the brain: inspect the seed, decide whether you trust it, then install only what you understand.</p>\n")
-	if stubBrain {
-		b.WriteString("<p class=\"tag\">offline stub brain enabled</p>\n")
-	} else if brain == "" {
-		b.WriteString("<p class=\"tag\">no brain configured yet</p>\n")
-	} else {
-		b.WriteString("<p class=\"tag\">brain configured: <code>" + esc(brain) + "</code></p>\n")
-	}
-	b.WriteString("<div class=\"stack\">\n")
-	for _, seed := range bundledSeeds() {
-		installed := false
-		if seed.Primary != "" {
-			_, installed = commands[seed.Primary]
-			if !installed {
-				_, installed = projectors[seed.Primary]
-			}
-		}
-		b.WriteString("<article class=\"card\"><h3>" + esc(seed.Title) + "</h3>")
-		b.WriteString("<p>" + esc(seed.Description) + "</p>")
-		b.WriteString("<p class=\"muted\">" + esc(seed.Kind) + "</p>")
-		b.WriteString("<details><summary>intent.md</summary><pre>" + esc(seedIntent(seed.Name)) + "</pre></details>")
-		if seed.Trusted {
-			if m, ok := loadSeedManifest(seed.Name); ok {
-				b.WriteString("<details><summary>what will be installed?</summary><pre>" + esc(trustedSeedPlan(m)) + "</pre></details>")
-			}
-		}
-		if installed {
-			b.WriteString("<p class=\"tag\">installed</p>")
-			if view := trustedSeedView(seed); view != "" {
-				b.WriteString("<p><a href=\"/" + esc(view) + "\">Open " + esc(seed.Title) + "</a></p>")
-			}
-		} else if seed.Trusted {
-			b.WriteString("<form method=\"post\" action=\"/install-seed\"><input type=\"hidden\" name=\"seed\" value=\"" + esc(seed.Name) + "\"><button>Install " + esc(seed.Title) + "</button></form>")
-		} else if brain == "" && !stubBrain {
-			b.WriteString("<p class=\"muted\">Install settings and configure a brain before growing this seed.</p>")
-		} else {
-			b.WriteString("<form method=\"post\" action=\"/grow-seed\"><input type=\"hidden\" name=\"seed\" value=\"" + esc(seed.Name) + "\"><button>Grow " + esc(seed.Title) + "</button></form>")
-		}
-		b.WriteString("</article>\n")
-	}
-	b.WriteString("</div>\n")
-}
-
-// seedIntent reads a bundled seed's intent.md from the embedded FS, so it
-// renders from the binary alone with no repo checkout on disk.
-func seedIntent(name string) string {
-	data, err := seedFS.ReadFile(path.Join("seeds", name, "intent.md"))
-	if err != nil {
-		return err.Error()
-	}
-	return string(data)
-}
-
-// trustedSeedPlan summarizes, from the manifest alone, exactly what installing a
-// trusted seed will declare — shown to the human who is the brain before any
-// brain exists, so they can decide whether they trust it.
-func trustedSeedPlan(m seedManifest) string {
-	var b strings.Builder
-	for _, c := range m.Commands {
-		fmt.Fprintf(&b, "command: %s -> %s\n", c.Name, c.Event.Name)
-	}
-	for _, p := range m.Projectors {
-		fmt.Fprintf(&b, "projection: /%s consumes %s\n", p.Name, strings.Join(p.Consumes, ", "))
-	}
-	if m.Notes != "" {
-		b.WriteString(m.Notes + "\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-// trustedSeedView is the projection route a trusted seed's "Open" link points
-// at: its first declared projector.
-func trustedSeedView(seed seedCard) string {
-	if !seed.Trusted {
-		return ""
-	}
-	if m, ok := loadSeedManifest(seed.Name); ok && len(m.Projectors) > 0 {
-		return m.Projectors[0].Name
-	}
-	return ""
 }
 
 // ─────────────────────────────── the surface ────────────────────────────────
@@ -1568,7 +1133,7 @@ func themeLabel(name string) string {
 var structuralCSS string
 
 // validTheme reports whether name is a known design; selection paths accept
-// only known names, so the injected picker links and cookie can never smuggle
+// only known names, so the injected picker links can never smuggle
 // arbitrary CSS in.
 func validTheme(name string) bool { _, ok := themes[name]; return ok }
 
@@ -1583,15 +1148,13 @@ func themeCSS(name string) string {
 	return shellMeta + "<style>" + structuralCSS + "\n" + t.css + "\n</style>"
 }
 
-// pickTheme resolves the design for one request, most specific first: an
-// explicit ?theme= wins (and the handler remembers it in a cookie), then the
-// cookie, then the SELF_THEME instance default, then the built-in default.
+// pickTheme resolves the design for one request: an explicit ?theme= wins,
+// then the SELF_THEME instance default, then the built-in default. Two
+// mechanisms, no remembered state — a theme is presentation for one request,
+// like prefers-color-scheme, never something the server holds for you.
 func pickTheme(r *http.Request) string {
 	if t := r.URL.Query().Get("theme"); validTheme(t) {
 		return t
-	}
-	if c, err := r.Cookie("self_theme"); err == nil && validTheme(c.Value) {
-		return c.Value
 	}
 	if t := strings.TrimSpace(os.Getenv("SELF_THEME")); validTheme(t) {
 		return t
@@ -1729,27 +1292,20 @@ func injectShell(page []byte, theme, nav string) []byte {
 }
 
 // writePage sends an on-disk projection through the shell for one request:
-// resolve the design, remember an explicit choice in a cookie so it persists
-// across pages, and inject theme + script + nav + picker. This is the only
-// place a theme touches a response; nothing is written back to the log or to
-// disk. current names the page being served so the nav can mark it.
+// resolve the design and inject theme + script + nav + picker. This is the
+// only place a theme touches a response; nothing is written back to the log,
+// to disk, or to the client. current names the page being served so the nav
+// can mark it.
 func writePage(w http.ResponseWriter, r *http.Request, home, current string, page []byte) {
-	theme := pickTheme(r)
-	if q := r.URL.Query().Get("theme"); validTheme(q) {
-		http.SetCookie(w, &http.Cookie{Name: "self_theme", Value: q, Path: "/", MaxAge: 31536000, SameSite: http.SameSiteLaxMode})
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(injectShell(page, theme, siteNav(home, current)))
+	w.Write(injectShell(page, pickTheme(r), siteNav(home, current)))
 }
 
 // cmdServe serves the instance: every page re-rendered against current events,
 // every affordance a plain HTML form. The injected shell layers feel on top —
 // pending turns, live re-replay, theme — but carries no state and grants no
 // power: strip it and every page still works, because the forms do.
-func cmdServe(home, port string) error {
-	if port == "" {
-		port = "7777"
-	}
+func cmdServe(home string) error {
 	refreshSite(home)
 
 	mux := http.NewServeMux()
@@ -1810,43 +1366,6 @@ func cmdServe(home, port string) error {
 		http.ServeFile(w, r, logPath(home))
 	})
 
-	mux.HandleFunc("/install-seed", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST required", http.StatusMethodNotAllowed)
-			return
-		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		if err := installBundledSeed(home, r.FormValue("seed")); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-	})
-
-	mux.HandleFunc("/grow-seed", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST required", http.StatusMethodNotAllowed)
-			return
-		}
-		if r.ParseForm() != nil {
-			http.Error(w, "bad form", 400)
-			return
-		}
-		seed := r.FormValue("seed")
-		if _, err := seedFS.ReadFile(path.Join("seeds", seed, "intent.md")); err != nil {
-			http.Error(w, "unknown seed", 404)
-			return
-		}
-		if err := cmdGrow(home, seed); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-	})
-
 	// POST /run/<command> → run a capability from the browser. A form's field
 	// values become positional args in document order (names are for humans;
 	// order is the contract); then Post/Redirect/Get back to the page.
@@ -1889,69 +1408,19 @@ func cmdServe(home, port string) error {
 	})
 
 	// Loopback by default: the write path (/run/<command>) has no auth, and
-	// local-first means local. SELF_BIND=0.0.0.0 opens it to the network for
-	// anyone who knowingly wants that.
-	addr := envOr("SELF_BIND", "127.0.0.1") + ":" + port
+	// local-first means local. SELF_BIND is the whole bind address, host or
+	// host:port (default 127.0.0.1:7777) — 0.0.0.0 opens it to the network
+	// for anyone who knowingly wants that.
+	addr := envOr("SELF_BIND", "127.0.0.1")
+	if !strings.Contains(addr, ":") {
+		addr += ":7777"
+	}
 	fmt.Fprintf(os.Stderr, "self: serving at http://%s (home %s)\n", addr, home)
 	fmt.Fprintf(os.Stderr, "  /              my identity — capabilities, paths, contract\n")
 	fmt.Fprintf(os.Stderr, "  /<projection>  a projection, re-rendered live\n")
 	fmt.Fprintf(os.Stderr, "  /run/<command> run a capability (plain HTML forms)\n")
 	fmt.Fprintf(os.Stderr, "  /events        the raw event log\n")
 	return http.ListenAndServe(addr, mux)
-}
-
-// ──────────────────────────── trusted seeds ─────────────────────────────────
-//
-// A trusted seed is reviewed data bundled with the kernel: a trusted.json
-// install plan plus the scripts it names. It installs before any brain exists
-// (the human is the brain for this step), through the same declare + signed
-// receipt path as a grown capability — so it rehydrates from the log alone like
-// everything else. settings is the first; adding another means adding a
-// directory, not kernel code.
-
-// installBundledSeed installs a trusted seed by name from its embedded manifest.
-func installBundledSeed(home, name string) error {
-	m, ok := loadSeedManifest(name)
-	if !ok {
-		return fmt.Errorf("unknown bundled seed %q", name)
-	}
-	for _, c := range m.Commands {
-		if p, _ := scriptPath(home, "command", c.Name); fileExists(p) {
-			return fmt.Errorf("%s is already installed", name)
-		}
-	}
-	by := "bundled seed: " + name
-	for _, c := range m.Commands {
-		script, err := seedFS.ReadFile(path.Join("seeds", name, c.Script))
-		if err != nil {
-			return err
-		}
-		if err := declareCommand(home, c.commandDecl); err != nil {
-			return err
-		}
-		if err := installTrustedScript(home, "command", c.Name, string(script), by); err != nil {
-			return err
-		}
-	}
-	for _, p := range m.Projectors {
-		script, err := seedFS.ReadFile(path.Join("seeds", name, p.Script))
-		if err != nil {
-			return err
-		}
-		if err := declareProjector(home, p.projectorDecl); err != nil {
-			return err
-		}
-		if err := installTrustedScript(home, "projector", p.Name, string(script), by); err != nil {
-			return err
-		}
-	}
-	for _, b := range m.Bootstrap {
-		if err := ingest(home, []Event{newEvent(b.Name, b.Payload)}); err != nil {
-			return err
-		}
-	}
-	refreshSite(home)
-	return nil
 }
 
 // cmdGrow grows a seed: a directory with intent.md (the genotype — prose
@@ -1993,17 +1462,9 @@ func parseDeposit(raw []byte) ([]Event, error) {
 	return evs, nil
 }
 
-// readSeedSource resolves a grow reference to its intent and initial deposit. A
-// bare name matches a bundled seed in the embedded FS (so grow works from the
-// binary alone); anything else is read as a directory on disk.
+// readSeedSource resolves a grow reference — a directory on disk — to its
+// intent and initial deposit.
 func readSeedSource(ref string) (name, intent string, deposit []Event, err error) {
-	if data, e := seedFS.ReadFile(path.Join("seeds", ref, "intent.md")); e == nil {
-		name, intent = ref, strings.TrimSpace(string(data))
-		if raw, e := seedFS.ReadFile(path.Join("seeds", ref, "seed.jsonl")); e == nil {
-			deposit, err = parseDeposit(raw)
-		}
-		return name, intent, deposit, err
-	}
 	data, e := os.ReadFile(filepath.Join(ref, "intent.md"))
 	if e != nil {
 		return "", "", nil, fmt.Errorf("a seed is a directory with an intent.md: %w", e)
@@ -2347,7 +1808,7 @@ func cmdAdopt(home, path string) error {
 	// so "the file exists" proves nothing. The honest signal is the log: this
 	// adopt succeeded only if it minted a fresh signed receipt.
 	if receiptCount(home, typ, name) <= before {
-		return fmt.Errorf("adopted %q into the log, but the compile produced no signed receipt (any script on disk is from an earlier receipt) — wire a brain (or SELF_LLM_STUB=1) and declare it again", name)
+		return fmt.Errorf("adopted %q into the log, but the compile produced no signed receipt (any script on disk is from an earlier receipt) — wire a brain and declare it again", name)
 	}
 	fmt.Printf("adopted %q — re-authored by this instance's own compiler, signed by its own key\n", name)
 	return nil
@@ -2366,8 +1827,8 @@ func cmdRun(home, command string, args []string) error {
 
 // cmdThink asks the brain and prints {response, events} JSON. The brain
 // is a PROCESS the kernel pipes the log to — $SELF_BRAIN is any program honoring
-// the contract (prompt as last arg, event JSONL out), or SELF_LLM_STUB=1 for the
-// offline stub. think appends nothing: the caller owns that.
+// the contract (prompt as last arg, event JSONL out). think appends nothing:
+// the caller owns that.
 func cmdThink(home, prompt string) error {
 	if prompt == "" {
 		data, _ := io.ReadAll(os.Stdin)
@@ -2402,14 +1863,10 @@ func cmdThink(home, prompt string) error {
 // of the brain's stdout is tolerant on purpose: JSON lines with a name are
 // events — script.authored answers a compile, chat.message carries the reply,
 // anything else is a returned event — and bare prose joins the reply. With no
-// brain plugged in, SELF_LLM_STUB=1 supplies a deterministic offline one;
-// otherwise the ask fails with a hint.
+// brain plugged in, the ask fails with a hint.
 func pipeBrain(home, kind, prompt string) (*brainResult, error) {
-	exe := brainExe(home)
+	exe := brainExe()
 	if exe == "" {
-		if os.Getenv("SELF_LLM_STUB") == "1" {
-			return stubBrain(home, kind, prompt)
-		}
 		return nil, fmt.Errorf("no brain is plugged in — %s", brainHint)
 	}
 	brief := freshBrief(home)
@@ -2473,7 +1930,7 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	return res, nil
 }
 
-const brainHint = `plug a brain: SELF_BRAIN=<a tool-capable executable, e.g. "claude -p" or examples/brain-opencode>; the brain must inspect SELF_HOME itself. See examples/README.md. Or SELF_LLM_STUB=1 for offline stubs.`
+const brainHint = `plug a brain: SELF_BRAIN=<a tool-capable executable, e.g. "claude -p" or examples/brain-opencode>; the brain must inspect SELF_HOME itself. See examples/README.md. For offline demos/tests, examples/brain-stub is a deterministic no-LLM brain.`
 
 // brainCommand splits a configured executable into command and args, appending
 // the prompt as the last argument.
@@ -2656,7 +2113,6 @@ usage: self [command] [args]
   self think "..."     ask the brain; returns {response, events} JSON
   self heartbeat       one self-improvement cycle (the brain reflects & grows)
   self show <name>     render a projection to stdout
-  self live [port]     serve the instance (default 7777)
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
   self share <cap>     print a seed to stdout — the capability's declarations and
                        receipts, a verbatim slice of this log
@@ -2680,12 +2136,13 @@ environment:
                     orientation brief on stdin; it answers in event JSONL,
                     prose tolerated. The brain must inspect SELF_HOME itself
                     (site/*.html, events.jsonl, capabilities/) with its own
-                    tools. See examples/README.md. examples/brain-openai is a
-                    reference adapter that illustrates the wire shape but is
-                    incomplete by spec (no tool loop).
-  SELF_LLM_STUB     "1" → offline stub scripts (no brain, no network)
+                    tools. See examples/README.md. examples/brain-stub is a
+                    deterministic offline brain for demos/tests;
+                    examples/brain-openai is a reference adapter that
+                    illustrates the wire shape but is incomplete by spec
+                    (no tool loop).
   SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
-                    (default: the brain executable, or "stub (no LLM)")
+                    (default: the brain executable)
   SELF_THEME        default page design when serving: grove | micro | paper |
                     spec (default grove); a ?theme= link or the on-page picker
                     overrides it per viewer. Presentation only — never logged.
@@ -2761,8 +2218,6 @@ func commandHelp(cmd string) (string, bool) {
 		return "usage: self heartbeat\n\nAppend a heartbeat event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
 	case "show":
 		return "usage: self show <projection>\n\nRender a projection to stdout by replaying the current log. Use 'kernel' for the instance index.\n", true
-	case "live":
-		return "usage: self live [port]\n\nServe the instance on 127.0.0.1 (or SELF_BIND) with /, /<projection>, /run/<command>, and /events.\n", true
 	case "rehydrate":
 		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a brain.\n", true
 	case "share":
@@ -2796,7 +2251,7 @@ func main() {
 			err = rehydrate(home)
 		}
 		if err == nil {
-			err = cmdServe(home, "")
+			err = cmdServe(home)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "self: %s\n", err)
@@ -2837,14 +2292,6 @@ func main() {
 			err = fmt.Errorf("usage: self show <projection>")
 		} else {
 			err = cmdShow(home, args[0])
-		}
-	case "live":
-		port := ""
-		if len(args) > 0 {
-			port = args[0]
-		}
-		if err = ensureHome(home); err == nil {
-			err = cmdServe(home, port)
 		}
 	case "rehydrate":
 		err = rehydrate(home)

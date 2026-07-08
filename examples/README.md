@@ -28,6 +28,22 @@ unauditable, absent from every seed. An instance's memory is its events and
 projections; a brain that needs to remember something should write it to the
 log through a capability, where `rehydrate` and `share` can reach it.
 
+## `brain-stub`
+
+The deterministic offline brain — no LLM, no network, Python standard library
+only. This is what the tests and `demo.sh` plug in: `think`/`heartbeat` answer
+with fixed prose, `grow` reads the latest `intent.declared` from the
+instance's log and declares one command and one projection named in the
+intent's backticks, and `compile` answers with a trivial script honoring the
+pipe contract. It proves the machinery, not the intelligence — and it goes
+through the same seam as every real brain, because the kernel carries no
+brain of its own, not even a fake one.
+
+```sh
+export SELF_BRAIN="$PWD/examples/brain-stub"
+./demo.sh          # or: go test ./...
+```
+
 ## `brain-openai`
 
 A reference adapter that illustrates the wire shape for any OpenAI-compatible

@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # demo.sh — see the machinery with no LLM, in about ten seconds.
 #
-# This shows the kernel loop end to end WITHOUT a brain: declarations compile
-# into scripts (here via the offline stub compiler, SELF_LLM_STUB=1), running a
-# command appends an event, a projection renders it, and the whole instance
-# rebuilds from events.jsonl + .secret alone — byte for byte.
+# This shows the kernel loop end to end WITHOUT a model: declarations compile
+# into scripts (here via examples/brain-stub, a deterministic offline brain
+# plugged through the same seam as any real one), running a command appends an
+# event, a projection renders it, and the whole instance rebuilds from
+# events.jsonl + .secret alone — byte for byte.
 #
 # The stub authors trivial scripts; the point here is the machinery, not the
-# intelligence. For real, LLM-generated capabilities, plug a brain and use
-# `self grow` (see the README).
+# intelligence. For real, LLM-generated capabilities, plug a real brain and
+# use `self grow` (see the README).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")" && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-export SELF_LLM_STUB=1
+export SELF_BRAIN="$root/examples/brain-stub"
 export SELF_BRAIN_ID="stub (no LLM)"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
@@ -24,7 +25,7 @@ go build -o "$work/self" "$root"
 self="$work/self"
 export SELF_HOME="$work/home"
 
-say "declare two capabilities (the stub compiler authors and signs them)"
+say "declare two capabilities (the stub brain authors, the kernel signs)"
 # A seed is event JSONL. `adopt` re-declares it, and the kernel compiles it
 # locally under a receipt signed by THIS instance's key.
 printf '{"name":"command.declared","payload":{"name":"entry","description":"record an entry","params":{"text":"string"},"event":{"name":"journal.entry","fields":{"title":"string"}}}}\n' > "$work/cmd.jsonl"
