@@ -140,6 +140,8 @@ self live [port]     serve the instance (default 7777)
 self rehydrate       rebuild capabilities/ + site/ from the log (offline)
 self share <cap>     print a capability's declarations + receipts as JSONL to stdout
 self adopt <seed>    re-generate a shared capability locally ("-" reads stdin)
+self retire <t>/<n>  retire a capability: script + page leave the surface, the
+                     log keeps every event, re-declaring revives it
 ```
 
 Server routes: `/` (instance self-description), `/<projection>`,

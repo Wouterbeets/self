@@ -242,6 +242,95 @@ func TestRehydrateTypeCollision(t *testing.T) {
 	}
 }
 
+// TestRetireRemovesDerivedStateAndSurvivesRehydrate pins the deletion story:
+// events are forever, derived state is a fold. Retiring a projector removes
+// its script and page, delists it from kernel.html, holds through a rehydrate
+// (the tombstone outranks earlier receipts), and a later re-declaration
+// revives it — deletion is a fold rule, not an erasure.
+func TestRetireRemovesDerivedStateAndSurvivesRehydrate(t *testing.T) {
+	t.Setenv("SELF_LLM_STUB", "1")
+	home := t.TempDir()
+	decls := []Event{
+		newEvent("command.declared", json.RawMessage(
+			`{"name":"note","description":"take a note","params":{"text":"string"},"event":{"name":"note.taken","fields":{"title":"string"}}}`)),
+		newEvent("projector.declared", json.RawMessage(
+			`{"name":"board","description":"all notes","consumes":["note.taken"]}`)),
+	}
+	if err := ingest(home, decls); err != nil {
+		t.Fatal(err)
+	}
+
+	proj := filepath.Join(home, "capabilities", "projectors", "board", "run")
+	page := filepath.Join(home, "site", "board.html")
+	cmd := filepath.Join(home, "capabilities", "commands", "note", "run")
+	for _, p := range []string{proj, page, cmd} {
+		if !fileExists(p) {
+			t.Fatalf("setup: %s missing", p)
+		}
+	}
+
+	if err := cmdRetire(home, "projector/board"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{proj, page} {
+		if fileExists(p) {
+			t.Fatalf("retire left %s behind", p)
+		}
+	}
+	// Only the named (type, name) retires; the command is untouched.
+	if !fileExists(cmd) {
+		t.Fatal("retiring the projector removed the command")
+	}
+	kernel, err := os.ReadFile(filepath.Join(home, "site", "kernel.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(kernel), `href="/board"`) {
+		t.Fatal("kernel.html still lists the retired projection")
+	}
+
+	if err := rehydrate(home); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(proj) || fileExists(page) {
+		t.Fatal("rehydrate reinstalled a retired capability")
+	}
+	if !fileExists(cmd) {
+		t.Fatal("rehydrate dropped a live capability")
+	}
+
+	// Revival: a declaration after the tombstone re-enters the fold, and the
+	// fresh receipt outranks the tombstone on the next rehydrate too.
+	if err := ingest(home, []Event{newEvent("projector.declared", json.RawMessage(
+		`{"name":"board","description":"all notes, back again","consumes":["note.taken"]}`))}); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(proj) || !fileExists(page) {
+		t.Fatal("re-declaration did not revive the retired projector")
+	}
+	if err := rehydrate(home); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(proj) {
+		t.Fatal("revival did not survive rehydration")
+	}
+}
+
+// TestRetireRefusesUnknownTargets pins the guardrails: retiring something
+// never declared (or a malformed target) is an error, not a silent tombstone.
+func TestRetireRefusesUnknownTargets(t *testing.T) {
+	home := t.TempDir()
+	if err := cmdRetire(home, "projector/ghost"); err == nil {
+		t.Fatal("retiring an undeclared capability should error")
+	}
+	if err := cmdRetire(home, "gizmo/board"); err == nil {
+		t.Fatal("an unknown capability type should error")
+	}
+	if err := cmdRetire(home, "projector/../escape"); err == nil {
+		t.Fatal("a traversal name should error")
+	}
+}
+
 // shareToFile captures a seed (cmdShare writes to stdout) into a file.
 func shareToFile(t *testing.T, home, name, path string) error {
 	t.Helper()

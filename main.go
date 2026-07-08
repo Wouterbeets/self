@@ -282,6 +282,30 @@ func declareProjector(home string, d projectorDecl) error {
 	return appendEvent(home, &e)
 }
 
+// retirement is the payload of a capability.retired tombstone: which
+// (type, name) leaves the derived surface. Events are never deleted —
+// retiring only changes what the folds install, list, and render, so the
+// whole history stays replayable and a later re-declaration revives the
+// capability.
+type retirement struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+}
+
+func parseRetirement(payload json.RawMessage) (retirement, bool) {
+	var d retirement
+	if json.Unmarshal(payload, &d) != nil {
+		return d, false
+	}
+	if d.Type != "command" && d.Type != "projector" {
+		return d, false
+	}
+	if !validCapabilityName(d.Name) {
+		return d, false
+	}
+	return d, true
+}
+
 // rehydrate rebuilds the instance from the log alone: the latest kernel-signed
 // script.compiled receipt per capability installs verbatim, then every
 // projection re-renders. No LLM, no network — a home is events.jsonl + .secret.
@@ -299,21 +323,32 @@ func rehydrate(home string) error {
 	}
 	// Keyed by (type, name): a command and a projector may share a name, and
 	// the latest receipt of each must install — not the latest of either.
+	// A capability.retired tombstone deletes its key: whatever was compiled
+	// before it stays in the log but out of the fold. A receipt appended
+	// after the tombstone reinstalls — the fold is ordered, so revival is
+	// just declaring again.
 	latest := map[string]receipt{}
+	seen := map[string]bool{}
 	var order []string
+	installed := 0
 	for _, e := range events {
-		if e.Name != "script.compiled" {
-			continue
+		switch e.Name {
+		case "script.compiled":
+			r, ok := verifiedReceipt(secret, e.Payload)
+			if !ok {
+				continue
+			}
+			key := r.Type + "/" + r.Name
+			if !seen[key] {
+				seen[key] = true
+				order = append(order, key)
+			}
+			latest[key] = r
+		case "capability.retired":
+			if d, ok := parseRetirement(e.Payload); ok {
+				delete(latest, d.Type+"/"+d.Name)
+			}
 		}
-		r, ok := verifiedReceipt(secret, e.Payload)
-		if !ok {
-			continue
-		}
-		key := r.Type + "/" + r.Name
-		if _, seen := latest[key]; !seen {
-			order = append(order, key)
-		}
-		latest[key] = r
 	}
 	// capabilities/ and site/ are derived state: rebuild them from nothing so
 	// a rehydrate is also a migration — stale files from an older layout (or
@@ -321,13 +356,17 @@ func rehydrate(home string) error {
 	os.RemoveAll(filepath.Join(home, "capabilities"))
 	os.RemoveAll(filepath.Join(home, "site"))
 	for _, key := range order {
-		r := latest[key]
+		r, live := latest[key]
+		if !live {
+			continue // retired after its last receipt — the tombstone wins
+		}
 		if err := installScript(home, r.Type, r.Name, r.Script); err != nil {
 			return err
 		}
+		installed++
 	}
 	refreshSite(home)
-	fmt.Fprintf(os.Stderr, "self: rehydrated %d capabilit(ies) from the log\n", len(order))
+	fmt.Fprintf(os.Stderr, "self: rehydrated %d capabilit(ies) from the log\n", installed)
 	return nil
 }
 
@@ -381,10 +420,21 @@ func feedText(stdin io.WriteCloser, text string) {
 // declaredCaps replays the log into the currently declared commands and
 // projectors, each in first-declared order. The shared walk behind both the
 // orientation brief and the kernel index — the log is the only source, so both
-// see exactly the same capabilities in the same order.
+// see exactly the same capabilities in the same order. A capability.retired
+// tombstone delists its target; a declaration after the tombstone lists it
+// again, freshly ordered.
 func declaredCaps(events []Event) (commands map[string]commandDecl, cmdOrder []string, projectors map[string]projectorDecl, projOrder []string) {
 	commands = map[string]commandDecl{}
 	projectors = map[string]projectorDecl{}
+	drop := func(order []string, name string) []string {
+		out := order[:0]
+		for _, n := range order {
+			if n != name {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
 	for _, e := range events {
 		switch e.Name {
 		case "command.declared":
@@ -402,6 +452,19 @@ func declaredCaps(events []Event) (commands map[string]commandDecl, cmdOrder []s
 					projOrder = append(projOrder, d.Name)
 				}
 				projectors[d.Name] = d
+			}
+		case "capability.retired":
+			d, ok := parseRetirement(e.Payload)
+			if !ok {
+				continue
+			}
+			switch d.Type {
+			case "command":
+				delete(commands, d.Name)
+				cmdOrder = drop(cmdOrder, d.Name)
+			case "projector":
+				delete(projectors, d.Name)
+				projOrder = drop(projOrder, d.Name)
 			}
 		}
 	}
@@ -547,8 +610,9 @@ func runCommand(home, command string, args []string) ([]Event, error) {
 }
 
 // ingest appends the events a process emitted, compiles any declarations among
-// them (the strange loop), and re-renders every projection. Projections are
-// pure replays, so re-running them all is always correct.
+// them (the strange loop), honors any retirements, and re-renders every
+// projection. Projections are pure replays, so re-running them all is always
+// correct.
 func ingest(home string, evs []Event) error {
 	for i := range evs {
 		if err := appendEvent(home, &evs[i]); err != nil {
@@ -559,8 +623,39 @@ func ingest(home string, evs []Event) error {
 	if n := compileDeclarations(c, home, evs); n > 0 {
 		fmt.Fprintf(os.Stderr, "self: self-improved — %d capabilit(ies) compiled\n", n)
 	}
+	if n := applyRetirements(home, evs); n > 0 {
+		fmt.Fprintf(os.Stderr, "self: retired %d capabilit(ies)\n", n)
+	}
 	refreshSite(home)
 	return nil
+}
+
+// applyRetirements honors capability.retired tombstones on the live path the
+// way rehydrate honors them on replay: the installed script and any rendered
+// page are removed at once, so disk never drifts from the log. The events all
+// stay — a retired capability is one re-declaration away from coming back.
+func applyRetirements(home string, evs []Event) int {
+	n := 0
+	for _, e := range evs {
+		if e.Name != "capability.retired" {
+			continue
+		}
+		d, ok := parseRetirement(e.Payload)
+		if !ok {
+			continue
+		}
+		p, err := scriptPath(home, d.Type, d.Name)
+		if err != nil {
+			continue
+		}
+		os.Remove(p)
+		os.Remove(filepath.Dir(p)) // succeeds only when empty — a nested child's dirs survive
+		if d.Type == "projector" {
+			os.Remove(filepath.Join(home, "site", d.Name+".html"))
+		}
+		n++
+	}
+	return n
 }
 
 type commandDecl struct {
@@ -1133,6 +1228,9 @@ func applyEvents(home string, res *brainResult) {
 		c.reasoning = strings.TrimSpace(res.Response)
 		n := compileDeclarations(c, home, evs)
 		fmt.Fprintf(os.Stderr, "self: grew %d capabilit(ies)\n", n)
+		if r := applyRetirements(home, evs); r > 0 {
+			fmt.Fprintf(os.Stderr, "self: retired %d capabilit(ies)\n", r)
+		}
 		refreshSite(home)
 	}
 }
@@ -1215,7 +1313,7 @@ func renderKernelHTML(home string) {
 	b.WriteString("</table>\n")
 
 	b.WriteString("<h2>the pipe contract</h2>\n<pre>" + esc(pipeContract) + "</pre>\n")
-	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them.</p>\n")
+	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it.</p>\n")
 	b.WriteString("</body></html>\n")
 
 	siteDir := filepath.Join(home, "site")
@@ -2156,6 +2254,39 @@ func cmdRevise(home, target string, words []string) error {
 	return nil
 }
 
+// cmdRetire appends a capability.retired tombstone. Deletion in an
+// event-sourced instance is a fold rule, not an erasure: every declaration and
+// receipt stays in the log, but the script comes off disk, a projector's page
+// leaves site/, and the brief, kernel index, and rehydrate all stop seeing the
+// capability. Re-declaring it later revives it — the fold is ordered.
+func cmdRetire(home, target string) error {
+	typ, name, err := parseCapabilityTarget(target)
+	if err != nil {
+		return err
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		return err
+	}
+	commands, _, projectors, _ := declaredCaps(events)
+	declared := false
+	switch typ {
+	case "command":
+		_, declared = commands[name]
+	case "projector":
+		_, declared = projectors[name]
+	}
+	if !declared {
+		return fmt.Errorf("nothing to retire: %s/%s is not currently declared", typ, name)
+	}
+	payload, _ := json.Marshal(retirement{Type: typ, Name: name})
+	if err := ingest(home, []Event{newEvent("capability.retired", payload)}); err != nil {
+		return err
+	}
+	fmt.Printf("retired %s/%s — the log keeps its history; re-declare to revive\n", typ, name)
+	return nil
+}
+
 func cmdAdopt(home, path string) error {
 	var data []byte
 	var err error
@@ -2533,6 +2664,8 @@ usage: self [command] [args]
                        instance's own compiler re-authors it; foreign bytes never install
   self revise <target> <request>
                        edit an installed local capability with its current script as context
+  self retire <target> retire a capability — its script and page leave the
+                       surface; the log keeps every event, re-declaring revives
   self protocol        print the brain + capability wire protocol
 
 environment:
@@ -2593,6 +2726,11 @@ Brain reply events
   script.authored     answer to SELF_ASK=compile only:
                       {"name":"script.authored","payload":{"script":"#!/bin/sh\n..."}}
 
+  capability.retired  retire a capability: its script and page leave the derived
+                      surface; the log keeps all history and a re-declaration
+                      revives it:
+                      {"name":"capability.retired","payload":{"type":"projector","name":"notes"}}
+
 Compiled capability contract
 
   command script      argv are command args; stdin is the current event log JSONL;
@@ -2633,6 +2771,8 @@ func commandHelp(cmd string) (string, bool) {
 		return "usage: self adopt <seed.jsonl>\n       self adopt - < seed.jsonl\n\nRecord a shared seed and re-generate its capability locally; foreign code never installs.\n", true
 	case "revise":
 		return "usage: self revise command/<name> <change request>\n       self revise projector/<name> <change request>\n\nRecord a local revision request, then recompile the installed capability with its latest declaration and verified script as context.\n", true
+	case "retire":
+		return "usage: self retire command/<name>\n       self retire projector/<name>\n\nAppend a capability.retired tombstone: the installed script (and a projector's page) come off disk, the brief and kernel index stop listing it, and rehydrate honors the tombstone. Events are never deleted — re-declaring the capability revives it.\n", true
 	case "protocol":
 		return protocolText(), true
 	}
@@ -2725,6 +2865,12 @@ func main() {
 			err = fmt.Errorf("usage: self revise command/<name> <change request>")
 		} else {
 			err = cmdRevise(home, args[0], args[1:])
+		}
+	case "retire":
+		if len(args) != 1 {
+			err = fmt.Errorf("usage: self retire command/<name> | projector/<name>")
+		} else {
+			err = cmdRetire(home, args[0])
 		}
 	case "protocol":
 		fmt.Fprint(os.Stdout, protocolText())
