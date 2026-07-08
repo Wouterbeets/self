@@ -925,8 +925,7 @@ func TestStubCommandHonorsDeclaredField(t *testing.T) {
 }
 
 // TestReceiptProvenance pins the by-line: authorship is inside the signature,
-// so it can no more be forged, stripped, or moved than the script itself —
-// while receipts minted before provenance existed still verify.
+// so it can no more be forged, stripped, or moved than the script itself.
 func TestReceiptProvenance(t *testing.T) {
 	home := t.TempDir()
 	secret, err := loadSecret(home)
@@ -944,13 +943,6 @@ func TestReceiptProvenance(t *testing.T) {
 	good.Sig = sign(secret, good.Type, good.Name, good.Script, good.By)
 	if r, ok := verifiedReceipt(secret, mint(good)); !ok || r.By != good.By {
 		t.Fatal("signed provenance did not verify")
-	}
-
-	// legacy receipts (no by) still verify by the old formula
-	legacy := receipt{"command", "note", "#!/bin/sh\necho old", "", ""}
-	legacy.Sig = sign(secret, legacy.Type, legacy.Name, legacy.Script, "")
-	if _, ok := verifiedReceipt(secret, mint(legacy)); !ok {
-		t.Fatal("legacy receipt no longer verifies — old instances would not rehydrate")
 	}
 
 	// authorship cannot be relabeled

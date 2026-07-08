@@ -171,32 +171,21 @@ type receipt struct {
 	// By is the provenance of the bytes: which brain authored this compile —
 	// a model at an endpoint, a stub, a named agent. The signature covers it,
 	// so authorship can no more be forged or relabeled than the script itself.
-	// Receipts minted before provenance existed have no By and verify by the
-	// legacy formula.
 	By  string `json:"by,omitempty"`
 	Sig string `json:"sig"`
 }
 
 // sign binds the receipt's fields so none can be relabeled — one capability's
 // bytes can't install under another's name, and authorship can't be moved.
-// The v2 formula is domain-separated and length-prefixed (no concatenation of
-// adjacent fields can collide); the legacy formula survives so instances minted
-// before provenance still rehydrate. Type names are kernel-vocabulary
-// ("command"/"projector"), so a legacy mac can never alias a v2 one.
+// One formula: domain-separated and length-prefixed, so no concatenation of
+// adjacent fields can collide. Instances signed under older formulas re-earn
+// their receipts by declaring again — experimental means free to break.
 func sign(secret []byte, typ, name, script, by string) string {
 	m := hmac.New(sha256.New, secret)
-	if by == "" { // legacy: receipts from before authorship was recorded
-		m.Write([]byte(typ))
-		m.Write([]byte{0})
-		m.Write([]byte(name))
-		m.Write([]byte{0})
-		m.Write([]byte(script))
-	} else {
-		m.Write([]byte("self.receipt.v2\x00"))
-		for _, field := range []string{typ, name, script, by} {
-			fmt.Fprintf(m, "%d:", len(field))
-			m.Write([]byte(field))
-		}
+	m.Write([]byte("self.receipt.v2\x00"))
+	for _, field := range []string{typ, name, script, by} {
+		fmt.Fprintf(m, "%d:", len(field))
+		m.Write([]byte(field))
 	}
 	return hex.EncodeToString(m.Sum(nil))
 }
