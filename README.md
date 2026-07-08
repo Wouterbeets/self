@@ -56,12 +56,10 @@ make run                            # or: self
 
 Open <http://127.0.0.1:7777>. By default the current working directory is the
 instance home, so a clone is immediately inspectable: `events.jsonl`, `.secret`,
-`capabilities/`, and `site/` appear right beside the code. A new home starts with
-a first-run page: install the bundled settings seed, configure a brain from the
-browser, then grow chat or notes from their visible `intent.md` prompts. The
-settings seed is reviewed code shipped with the kernel so it can run before any
-brain exists; normal seeds still grow through the configured brain and leave
-signed receipts in the log.
+`capabilities/`, and `site/` appear right beside the code. A new home starts
+empty on purpose: name a brain with `SELF_BRAIN`, then grow chat or notes from
+their visible `intent.md` prompts. Every capability grows through the brain and
+leaves a signed receipt in the log — there is no other install path.
 
 If you want one shared instance regardless of where you run `self`, pin it in
 your shell rc:
@@ -284,8 +282,8 @@ scripts then run without a sandbox — see Limits.
 SELF_HOME         instance directory (default: current working directory; set in
                   your shell rc to pin one shared home, e.g. ~/.self)
 SELF_BRAIN        brain executable (e.g. "claude -p"); the kernel spawns it for
-                  every request kind. It overrides saved /settings config.
-                  Without either, set SELF_LLM_STUB=1 for demos/tests.
+                  every request kind. Without one, set SELF_LLM_STUB=1 for
+                  demos/tests.
 SELF_LLM_STUB     "1" → offline stub generation (no brain, no network)
 SELF_BIND         bind address, host or host:port (default 127.0.0.1:7777;
                   set 0.0.0.0 to expose)
@@ -294,10 +292,6 @@ SELF_BRAIN_ID     author string signed into receipts
 SELF_THEME        default page design: grove | micro | paper | spec
                   (default grove); ?theme= or the on-page picker overrides it
 ```
-
-The settings seed can save a `brain.configured` event and a local `.brain-key`;
-if `SELF_BRAIN` is unset, the kernel resolves that into a bundled adapter and
-passes `SELF_LLM_URL`, `SELF_LLM_API_KEY`, and `SELF_LLM_MODEL` to it.
 
 ## Repository layout
 
@@ -312,8 +306,6 @@ passes `SELF_LLM_URL`, `SELF_LLM_API_KEY`, and `SELF_LLM_MODEL` to it.
   adapter that illustrates the contract's wire shape but is incomplete by spec
   (no tool loop of its own). Not part of the kernel.
 - `demo.sh` — the offline, no-brain walkthrough of the loop.
-- `seeds/settings` — the first trusted seed: configure a brain from the browser
-  without putting API keys in the log.
 - `seeds/notes` / `seeds/journal` — small examples: one command, one projection.
 - `seeds/memory` — durable memory for a stateless brain: `remember` writes
   facts to the log; a cold brain orients from `/memory`. The in-log answer to
