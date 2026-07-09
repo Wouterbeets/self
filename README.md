@@ -264,10 +264,18 @@ the capability locally. The local brain re-generates the script — the sender's
 script is passed only as a reference to check against and adapt — and the result
 is installed under a receipt signed with the local key.
 
-So: a hostile slice cannot install anything (there is a test for this);
+So: a hostile slice cannot install foreign *bytes* — the sender's script is
+never signed here, and a forged receipt is inert (there is a test for this);
 provenance survives adaptation (the sender's records stay in the receiver's log);
 and cross-instance authorship is recorded but not cryptographically verifiable,
-because the keys are symmetric and never leave an instance.
+because the keys are symmetric and never leave an instance. What a hostile slice
+*can* carry is hostile **intent**: its declaration text and reference
+implementation become the prompt the local brain compiles from, and the kernel
+signs whatever the brain writes with no review step in between. The bytes are
+re-authored locally, but a crafted declaration can still try to steer what those
+bytes do. The gate is cryptographic; the judgment is the brain's. Read an
+adopted capability before you trust it, and adopt only from a brain you trust —
+the same posture as growing one.
 
 ## Where the brain runs
 
@@ -318,6 +326,10 @@ SELF_THEME        default page design: grove | micro | paper | spec
   generates it mid-conversation.
 - `seeds/renga` — linked verse written by many authors across sessions; a seed
   whose first entry can't be pre-written, so each instance starts blank.
+- `seeds/pulse` — the instance takes its own pulse: a `pulse` projection that
+  reports vital signs from the log alone (size, event-shape histogram, live
+  capabilities, tempo, a plain-language health read) and a `checkpoint` command
+  that drops a labelled marker. Self-awareness of scale, grown from intent.
 
 ## Limits and threat model
 
@@ -337,12 +349,22 @@ These are current properties, stated plainly, not goals to aspire to.
   without a sandbox.** The kernel runs the brain as a plain subprocess (isolating
   its exploration is the brain's own concern) and runs the scripts it installs
   directly. The kernel's guarantee is the signed-receipt gate, not containment.
-- **The log is unbounded.** Every compile stores its script bytes, and every
-  projection replays the whole log (O(history)). Snapshotting is not built in; a
-  snapshot can itself be modeled as a seed and left to the user.
-- **One writer at a time.** Sequence numbers are assigned by reading the log and
-  adding one, without locking. Two writers at once (say a server POST and a CLI
-  `run`) can race. Route writes through a single process.
+- **The log is unbounded, and cost grows with history.** Every compile stores
+  its script bytes, and every read replays the whole log (O(history)) — including
+  every page the server renders, with no snapshot or render cache. In practice a
+  log of ~200k events (~25 MiB) takes a few seconds to rehydrate and a couple of
+  seconds to render *per page view*, so an instance becomes sluggish well before
+  it becomes unusable. Snapshotting is not built in; a snapshot can itself be
+  modeled as a seed and left to the user (`seeds/pulse` grows a projection that
+  makes this load, and the headroom left, visible on a page). The only hard
+  ceiling is memory: the whole log is held in RAM to replay it.
+- **Appends are serialized, but multi-event batches are not atomic.** Each append
+  takes an advisory `flock` over the log, reads the current tail, assigns the next
+  sequence number, and writes under the lock — so concurrent writers never lose an
+  append or collide on a sequence number (`TestConcurrentAppendsDoNotCollide`
+  pins this). The lock is held per *append*, though, not per command: when one
+  command emits several events, another writer's append can interleave between
+  them. Route writes that must stay contiguous through a single process.
 - **The server has no authentication** on `/run`. It binds loopback by default
   for this reason; only expose it with `SELF_BIND` on a network you trust.
 - **Cross-instance identity is asserted, not proven,** because HMAC keys are
