@@ -126,6 +126,7 @@ func stateBrief(home string) string {
 
 	fmt.Fprintf(&b, "## read this first\n\n")
 	fmt.Fprintf(&b, "- `site/kernel.html` — the instance's full self-description (capabilities, the pipe contract, where things live).\n")
+	fmt.Fprintf(&b, "- `site/orchestration_core.txt` — the kernel's own orchestration source: the actual Go code that ingests events, compiles declarations, and retires capabilities. Read it to know exactly how this runtime works.\n")
 	fmt.Fprintf(&b, "- `site/*.html` — rendered state, the same pages a human sees.\n")
 	fmt.Fprintf(&b, "- `events.jsonl` — the whole append-only log (the only truth).\n")
 	fmt.Fprintf(&b, "- `capabilities/` — the compiled scripts currently installed.\n\n")

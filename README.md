@@ -144,7 +144,10 @@ self retire <t>/<n>  retire a capability: script + page leave the surface, the
 ```
 
 Server routes: `/` (instance self-description), `/<projection>`,
-`/run/<command>` (plain HTML forms), `/events` (raw log). The server binds
+`/run/<command>` (plain HTML forms), `/events` (raw log),
+`/orchestration_core` (the kernel's own orchestration source, embedded in the
+binary — the runtime's mental model of itself, always current for the binary
+you are talking to). The server binds
 `127.0.0.1:7777` by default; `SELF_BIND` is the whole bind address, host or
 `host:port` — set `SELF_BIND=0.0.0.0` to expose it (see
 [Limits](#limits-and-threat-model)).
@@ -297,8 +300,12 @@ SELF_THEME        default page design: grove | micro | paper | spec
 
 ## Repository layout
 
-- `main.go` — the entire runtime: log, signed install, pipe orchestration, the
-  brain seam, HTTP server. One file by design.
+- `main.go` and friends — the runtime, split into small focused files:
+  `eventlog.go` (the log), `orchestration_core.go` (the strange loop —
+  embedded in the binary and served at `/orchestration_core` so the runtime
+  carries its own mental model), `brain.go` (the brain seam), `provenance.go`
+  (signed receipts), `rehydrate.go`, `projections.go`, `shell.go`,
+  `server.go`, `commands.go`, `capabilities.go`.
 - `main_test.go` — the pinned invariants: log semantics, offline runtime
   generation, the forged-receipt gate, receipt provenance, share/adopt
   independence, the pluggable brain, and byte-stable reconstruction.

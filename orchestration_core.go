@@ -1,11 +1,46 @@
+// This file is the kernel's mental model of itself, and the kernel carries
+// it: the source below embeds itself into the binary at build time and is
+// materialized to SELF_HOME/site/orchestration_core.txt beside every other
+// surface, so a brain (or a human, or an external agent) reads the ACTUAL
+// code that ingests events and grows capabilities — never a summary that
+// could drift from the code it describes.
+//
+// The whole of self, in one paragraph: an append-only log (eventlog.go) is
+// the only truth; every view is a pure replay of it (projections.go);
+// intelligence enters through one seam, a spawned brain process (brain.go:
+// pipeBrain); scripts install only under receipts signed with the per-home
+// secret (provenance.go), which is why rehydrate.go can rebuild the whole
+// instance from the log alone. This file is the loop those parts turn:
+// what happens when events come back from any process — append them, compile
+// any capability declarations among them, honor retirements, re-render
+// every projection.
+
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+// orchestrationCoreSource is this very file — the strange loop applied to the
+// kernel's own source. Embedded so an installed binary still carries its
+// mental model with no repository checkout anywhere near it.
+//
+//go:embed orchestration_core.go
+var orchestrationCoreSource string
+
+// renderCoreFile materializes the embedded source to
+// SELF_HOME/site/orchestration_core.txt, where the bare-name site route
+// serves it at /orchestration_core and `self show orchestration_core` prints
+// it — the same three surfaces as every other kernel-resident artifact.
+func renderCoreFile(home string) {
+	siteDir := filepath.Join(home, "site")
+	os.MkdirAll(siteDir, 0755)
+	os.WriteFile(filepath.Join(siteDir, "orchestration_core.txt"), []byte(orchestrationCoreSource), 0644)
+}
 
 // ingest appends the events a process emitted, compiles any declarations among
 // them (the strange loop), honors any retirements, and re-renders every

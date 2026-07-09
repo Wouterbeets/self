@@ -75,6 +75,7 @@ func refreshProjections(home string) {
 // least as fresh as the brief that sent it there.
 func refreshSite(home string) {
 	renderKernelHTML(home)
+	renderCoreFile(home)
 	refreshProjections(home)
 	renderBriefFile(home)
 }

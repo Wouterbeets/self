@@ -11,7 +11,12 @@
 // receipts ever install, so `self rehydrate` rebuilds the whole instance from
 // the log alone — an instance is just events.jsonl + .secret.
 //
-// This file is the whole kernel.
+// The kernel is a handful of small files: eventlog.go (the log),
+// orchestration_core.go (the strange loop — embedded in the binary and served
+// back as the runtime's own mental model), brain.go (the one seam to
+// intelligence), provenance.go (signed receipts), rehydrate.go (replay to
+// disk), projections.go and shell.go (the rendered surface), server.go and
+// commands.go (the entry points). This file is just the CLI dispatch.
 package main
 
 import (

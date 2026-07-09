@@ -1321,3 +1321,40 @@ func TestStateBriefIsEmptyAndBounded(t *testing.T) {
 		t.Fatalf("brief contains a seq digest — not pure orientation:\n%s", brief)
 	}
 }
+
+// TestOrchestrationCoreIsCarriedByTheRuntime pins the self-model contract:
+// the kernel's orchestration source is embedded in the binary (no repository
+// checkout, no SELF_GOPATH), materialized to site/orchestration_core.txt
+// whenever the site refreshes, resolvable by the bare-name site route, and
+// pointed to by the orientation brief — so a brain can always read the actual
+// code it is running inside.
+func TestOrchestrationCoreIsCarriedByTheRuntime(t *testing.T) {
+	if !strings.Contains(orchestrationCoreSource, "func ingest(") ||
+		!strings.Contains(orchestrationCoreSource, "func compileDeclarations(") {
+		t.Fatal("embedded source does not look like the orchestration core")
+	}
+
+	home := t.TempDir()
+	refreshSite(home)
+	data, err := os.ReadFile(filepath.Join(home, "site", "orchestration_core.txt"))
+	if err != nil {
+		t.Fatalf("refreshSite did not materialize the core: %s", err)
+	}
+	if string(data) != orchestrationCoreSource {
+		t.Fatal("materialized core differs from the embedded source")
+	}
+
+	// the bare-name route (server + `self show`) resolves it as a site artifact
+	if p, ext := siteFile(home, "orchestration_core"); p == "" || ext != ".txt" {
+		t.Fatalf("siteFile did not resolve orchestration_core (path %q ext %q)", p, ext)
+	}
+
+	// a brain reading the brief is told where to find it
+	e := newEvent("kernel.initialized", json.RawMessage(`{}`))
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	if b := stateBrief(home); !strings.Contains(b, "orchestration_core.txt") {
+		t.Fatalf("brief does not point at the orchestration core:\n%s", b)
+	}
+}

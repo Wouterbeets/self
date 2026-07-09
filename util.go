@@ -33,6 +33,7 @@ func ensureHome(home string) error {
 		return err
 	}
 	renderKernelHTML(home)
+	renderCoreFile(home)
 	renderBriefFile(home)
 	fmt.Fprintf(os.Stderr, "self: new home %s\n", home)
 	return nil
