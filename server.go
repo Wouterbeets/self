@@ -75,6 +75,30 @@ func cmdServe(home string) error {
 		http.ServeFile(w, r, logPath(home))
 	})
 
+	// GET /orchestration_core → the orchestration_core.go source
+	// Allows the brain (or any agent) to understand how the system orchestrates itself
+	mux.HandleFunc("/orchestration_core", func(w http.ResponseWriter, r *http.Request) {
+		source, err := os.ReadFile(filepath.Join(os.Getenv("SELF_GOPATH"), "orchestration_core.go"))
+		if err != nil {
+			// Fallback: try current directory or common locations
+			for _, p := range []string{
+				"orchestration_core.go",
+				filepath.Join(os.Getenv("SELF_HOME"), "orchestration_core.go"),
+			} {
+				if s, err := os.ReadFile(p); err == nil {
+					source = s
+					break
+				}
+			}
+		}
+		if source == nil {
+			http.Error(w, "orchestration_core.go not found", 404)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write(source)
+	})
+
 	// POST /run/<command> → run a capability from the browser. A form's field
 	// values become positional args in document order (names are for humans;
 	// order is the contract); then Post/Redirect/Get back to the page.
@@ -125,9 +149,10 @@ func cmdServe(home string) error {
 		addr += ":7777"
 	}
 	fmt.Fprintf(os.Stderr, "self: serving at http://%s (home %s)\n", addr, home)
-	fmt.Fprintf(os.Stderr, "  /              my identity — capabilities, paths, contract\n")
-	fmt.Fprintf(os.Stderr, "  /<projection>  a projection, re-rendered live\n")
-	fmt.Fprintf(os.Stderr, "  /run/<command> run a capability (plain HTML forms)\n")
-	fmt.Fprintf(os.Stderr, "  /events        the raw event log\n")
+	fmt.Fprintf(os.Stderr, "  /                      my identity — capabilities, paths, contract\n")
+	fmt.Fprintf(os.Stderr, "  /<projection>          a projection, re-rendered live\n")
+	fmt.Fprintf(os.Stderr, "  /run/<command>         run a capability (plain HTML forms)\n")
+	fmt.Fprintf(os.Stderr, "  /events                the raw event log\n")
+	fmt.Fprintf(os.Stderr, "  /orchestration_core    how self orchestrates itself (for agents)\n")
 	return http.ListenAndServe(addr, mux)
 }
