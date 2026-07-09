@@ -1,0 +1,33 @@
+#!/bin/sh
+# examples/brain-grok — Adapter for Grok Build CLI (xAI)
+# Requires: Grok Build installed and authenticated (via XAI_API_KEY or login)
+
+set -e
+
+ASK="${SELF_ASK:-think}"
+PROMPT="${1:-}"
+BRIEF="$(cat)"
+
+case "$ASK" in
+  think|heartbeat|grow)
+    grok -p "$PROMPT" --output-format text <<EOF
+You are acting as a brain for a self instance.
+Instance context:
+$BRIEF
+
+Provide a clear response in the expected self format (text reply + optional declarations as JSONL).
+EOF
+    ;;
+
+  compile)
+    grok -p "
+You are generating a capability script for a self instance.
+Declaration: $PROMPT
+
+Output ONLY a clean, standalone executable script that follows the self pipe contract:
+- Read JSONL events on stdin if needed
+- Emit new events as JSONL on stdout
+- Keep it minimal and correct.
+" --output-format text
+    ;;
+esac
