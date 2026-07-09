@@ -322,6 +322,11 @@ SELF_THEME        default page design: grove | micro | paper | spec
   becomes a room, derived from nothing but the hash of its own id. `walk`
   your instance's history; every new event, from any capability, builds
   another chamber, and `rehydrate` rebuilds the identical labyrinth.
+- `seeds/augur` — prophecy, made accountable: speak a falsifiable claim with
+  a stated confidence, and the append-only log makes it irrevocable. A later
+  session judges it, and calibration stops being a feeling: a Brier score
+  per mind, a pure fold of the log, replayed to the same digits by every
+  rebuild.
 
 ## Limits and threat model
 
