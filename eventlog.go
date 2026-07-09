@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -38,21 +38,28 @@ func readEvents(home string) ([]Event, error) {
 		return nil, err
 	}
 	defer f.Close()
+	// A streaming JSON decoder, not a line scanner: an event line has no fixed
+	// size bound — a script.compiled receipt embeds a whole generated script,
+	// and the brain seam accepts scripts far larger than one log line used to
+	// tolerate. A bufio.Scanner with a fixed max-token cap fails the instant a
+	// single line exceeds it, and because every read path (rehydrate included)
+	// goes through here, one oversized line would brick the whole instance —
+	// including the offline rehydrate that is supposed to be the recovery route.
+	// JSONL is valid concatenated JSON, so the decoder reads it with no cap; the
+	// only ceiling left is available memory.
+	dec := json.NewDecoder(bufio.NewReader(f))
 	var events []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
+	for {
 		var e Event
-		if err := json.Unmarshal([]byte(line), &e); err != nil {
+		if err := dec.Decode(&e); err != nil {
+			if err == io.EOF {
+				break
+			}
 			return nil, fmt.Errorf("parse event: %w", err)
 		}
 		events = append(events, e)
 	}
-	return events, sc.Err()
+	return events, nil
 }
 
 func appendEvent(home string, e *Event) error {

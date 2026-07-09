@@ -162,6 +162,51 @@ func TestForgedReceiptIsInert(t *testing.T) {
 	}
 }
 
+// TestOversizedEventLineStaysReadable pins the recovery guarantee against an
+// event line larger than any fixed read buffer. A script.compiled receipt
+// embeds the whole generated script, and the brain seam accepts scripts far
+// larger than a megabyte; the log must still be readable — and rehydrate, the
+// offline recovery route, must still rebuild — no matter how large one line is.
+// A fixed-cap line scanner would brick every read path on the first oversized
+// line; the streaming decoder has no such cap.
+func TestOversizedEventLineStaysReadable(t *testing.T) {
+	home := t.TempDir()
+	if _, err := loadSecret(home); err != nil {
+		t.Fatal(err)
+	}
+	small := newEvent("kernel.initialized", json.RawMessage(`{}`))
+	if err := appendEvent(home, &small); err != nil {
+		t.Fatal(err)
+	}
+	// A legitimately signed receipt whose script exceeds 2 MiB — well past the
+	// old 1 MiB scanner cap. This is the realistic path: the brain authors a
+	// large script, the kernel signs and stores it, and every later read must
+	// cope with the oversized line it just wrote.
+	bigScript := "#!/bin/sh\n# " + strings.Repeat("x", 2*1024*1024) + "\necho '{\"name\":\"big.ran\",\"payload\":{}}'\n"
+	if err := appendReceipt(home, "command", "big", bigScript, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatalf("oversized line bricked readEvents: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2", len(events))
+	}
+
+	if err := rehydrate(home); err != nil {
+		t.Fatalf("oversized line bricked rehydrate (the recovery route): %v", err)
+	}
+	installed, err := os.ReadFile(filepath.Join(home, "capabilities", "commands", "big", "run"))
+	if err != nil {
+		t.Fatalf("the big capability did not reconstruct: %v", err)
+	}
+	if string(installed) != bigScript {
+		t.Fatalf("reconstructed script differs from the signed one (%d vs %d bytes)", len(installed), len(bigScript))
+	}
+}
+
 // TestRehydrateRoundTrip pins deterministic reconstruction: an instance
 // rebuilt from events.jsonl + .secret alone reproduces its installed scripts
 // and rendered projections byte-for-byte.
