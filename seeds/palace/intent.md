@@ -28,10 +28,14 @@ instances that adopt this seed each get a palace shaped like their own past.
   name, and the inscriptions on its walls — the underlying event's name,
   timestamp, and payload fields, escaped and truncated); one small form per
   door, each POSTing its door word to `/run/walk` via a hidden field with
-  the button naming where it leads; the trail of recent steps; and a map of
-  every room in chronological order, marking which are visited and where
-  the walker stands, with a count of rooms, steps, and how much of the
-  palace has been seen.
+  the button naming where it leads; the trail of recent steps; and the map.
+  The map should be a floor plan — inline SVG, chronology snaking as one
+  corridor of rooms, visited rooms solid, the room underfoot marked,
+  tunnels taken arcing across the plan — with the same rooms as a plain
+  ledger one `<details>` fold away, and a count of rooms, steps, and how
+  much of the palace has been seen. The floor plan obeys the kernel's
+  shape rule: deterministic, scriptless, nothing animated or external,
+  colored only via `currentColor` and opacity so the theme keeps authority.
 
 ## the mechanics (exact — determinism lives or dies on these)
 

@@ -47,7 +47,7 @@ func newLLM(home string) *llm {
 // ─────────────────────────────── the prompts ────────────────────────────────
 
 const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
-projector script: receives all events as JSONL on stdin, writes bare semantic HTML on stdout. Do not emit CSS, JavaScript, inline styles, or external assets: the kernel injects the shared shell at serve time. The kernel persists projector output to SELF_HOME/site/<name>.html.
+projector script: receives all events as JSONL on stdin, writes bare semantic HTML on stdout. Do not emit CSS, JavaScript, inline styles, or external assets: the kernel injects the shared shell at serve time. Inline SVG is welcome where a view wants shape (a map, a timeline, a sparkline) and obeys the same purity: deterministic bytes, no script, no animation, no external references, every text node escaped, and color only through currentColor and opacity so the theme keeps authority over palette. The kernel persists projector output to SELF_HOME/site/<name>.html.
 The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries.`
 
 // brainAnswerContract tells a capable, tool-using brain how to hand its answer
@@ -92,7 +92,7 @@ func compilePrompt(intent, reasoning, exemplarName, exemplarScript, typ, name, d
 DECLARATION (%s %q):
 %s
 
-If the declaration carries an "implementation", it is a reference script: verify it and adapt it here — never copy it blindly. If it also carries a "revision", preserve the existing behavior except for that requested change. Use your own tools freely to write and TEST the script by execution before answering — but do not install it, edit events.jsonl, or run the self CLI: the kernel installs and signs the script from the one line you print, and nothing else. If this is a projector, emit only bare semantic HTML: no CSS, no JavaScript, no inline style attributes, no external assets.
+If the declaration carries an "implementation", it is a reference script: verify it and adapt it here — never copy it blindly. If it also carries a "revision", preserve the existing behavior except for that requested change. Use your own tools freely to write and TEST the script by execution before answering — but do not install it, edit events.jsonl, or run the self CLI: the kernel installs and signs the script from the one line you print, and nothing else. If this is a projector, emit only bare semantic HTML: no CSS, no JavaScript, no inline style attributes, no external assets. Inline SVG is allowed for views that want shape, under the same purity: deterministic, scriptless, no animation, no external references, colored only via currentColor and opacity.
 
 Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 {"name":"script.authored","payload":{"script":"<the full script>"}}`, pipeContract, typ, name, decl)

@@ -44,6 +44,10 @@ describe capabilities that can be built this way:
   stdout. The kernel saves it to `site/<name>.html`. A projection is a pure
   function of the log: same log in, same bytes out. Do not read the clock, the
   network, or anything else — determinism is what makes rebuilds reproducible.
+  Inline SVG is welcome where the view wants shape (a map, a timeline), under
+  the same purity: no script, no animation, no external references, text nodes
+  escaped, and color only via `currentColor` and opacity — the theme, not the
+  projection, owns the palette.
 - **Names may nest.** A projector named `finances/bills` renders to
   `site/finances/bills.html` and serves at `/finances/bills`. Only top-level
   pages appear in the shell's nav; the parent page links down. This is the

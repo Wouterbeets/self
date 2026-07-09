@@ -109,6 +109,11 @@ and writes bare semantic HTML on stdout, saved to `site/<name>.html`. The
 kernel injects the shared shell when serving, so projectors must not emit CSS,
 JavaScript, inline styles, or external assets. A projector must be a pure
 function of the log: rendering twice from the same log yields the same bytes.
+Inline SVG is welcome where a view wants shape — a map, a timeline, a
+sparkline — under the same purity: deterministic bytes, no script, no
+animation, no external references, every text node escaped, and color only
+through `currentColor` and opacity, so the theme keeps authority over palette.
+Shape is data; behavior stays in the shell.
 
 **Runtime code generation.** A `command.declared` or `projector.declared` event
 triggers a compile: the kernel hands the declaration to the brain process, which
