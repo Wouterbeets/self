@@ -318,6 +318,10 @@ SELF_THEME        default page design: grove | micro | paper | spec
   generates it mid-conversation.
 - `seeds/renga` — linked verse written by many authors across sessions; a seed
   whose first entry can't be pre-written, so each instance starts blank.
+- `seeds/palace` — the method of loci, made literal: every event in the log
+  becomes a room, derived from nothing but the hash of its own id. `walk`
+  your instance's history; every new event, from any capability, builds
+  another chamber, and `rehydrate` rebuilds the identical labyrinth.
 
 ## Limits and threat model
 
