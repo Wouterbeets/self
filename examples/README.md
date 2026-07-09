@@ -44,6 +44,18 @@ export SELF_BRAIN="$PWD/examples/brain-stub"
 ./demo.sh          # or: go test ./...
 ```
 
+## `brain-grok`
+
+Thin adapter for the Grok Build CLI (`grok --single`). Modeled directly on `brain-opencode` for transparency: same Python structure, I/O contract (prompt via argv, brief on stdin), subprocess pattern, cwd handling, and "kernel owns the prompts" philosophy. Only the minimal adaptation needed for this CLI's one-shot interface; no extra instructions are added.
+
+```sh
+export SELF_BRAIN="$PWD/examples/brain-grok"
+self think "hello world"
+self grow seeds/notes
+```
+
+Requires Grok Build installed and authenticated. Responses can take 20-60s because each ask is a full agent turn. A capable invocation should also explore `$SELF_HOME` directly with its tools.
+
 ## `brain-openai`
 
 A reference adapter that illustrates the wire shape for any OpenAI-compatible
