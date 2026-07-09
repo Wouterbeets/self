@@ -19,8 +19,6 @@ This runtime is the reference implementation of a larger idea:
   — the protocol: how local, verifiable knowledge moves between minds as
   replayable reasoning rather than bare assertions.
 - **self** (this repo) — the runtime that makes the protocol executable.
-- **[emera](https://github.com/wouterbeets/emera)** — an experimental,
-  non-gradient "brain" intended to plug into this seam.
 
 It is experimental. See [Limits](#limits-and-threat-model) before you rely on it.
 
@@ -183,6 +181,7 @@ fake one; the brain is always a **process** you supply:
 ```sh
 SELF_BRAIN="claude -p"                      # any executable (agent CLI, script, human shim)
 SELF_BRAIN="$PWD/examples/brain-stub"       # or the deterministic offline stub (testing, demos)
+SELF_BRAIN="$PWD/examples/brain-grok"       # or the Grok Build CLI adapter (recommended for Grok users)
 ```
 
 A tool-capable agent CLI needs no adapter: `SELF_BRAIN="claude -p"` is a
@@ -204,6 +203,8 @@ itself, so it cannot do the exploration a real brain needs. Use it to understand
 the seam, then plug a tool-capable agent (`examples/brain-opencode`, or
 `claude -p`) for real capabilities. It used to live inside the kernel; it is a
 reference file now, so the core stays model-free.
+
+The new `examples/brain-grok` adapter wires in Grok Build (the official xAI CLI coding agent). Install Grok Build with `curl -fsSL https://x.ai/cli/install.sh | bash`, then use `SELF_BRAIN="$PWD/examples/brain-grok"` (or simply `grok` if in PATH with proper setup). It leverages Grok 4.5's strengths for exploration and script generation while staying fully compatible with the self contract.
 
 The stub brain is deliberately dumb but complete: `think` returns a fixed
 reply, `grow` declares a minimal command + projection from names in
