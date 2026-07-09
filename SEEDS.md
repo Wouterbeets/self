@@ -56,6 +56,8 @@ describe capabilities that can be built this way:
 
 The three seeds in `seeds/` are the worked examples. Read them. `journal` is the
 smallest; `chat` is a full surface; `renga` shows a seed with no initial content.
+`seeds/personas/` holds ten more, each written for a person who will never open
+a terminal — a feel for what intents look like outside this repo's own walls.
 A good intent tends to cover:
 
 - **Purpose** — what this is for, in a sentence or two.
