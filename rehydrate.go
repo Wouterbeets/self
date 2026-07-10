@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func rehydrate(home string) error {
@@ -55,5 +56,12 @@ func rehydrate(home string) error {
 	}
 	refreshSite(home)
 	fmt.Fprintf(os.Stderr, "self: rehydrated %d capabilit(ies) from the log\n", installed)
+	// Blobs are user content, not derived state: rehydrate rebuilds scripts
+	// and pages from the log alone, but bytes under files/ only ever arrive by
+	// deposit. A missing blob is a backup gap worth naming, never a failure.
+	if missing := danglingFiles(home, events); len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "self: warning — %d stored file(s) the log references are missing from files/ (restore that dir from backup): %s\n",
+			len(missing), strings.Join(missing, ", "))
+	}
 	return nil
 }

@@ -137,12 +137,28 @@ Compiled capability contract
   command script      argv are command args; stdin is the current event log JSONL;
                       stdout is new event JSONL: {"name":"event.name","payload":{...}}
                       the kernel assigns id, seq, and occurred_at, appends the
-                      events, then re-renders all projections.
+                      events, then re-renders the projections that consume them.
 
-  projector script    stdin is the full event log JSONL; stdout is HTML.
-                      The kernel writes it to SELF_HOME/site/<name>.html.
+  projector script    stdin is the events matching the projector's declared
+                      consumes list, as JSONL (an empty list or "*" means every
+                      event); stdout is HTML. The kernel writes it to
+                      SELF_HOME/site/<name>.html.
 
   environment         SELF_HOME is set for every compiled script.
+
+Files
+
+  Bytes never ride in events. A file enters the store three ways — a browser
+  form's file input (multipart POST /run/<command>), an @<path> arg to
+  self run, or a seed's files/ dir at grow time — and each deposit writes the
+  blob to SELF_HOME/files/<sha256> and appends one file.stored event
+  {name, mime, size, sha256}. The command behind the form or run receives the
+  sha256 as the arg's value and resolves SELF_HOME/files/<sha256> itself when
+  it needs the bytes. The server serves any blob at /files/<sha256> (or
+  /files/<sha256>/<name> — the name is presentation, the hash is resolution),
+  so a projector shows a file by linking its hash. Blobs are user content:
+  rehydrate rebuilds scripts and pages from the log, but files/ must be backed
+  up alongside events.jsonl and .secret.
 
 Declarations cross instance boundaries; runnable code does not. A generated
 script installs only after the local kernel signs a script.compiled receipt with
@@ -155,7 +171,7 @@ func commandHelp(cmd string) (string, bool) {
 	case "grow":
 		return "usage: self grow <seed-dir>\n\nRead <seed-dir>/intent.md, ask the brain to declare capabilities, compile them, and install signed receipts.\n", true
 	case "run":
-		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then projections re-render.\n", true
+		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then the projections consuming them re-render. An arg spelled @<path> deposits that file into the store first (files/<sha256> + a file.stored event) and the command receives its sha256.\n", true
 	case "think":
 		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, events} JSON and appends nothing.\n", true
 	case "heartbeat":
@@ -202,4 +218,12 @@ func fileExists(p string) bool {
 func jsonRepr(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// jsonField pulls one top-level string field out of a raw JSON payload.
+func jsonField(payload json.RawMessage, key string) string {
+	var m map[string]any
+	json.Unmarshal(payload, &m)
+	s, _ := m[key].(string)
+	return s
 }

@@ -82,13 +82,14 @@ func renderKernelHTML(home string) {
 		{"compiled commands", filepath.Join(home, "capabilities", "commands")},
 		{"compiled projectors", filepath.Join(home, "capabilities", "projectors")},
 		{"materialized HTML", filepath.Join(home, "site")},
+		{"stored files, content-addressed", filepath.Join(home, "files")},
 	} {
 		b.WriteString("<tr><td>" + esc(row[0]) + "</td><td><code>" + esc(row[1]) + "</code></td></tr>")
 	}
 	b.WriteString("</table>\n")
 
 	b.WriteString("<h2>the pipe contract</h2>\n<pre>" + esc(pipeContract) + "</pre>\n")
-	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it.</p>\n")
+	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it. <code>file.stored</code> records a file entering my content-addressed store (an upload, an <code>@path</code> arg, a seed's <code>files/</code>): the bytes live at <code>files/&lt;sha256&gt;</code> and serve at <code>/files/&lt;sha256&gt;</code>; the log carries only the metadata.</p>\n")
 	b.WriteString("</body></html>\n")
 
 	siteDir := filepath.Join(home, "site")

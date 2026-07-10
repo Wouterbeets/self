@@ -10,12 +10,13 @@ thing you can do. This is the guide.
 
 ## What a seed is
 
-A seed is a directory with one required file and one optional file:
+A seed is a directory with one required file and two optional pieces:
 
 ```
 myseed/
   intent.md     required — prose: what this capability set is for
   seed.jsonl    optional — initial content events, laid down once at grow time
+  files/        optional — files carried by file.stored events in seed.jsonl
 ```
 
 `self grow myseed/` does the rest:
@@ -30,7 +31,12 @@ myseed/
 3. It declares each capability. The kernel compiles each one into a script,
    installs it, and records a signed receipt.
 4. If `seed.jsonl` is present, its events are appended so the new views have
-   something to render from the first moment.
+   something to render from the first moment. A deposit event named
+   `file.stored` with `{"name": "sunset.jpg"}` carries a file: growing copies
+   `files/sunset.jpg` from the seed into the instance's content-addressed
+   store (`SELF_HOME/files/<sha256>`) and completes the event's payload —
+   hash, size, mime — from the bytes themselves. Pin a `sha256` in the event
+   if you want it verified; omit it and it is computed for you.
 
 ## The contract your capabilities must honor
 
@@ -40,10 +46,21 @@ describe capabilities that can be built this way:
 - **A command** receives its arguments as `argv` and the current log as JSONL on
   stdin, and writes new events as JSONL on stdout — one `{name, payload}` object
   per line. The kernel assigns `id`, `seq`, and `occurred_at`.
-- **A projection** receives all events as JSONL on stdin and writes HTML on
-  stdout. The kernel saves it to `site/<name>.html`. A projection is a pure
-  function of the log: same log in, same bytes out. Do not read the clock, the
-  network, or anything else — determinism is what makes rebuilds reproducible.
+- **A projection** receives the events matching its declared `consumes` list as
+  JSONL on stdin (an empty list — or `"*"` — means every event) and writes HTML
+  on stdout. The kernel saves it to `site/<name>.html`. Declare `consumes`
+  precisely: the script then never filters, and the kernel re-runs it only when
+  events it consumes arrive. A projection is a pure function of its events:
+  same events in, same bytes out. Do not read the clock, the network, or
+  anything else — determinism is what makes rebuilds reproducible.
+- **Files are hashes in events, bytes in the store.** A form's file input (or
+  an `@<path>` CLI arg) deposits the file at `SELF_HOME/files/<sha256>`,
+  appends a `file.stored` event `{name, mime, size, sha256}`, and hands the
+  command the sha256 as that argument's value. A command that needs the bytes
+  reads `SELF_HOME/files/<sha256>`; a projection that shows the file links
+  `/files/<sha256>/<name>` (an `<img>`, a download link) and never inlines
+  bytes into HTML. Describe file-taking commands accordingly: the argument is
+  a file, the event field carries its hash.
 - **Names may nest.** A projector named `finances/bills` renders to
   `site/finances/bills.html` and serves at `/finances/bills`. Only top-level
   pages appear in the shell's nav; the parent page links down. This is the

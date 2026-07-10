@@ -47,7 +47,8 @@ func newLLM(home string) *llm {
 // ─────────────────────────────── the prompts ────────────────────────────────
 
 const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
-projector script: receives all events as JSONL on stdin, writes bare semantic HTML on stdout. Do not emit CSS, JavaScript, inline styles, or external assets: the kernel injects the shared shell at serve time. The kernel persists projector output to SELF_HOME/site/<name>.html.
+projector script: receives the events matching its declared consumes list as JSONL on stdin (an empty list or "*" means every event — declare consumes precisely and the script never needs to filter), writes bare semantic HTML on stdout. Do not emit CSS, JavaScript, inline styles, or external assets: the kernel injects the shared shell at serve time. The kernel persists projector output to SELF_HOME/site/<name>.html.
+files: bytes never ride in events. A stored file lives at SELF_HOME/files/<sha256>, recorded by a small file.stored event {name, mime, size, sha256}. A command takes a file argument as its sha256 (the kernel stores browser uploads and @path CLI args before the command runs, so the file.stored metadata is already on its stdin) and reads SELF_HOME/files/<sha256> itself when it needs the bytes. A projector shows a stored file by linking its hash — <img src="/files/<sha256>/<human-name>"> or <a href=…> — the kernel serves it; never inline file bytes into HTML, never copy blobs.
 The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries.`
 
 // brainAnswerContract tells a capable, tool-using brain how to hand its answer

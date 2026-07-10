@@ -152,7 +152,26 @@ func stateBrief(home string) string {
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "%d events in the log. Explore for the rest.\n", len(events))
+	if n := storedFileCount(home); n > 0 {
+		fmt.Fprintf(&b, "%d file(s) in the content-addressed store (`files/<sha256>`, each recorded by a `file.stored` event, served at `/files/<sha256>`).\n", n)
+	}
 	return b.String()
+}
+
+// storedFileCount counts the blobs on disk — what actually exists, orphans
+// included, which is what a brain exploring the store will find.
+func storedFileCount(home string) int {
+	entries, err := os.ReadDir(blobsDir(home))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() && validFileHash(e.Name()) {
+			n++
+		}
+	}
+	return n
 }
 
 // renderBriefFile writes the orientation brief to SELF_HOME/site/brief.md,

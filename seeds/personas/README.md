@@ -1,6 +1,6 @@
 # personas — what mass adoption feels like
 
-Ten people who will never open a terminal, never read `events.jsonl`, and
+Eleven people who will never open a terminal, never read `events.jsonl`, and
 never care that a projection is a pure function of the log. Each directory
 is a seed written from one of their lives: what they would actually want,
 named in their words, honoring the kernel's contract underneath.
@@ -27,6 +27,7 @@ that grows it; the person only ever sees a page with a form on it.
 | `pantry` | Ray, 58, runs the Tuesday food bank | donations, shifts, households served |
 | `gigbook` | Theo, 27, drummer in a wedding covers band | gigs, fees, the repertoire |
 | `flare` | June, 45, lives with rheumatoid arthritis | symptoms, meds, a summary for the doctor |
+| `contactsheet` | Ana, 29, film on weekends, weddings for friends | the photos she keeps, tagged her way |
 
 Try one:
 

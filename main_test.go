@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestLogAppendRead(t *testing.T) {
@@ -1319,5 +1321,421 @@ func TestStateBriefIsEmptyAndBounded(t *testing.T) {
 	// the brain is pointed at events.jsonl if it needs the raw material.
 	if strings.Contains(brief, "seq ") {
 		t.Fatalf("brief contains a seq digest — not pure orientation:\n%s", brief)
+	}
+}
+
+// ────────────────────── files: bytes in the store, hashes in the log ─────────
+
+// TestBlobStoreContentAddressing pins the store's one idea: the address IS the
+// content. Same bytes, same path; storing twice is a no-op; the log never
+// carries the bytes.
+func TestBlobStoreContentAddressing(t *testing.T) {
+	home := t.TempDir()
+	hash, size, head, err := storeBlob(home, strings.NewReader("golden hour"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != int64(len("golden hour")) || string(head) != "golden hour" {
+		t.Fatalf("size %d head %q", size, head)
+	}
+	if !validFileHash(hash) {
+		t.Fatalf("hash %q is not 64 lowercase hex", hash)
+	}
+	data, err := os.ReadFile(blobPath(home, hash))
+	if err != nil || string(data) != "golden hour" {
+		t.Fatalf("blob on disk = %q, %v", data, err)
+	}
+	again, _, _, err := storeBlob(home, strings.NewReader("golden hour"))
+	if err != nil || again != hash {
+		t.Fatalf("re-store: %q vs %q, %v", again, hash, err)
+	}
+	entries, _ := os.ReadDir(blobsDir(home))
+	if len(entries) != 1 {
+		t.Fatalf("dedup failed: %d entries in the store", len(entries))
+	}
+}
+
+// TestStoreFileEventCarriesMetadata pins the file.stored payload: everything a
+// command or projector needs to speak about the file — name, mime, size,
+// sha256 — and nothing binary.
+func TestStoreFileEventCarriesMetadata(t *testing.T) {
+	home := t.TempDir()
+	hash, e, err := storeFile(home, "notes/Sunset.JPG", strings.NewReader("\xff\xd8\xffjpegish"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Name != "file.stored" {
+		t.Fatalf("event name %q", e.Name)
+	}
+	var p struct {
+		Name, Mime, Sha256 string
+		Size               int64
+	}
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Name != "Sunset.JPG" { // base name only — a deposit never carries paths
+		t.Fatalf("name %q", p.Name)
+	}
+	if p.Sha256 != hash || p.Size != int64(len("\xff\xd8\xffjpegish")) {
+		t.Fatalf("payload %+v vs hash %s", p, hash)
+	}
+	if !strings.HasPrefix(p.Mime, "image/jpeg") {
+		t.Fatalf("mime %q — extension should name the type", p.Mime)
+	}
+}
+
+// TestLastSeqScansOnlyTheTail pins O(1) append: the next sequence number comes
+// from the log's last line alone — including when that line is bigger than one
+// backward-scan chunk — with no sidecar state to drift.
+func TestLastSeqScansOnlyTheTail(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i < 3; i++ {
+		e := newEvent("tick", json.RawMessage(`{}`))
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	big := newEvent("blob.of.text", json.RawMessage(`{"note":"`+strings.Repeat("x", 100_000)+`"}`))
+	if err := appendEvent(home, &big); err != nil {
+		t.Fatal(err)
+	}
+	after := newEvent("tick", json.RawMessage(`{}`))
+	if err := appendEvent(home, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Seq != 5 {
+		t.Fatalf("seq after oversized line = %d, want 5", after.Seq)
+	}
+	if n, err := lastSeq(home); n != 5 || err != nil {
+		t.Fatalf("lastSeq = %d, %v", n, err)
+	}
+}
+
+// TestProjectorStdinIsFilteredByConsumes pins the operative half of a
+// projector declaration: the kernel feeds a projector ONLY the events its
+// consumes list names, so the script never filters. Empty consumes still
+// means the whole log.
+func TestProjectorStdinIsFilteredByConsumes(t *testing.T) {
+	home := t.TempDir()
+	decl := newEvent("projector.declared", json.RawMessage(`{"name":"picky","description":"d","consumes":["a.happened"]}`))
+	if err := appendEvent(home, &decl); err != nil {
+		t.Fatal(err)
+	}
+	echo := "#!/bin/sh\necho '<pre>'\ncat\necho '</pre>'\n"
+	if err := installTrustedScript(home, "projector", "picky", echo, "test"); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{`{"name":"a.happened","payload":{"t":"AAA"}}`, `{"name":"b.happened","payload":{"t":"BBB"}}`} {
+		var e Event
+		json.Unmarshal([]byte(raw), &e)
+		fresh := newEvent(e.Name, e.Payload)
+		if err := appendEvent(home, &fresh); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := runProjection(home, "picky")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), "AAA") || strings.Contains(string(page), "BBB") {
+		t.Fatalf("filtered stdin is wrong:\n%s", page)
+	}
+
+	wide := newEvent("projector.declared", json.RawMessage(`{"name":"wide","description":"d","consumes":[]}`))
+	if err := appendEvent(home, &wide); err != nil {
+		t.Fatal(err)
+	}
+	if err := installTrustedScript(home, "projector", "wide", echo, "test"); err != nil {
+		t.Fatal(err)
+	}
+	page, err = runProjection(home, "wide")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), "AAA") || !strings.Contains(string(page), "BBB") {
+		t.Fatalf("empty consumes must still feed everything:\n%s", page)
+	}
+}
+
+// TestSelectiveRefreshSkipsUnconsumingProjections pins the write-path win: an
+// ingest re-runs only the projections consuming what just landed, and marks
+// the skipped ones verified-fresh so the server keeps serving their
+// materialized pages. The projector subprocess is the cost; not paying it for
+// unrelated events is what keeps a many-page instance fast at 100k events.
+func TestSelectiveRefreshSkipsUnconsumingProjections(t *testing.T) {
+	home := t.TempDir()
+	for name, consumes := range map[string]string{"xview": `["x.happened"]`, "yview": `["y.happened"]`} {
+		decl := newEvent("projector.declared", json.RawMessage(`{"name":"`+name+`","description":"d","consumes":`+consumes+`}`))
+		if err := appendEvent(home, &decl); err != nil {
+			t.Fatal(err)
+		}
+		// A run-counter script: impure on purpose, so the test can SEE re-runs.
+		script := "#!/bin/sh\necho run >> \"$SELF_HOME/.runs-" + name + "\"\necho '<p>ok</p>'\n"
+		if err := installTrustedScript(home, "projector", name, script, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs := func(name string) int {
+		data, _ := os.ReadFile(filepath.Join(home, ".runs-"+name))
+		return strings.Count(string(data), "run")
+	}
+	refreshSite(home) // materialize both once
+	if runs("xview") != 1 || runs("yview") != 1 {
+		t.Fatalf("full refresh runs = %d/%d, want 1/1", runs("xview"), runs("yview"))
+	}
+	if err := ingest(home, []Event{newEvent("x.happened", json.RawMessage(`{}`))}); err != nil {
+		t.Fatal(err)
+	}
+	if runs("xview") != 2 {
+		t.Fatalf("xview runs = %d, want 2 — its event arrived", runs("xview"))
+	}
+	if runs("yview") != 1 {
+		t.Fatalf("yview runs = %d, want 1 — nothing it consumes arrived", runs("yview"))
+	}
+	// the skipped page was verified fresh: the server may serve it as-is.
+	if freshSitePage(home, "yview") == nil {
+		t.Fatal("skipped projection is not marked fresh — every GET would replay it")
+	}
+	// a capability event refreshes everything: the projector set changed.
+	if err := ingest(home, []Event{newEvent("capability.retired", json.RawMessage(`{"type":"command","name":"nonexistent"}`))}); err != nil {
+		t.Fatal(err)
+	}
+	if runs("yview") != 2 {
+		t.Fatalf("yview runs = %d, want 2 — capability lifecycle refreshes all", runs("yview"))
+	}
+}
+
+// TestFreshSitePageTracksTheLog pins the freshness rule: a materialized page
+// serves only when its mtime postdates the log's last append; anything else
+// falls back to a live replay. Pure filesystem, no cursor files — a forgotten
+// refresh degrades to a slower page, never a stale one.
+func TestFreshSitePageTracksTheLog(t *testing.T) {
+	home := t.TempDir()
+	decl := newEvent("projector.declared", json.RawMessage(`{"name":"board","description":"d","consumes":["note.taken"]}`))
+	if err := appendEvent(home, &decl); err != nil {
+		t.Fatal(err)
+	}
+	if err := installTrustedScript(home, "projector", "board", "#!/bin/sh\necho '<p>ok</p>'\n", "test"); err != nil {
+		t.Fatal(err)
+	}
+	refreshSite(home)
+	if freshSitePage(home, "board") == nil {
+		t.Fatal("just-rendered page must be fresh")
+	}
+	// an append the renderer never saw — e.g. a heartbeat outside ingest
+	hb := newEvent("self.heartbeat", json.RawMessage(`{}`))
+	if err := appendEvent(home, &hb); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	os.Chtimes(logPath(home), future, future) // make the ordering unambiguous on any filesystem
+	if freshSitePage(home, "board") != nil {
+		t.Fatal("page older than the log must not serve as fresh")
+	}
+}
+
+// TestServerServesStoredFiles pins the read side of the store: any blob by
+// hash, immutable so it caches forever, wearing an optional human name that is
+// presentation only — the hash alone resolves.
+func TestServerServesStoredFiles(t *testing.T) {
+	home := t.TempDir()
+	if _, err := loadSecret(home); err != nil {
+		t.Fatal(err)
+	}
+	hash, _, _, err := storeBlob(home, strings.NewReader("hello, bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := serveMux(home)
+	get := func(path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		return w
+	}
+	w := get("/files/" + hash)
+	if w.Code != 200 || w.Body.String() != "hello, bytes" {
+		t.Fatalf("GET blob: %d %q", w.Code, w.Body.String())
+	}
+	if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Fatalf("content-addressed response is not immutable: %q", cc)
+	}
+	w = get("/files/" + hash + "/notes.txt")
+	if w.Code != 200 || !strings.Contains(w.Header().Get("Content-Disposition"), `filename="notes.txt"`) {
+		t.Fatalf("named blob: %d disposition %q", w.Code, w.Header().Get("Content-Disposition"))
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("the human name should hint the mime: %q", ct)
+	}
+	for _, bad := range []string{"/files/deadbeef", "/files/" + strings.Repeat("z", 64)} {
+		if w := get(bad); w.Code != 404 {
+			t.Fatalf("GET %s = %d, want 404", bad, w.Code)
+		}
+	}
+	// a traversal path never reaches the handler (the mux canonicalizes it
+	// away), and even one that did would fail the 64-hex gate.
+	if w := get("/files/../../etc/passwd"); w.Code == 200 {
+		t.Fatalf("GET traversal path = %d with body %q", w.Code, w.Body.String())
+	}
+	if w := get("/files/" + strings.Repeat("0", 64)); w.Code != 404 {
+		t.Fatalf("well-formed but absent hash = %d, want 404", w.Code)
+	}
+}
+
+// TestMultipartUploadFeedsCommandTheHash drives the browser road end to end:
+// a form with a file input posts multipart, the kernel stores the blob,
+// appends file.stored BEFORE the command runs, and the command receives the
+// sha256 as that field's positional arg.
+func TestMultipartUploadFeedsCommandTheHash(t *testing.T) {
+	home := t.TempDir()
+	if _, err := loadSecret(home); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '{\"name\":\"photo.kept\",\"payload\":{\"args\":\"%s\"}}\\n' \"$*\"\n"
+	if err := installTrustedScript(home, "command", "keep", script, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("photo", "sunset.jpg")
+	fw.Write([]byte("jpeg bytes"))
+	mw.WriteField("caption", "golden hour")
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/run/keep", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	serveMux(home).ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("POST multipart = %d: %s", w.Code, w.Body.String())
+	}
+
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storedSeq, keptSeq int
+	var hash string
+	for _, e := range events {
+		switch e.Name {
+		case "file.stored":
+			storedSeq, hash = e.Seq, jsonField(e.Payload, "sha256")
+		case "photo.kept":
+			keptSeq = e.Seq
+			args := jsonField(e.Payload, "args")
+			if !strings.Contains(args, "golden hour") {
+				t.Fatalf("text field lost: %q", args)
+			}
+			if hash == "" || !strings.Contains(args, hash) {
+				t.Fatalf("command did not receive the hash: args %q, hash %q", args, hash)
+			}
+		}
+	}
+	if storedSeq == 0 || keptSeq == 0 || storedSeq >= keptSeq {
+		t.Fatalf("file.stored (seq %d) must precede the command's event (seq %d)", storedSeq, keptSeq)
+	}
+	if data, err := os.ReadFile(blobPath(home, hash)); err != nil || string(data) != "jpeg bytes" {
+		t.Fatalf("blob = %q, %v", data, err)
+	}
+}
+
+// TestRunFileArgsDeposit pins CLI parity with the browser form: an @<path>
+// arg deposits the file and the command receives its sha256; a missing path is
+// an error, and ordinary args pass through untouched.
+func TestRunFileArgsDeposit(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(t.TempDir(), "model.stl")
+	if err := os.WriteFile(src, []byte("solid dragon"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	resolved, deposits, err := storeFileArgs(home, []string{"@" + src, "two", "@"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deposits) != 1 {
+		t.Fatalf("deposits = %d, want 1", len(deposits))
+	}
+	if resolved[1] != "two" || resolved[2] != "@" {
+		t.Fatalf("plain args must pass through: %v", resolved)
+	}
+	if !validFileHash(resolved[0]) || !fileExists(blobPath(home, resolved[0])) {
+		t.Fatalf("file arg did not resolve to a stored hash: %v", resolved)
+	}
+	if name := jsonField(deposits[0].Payload, "name"); name != "model.stl" {
+		t.Fatalf("deposit name %q", name)
+	}
+	if _, _, err := storeFileArgs(home, []string{"@/no/such/file"}); err == nil {
+		t.Fatal("a missing @path must be an error, not a silent literal")
+	}
+}
+
+// TestGrowDepositsSeedFiles pins the seed evolution: a seed may carry files/
+// next to seed.jsonl; growing copies the bytes into the store and completes
+// the file.stored payload from the bytes themselves — and a pinned sha256 that
+// does not match the bytes refuses to grow.
+func TestGrowDepositsSeedFiles(t *testing.T) {
+	t.Setenv("SELF_BRAIN", stubBrain(t))
+	home := t.TempDir()
+	seed := t.TempDir()
+	intent := "Keep photos. `self run keep <photo>` appends `photo.kept`; `/wall` shows them."
+	os.WriteFile(filepath.Join(seed, "intent.md"), []byte(intent), 0644)
+	os.MkdirAll(filepath.Join(seed, "files"), 0755)
+	os.WriteFile(filepath.Join(seed, "files", "pic.txt"), []byte("a sample photo"), 0644)
+	os.WriteFile(filepath.Join(seed, "seed.jsonl"),
+		[]byte(`{"name":"file.stored","payload":{"name":"pic.txt"}}`+"\n"), 0644)
+
+	if err := cmdGrow(home, seed); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := readEvents(home)
+	var p struct {
+		Name, Mime, Sha256 string
+		Size               int64
+	}
+	for _, e := range events {
+		if e.Name == "file.stored" {
+			json.Unmarshal(e.Payload, &p)
+		}
+	}
+	if p.Sha256 == "" || p.Size != int64(len("a sample photo")) || p.Name != "pic.txt" {
+		t.Fatalf("deposit payload incomplete: %+v", p)
+	}
+	if data, err := os.ReadFile(blobPath(home, p.Sha256)); err != nil || string(data) != "a sample photo" {
+		t.Fatalf("seed file not in the store: %q, %v", data, err)
+	}
+
+	// a pinned hash is verified, never trusted
+	os.WriteFile(filepath.Join(seed, "seed.jsonl"),
+		[]byte(`{"name":"file.stored","payload":{"name":"pic.txt","sha256":"`+strings.Repeat("0", 64)+`"}}`+"\n"), 0644)
+	if err := cmdGrow(t.TempDir(), seed); err == nil || !strings.Contains(err.Error(), "hashes to") {
+		t.Fatalf("mismatched pinned sha256 must refuse to grow, got %v", err)
+	}
+}
+
+// TestDanglingFilesAreNamed pins the honest narrowing of the rehydrate
+// guarantee: the log rebuilds capabilities and pages, never user bytes. A
+// file.stored whose blob is gone is named in a warning, not silently fine and
+// not a failure.
+func TestDanglingFilesAreNamed(t *testing.T) {
+	home := t.TempDir()
+	hash, e, err := storeFile(home, "kept.txt", strings.NewReader("still here"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	gone := newEvent("file.stored", json.RawMessage(`{"name":"lost.jpg","sha256":"`+strings.Repeat("a", 64)+`"}`))
+	if err := appendEvent(home, &gone); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := readEvents(home)
+	missing := danglingFiles(home, events)
+	if len(missing) != 1 || !strings.Contains(missing[0], "lost.jpg") {
+		t.Fatalf("missing = %v, want just lost.jpg", missing)
+	}
+	if strings.Contains(strings.Join(missing, " "), hash[:12]) {
+		t.Fatal("a present blob was reported missing")
 	}
 }

@@ -92,6 +92,7 @@ directory) with two files of real state:
 ```
 events.jsonl    the append-only log — the only state
 .secret         a per-instance signing key (32 random bytes, hex; mode 0600)
+files/          stored files, content-addressed by sha256 — user content
 ```
 
 Everything else (`capabilities/`, `site/`) is derived and can be rebuilt.
@@ -102,13 +103,26 @@ never changed or deleted; a deletion is expressed as a later event.
 **Commands.** A command is an executable script. It receives its arguments as
 `argv` and the current log as JSONL on stdin, and writes new events as JSONL on
 stdout (`{name, payload}` per line; the kernel fills in the rest). The emitted
-events are appended and all projections re-render.
+events are appended and the projections that consume them re-render.
 
-**Projections.** A projection is an executable that reads all events on stdin
-and writes bare semantic HTML on stdout, saved to `site/<name>.html`. The
-kernel injects the shared shell when serving, so projectors must not emit CSS,
-JavaScript, inline styles, or external assets. A projector must be a pure
-function of the log: rendering twice from the same log yields the same bytes.
+**Projections.** A projection is an executable that reads the events matching
+its declared `consumes` list on stdin (an empty list — or `"*"` — means every
+event) and writes bare semantic HTML on stdout, saved to `site/<name>.html`.
+The kernel injects the shared shell when serving, so projectors must not emit
+CSS, JavaScript, inline styles, or external assets. A projector must be a pure
+function of its events: rendering twice from the same log yields the same
+bytes. The kernel re-runs a projection only when the log grows events it
+consumes; a page whose events did not change is served as already materialized.
+
+**Files.** Bytes never ride in events. A file enters the store through a
+browser form's file input, an `@<path>` arg to `self run`, or a seed's
+`files/` dir; each deposit writes the blob to `files/<sha256>` and appends one
+small `file.stored` event `{name, mime, size, sha256}`. Commands receive file
+args as hashes and read `SELF_HOME/files/<sha256>` themselves; projections
+link `/files/<sha256>/<name>` and the server serves the blob (immutable, so
+browsers cache it forever). Same hash, same file — dedup is free. Blobs are
+user content: `rehydrate` rebuilds scripts and pages from the log alone, and
+`files/` must be backed up alongside `events.jsonl` and `.secret`.
 
 **Runtime code generation.** A `command.declared` or `projector.declared` event
 triggers a compile: the kernel hands the declaration to the brain process, which
@@ -142,7 +156,9 @@ self retire <t>/<n>  retire a capability: script + page leave the surface, the
 ```
 
 Server routes: `/` (instance self-description), `/<projection>`,
-`/run/<command>` (plain HTML forms), `/events` (raw log). The server binds
+`/run/<command>` (plain HTML forms; `multipart/form-data` file inputs are
+stored and passed as hashes), `/files/<sha256>[/<name>]` (stored files),
+`/events` (raw log). The server binds
 `127.0.0.1:7777` by default; `SELF_BIND` is the whole bind address, host or
 `host:port` — set `SELF_BIND=0.0.0.0` to expose it (see
 [Limits](#limits-and-threat-model)).

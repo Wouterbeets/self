@@ -8,9 +8,10 @@ import (
 )
 
 // ingest appends the events a process emitted, compiles any declarations among
-// them (the strange loop), honors any retirements, and re-renders every
-// projection. Projections are pure replays, so re-running them all is always
-// correct.
+// them (the strange loop), honors any retirements, and re-renders the
+// projections that consume what just landed. Projections are pure replays, so
+// re-running any of them is always correct; skipping one whose consumed events
+// did not grow is the same page for free.
 func ingest(home string, evs []Event) error {
 	for i := range evs {
 		if err := appendEvent(home, &evs[i]); err != nil {
@@ -24,7 +25,7 @@ func ingest(home string, evs []Event) error {
 	if n := applyRetirements(home, evs); n > 0 {
 		fmt.Fprintf(os.Stderr, "self: retired %d capabilit(ies)\n", n)
 	}
-	refreshSite(home)
+	refreshSiteAfter(home, evs)
 	return nil
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -64,14 +65,11 @@ func appendEvent(home string, e *Event) error {
 		return err
 	}
 	defer unlock()
-	prior, err := readEvents(home)
+	last, err := lastSeq(home)
 	if err != nil {
 		return err
 	}
-	e.Seq = 1
-	if len(prior) > 0 {
-		e.Seq = prior[len(prior)-1].Seq + 1
-	}
+	e.Seq = last + 1
 	line, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -83,6 +81,55 @@ func appendEvent(home string, e *Event) error {
 	defer f.Close()
 	_, err = fmt.Fprintln(f, string(line))
 	return err
+}
+
+// lastSeq reads the highest sequence number by parsing only the log's LAST
+// line, scanning backwards in chunks until a newline bounds it. Appends stay
+// O(1) as the log grows — no full replay, and no sidecar .seq file that could
+// drift from the log: the log itself is the only record of where it ends.
+// Call under the log lock.
+func lastSeq(home string) (int, error) {
+	f, err := os.Open(logPath(home))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	off := st.Size()
+	var tail []byte
+	for off > 0 {
+		n := int64(64 * 1024)
+		if n > off {
+			n = off
+		}
+		off -= n
+		chunk := make([]byte, n)
+		if _, err := f.ReadAt(chunk, off); err != nil {
+			return 0, err
+		}
+		tail = append(chunk, tail...)
+		line := bytes.TrimRight(tail, " \t\r\n")
+		if len(line) == 0 {
+			continue // trailing blank lines; keep scanning back
+		}
+		if i := bytes.LastIndexByte(line, '\n'); i >= 0 {
+			line = line[i+1:]
+		} else if off > 0 {
+			continue // the line starts in an earlier chunk
+		}
+		var e Event
+		if err := json.Unmarshal(bytes.TrimSpace(line), &e); err != nil {
+			return 0, fmt.Errorf("parse last event: %w", err)
+		}
+		return e.Seq, nil
+	}
+	return 0, nil
 }
 
 func lockLog(home string) (func(), error) {

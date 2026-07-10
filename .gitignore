@@ -15,3 +15,8 @@ events.jsonl
 
 # python bytecode (brain adapters are scripts)
 __pycache__/
+
+# an instance's USER CONTENT — the content-addressed file store. Like
+# events.jsonl, it is live instance state, never repo content (root-anchored:
+# seeds legitimately carry their own files/ subdirs).
+/files/

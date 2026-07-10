@@ -147,9 +147,16 @@ func cmdGrow(home, ref string) error {
 	grown := compileDeclarations(c, home, declEvents)
 
 	// The initial deposit: content laid once, so the surface has
-	// something to render from the first moment.
+	// something to render from the first moment. A file.stored deposit also
+	// carries its bytes — from the seed's files/ dir into the blob store.
 	for _, e := range deposit {
-		fresh := newEvent(e.Name, e.Payload)
+		payload := e.Payload
+		if e.Name == "file.stored" {
+			if payload, err = depositSeedFile(home, ref, e.Payload); err != nil {
+				return err
+			}
+		}
+		fresh := newEvent(e.Name, payload)
 		if err := appendEvent(home, &fresh); err != nil {
 			return err
 		}
@@ -253,6 +260,21 @@ func heartbeatContext(events []Event) string {
 }
 
 func cmdRun(home, command string, args []string) error {
+	if p, _ := scriptPath(home, "command", command); !fileExists(p) {
+		return fmt.Errorf("command %q not found (grow a seed that declares it)", command)
+	}
+	args, deposits, err := storeFileArgs(home, args)
+	if err != nil {
+		return err
+	}
+	if len(deposits) > 0 {
+		if err := ingest(home, deposits); err != nil {
+			return err
+		}
+		for _, e := range deposits {
+			fmt.Printf("stored %s as files/%s\n", jsonField(e.Payload, "name"), jsonField(e.Payload, "sha256"))
+		}
+	}
 	evs, err := runCommand(home, command, args)
 	if err != nil {
 		return err

@@ -10,13 +10,35 @@ import (
 	"strings"
 )
 
-// cmdServe serves the instance: every page re-rendered against current events,
+// cmdServe serves the instance: every page provably current against the log,
 // every affordance a plain HTML form. The injected shell layers feel on top —
 // pending turns, live re-replay, theme — but carries no state and grants no
 // power: strip it and every page still works, because the forms do.
 func cmdServe(home string) error {
 	refreshSite(home)
+	mux := serveMux(home)
 
+	// Loopback by default: the write path (/run/<command>) has no auth, and
+	// local-first means local. SELF_BIND is the whole bind address, host or
+	// host:port (default 127.0.0.1:7777) — 0.0.0.0 opens it to the network
+	// for anyone who knowingly wants that.
+	addr := envOr("SELF_BIND", "127.0.0.1")
+	if !strings.Contains(addr, ":") {
+		addr += ":7777"
+	}
+	fmt.Fprintf(os.Stderr, "self: serving at http://%s (home %s)\n", addr, home)
+	fmt.Fprintf(os.Stderr, "  /                      my identity — capabilities, paths, contract\n")
+	fmt.Fprintf(os.Stderr, "  /<projection>          a projection, current against the log\n")
+	fmt.Fprintf(os.Stderr, "  /run/<command>         run a capability (plain HTML forms; file inputs upload)\n")
+	fmt.Fprintf(os.Stderr, "  /files/<sha256>        a stored file, content-addressed\n")
+	fmt.Fprintf(os.Stderr, "  /events                the raw event log\n")
+	fmt.Fprintf(os.Stderr, "  /orchestration_core    how self orchestrates itself (for agents)\n")
+	return http.ListenAndServe(addr, mux)
+}
+
+// serveMux is the instance's whole HTTP surface, separable from the listener
+// so tests exercise the real routes.
+func serveMux(home string) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// GET /            → kernel.html (my identity), or a welcome projection if grown
@@ -47,11 +69,19 @@ func cmdServe(home string) error {
 			return
 		}
 		if p, _ := scriptPath(home, "projector", name); fileExists(p) {
+			// The materialized page serves when it is provably current (its
+			// mtime postdates the log's last append); otherwise re-replay live
+			// and write the result through, so the disk heals to fresh.
+			if page := freshSitePage(home, name); page != nil {
+				writePage(w, r, home, name, page)
+				return
+			}
 			page, err := runProjection(home, name)
 			if err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
+			writeSitePage(home, name, page)
 			writePage(w, r, home, name, page)
 			return
 		}
@@ -73,6 +103,48 @@ func cmdServe(home string) error {
 	// GET /events → the raw log
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, logPath(home))
+	})
+
+	// GET /files/<sha256>            → a stored blob, content-addressed
+	// GET /files/<sha256>/<name>     → the same blob wearing a human name —
+	// the name is presentation (download filename, mime hint, readable URL),
+	// never resolution; the hash alone decides which bytes serve. Content
+	// addressing makes the response immutable, so it caches forever.
+	mux.HandleFunc("/files/", func(w http.ResponseWriter, r *http.Request) {
+		hash, display, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/files/"), "/")
+		if !validFileHash(hash) {
+			http.Error(w, "not found — /files/<sha256>[/<name>]", 404)
+			return
+		}
+		f, err := os.Open(blobPath(home, hash))
+		if err != nil {
+			http.Error(w, "no such file in the store", 404)
+			return
+		}
+		defer f.Close()
+		st, err := f.Stat()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		head := make([]byte, 512)
+		n, _ := io.ReadFull(f, head)
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", blobMime(display, head[:n]))
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		if display != "" {
+			safe := strings.Map(func(c rune) rune {
+				if c < 32 || c == '"' || c == '\\' {
+					return '_'
+				}
+				return c
+			}, display)
+			w.Header().Set("Content-Disposition", `inline; filename="`+safe+`"`)
+		}
+		http.ServeContent(w, r, "", st.ModTime(), f)
 	})
 
 	// GET /orchestration_core → the orchestration_core.go source
@@ -112,9 +184,55 @@ func cmdServe(home string) error {
 			http.Error(w, "not found", 404)
 			return
 		}
-		body, _ := io.ReadAll(r.Body)
+		if p, _ := scriptPath(home, "command", command); !fileExists(p) {
+			http.Error(w, fmt.Sprintf("command %q not found", command), 404)
+			return
+		}
 		var args []string
-		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+		ct := r.Header.Get("Content-Type")
+		switch {
+		case strings.HasPrefix(ct, "multipart/form-data"):
+			// A form with a file input. Parts stay positional args in document
+			// order; each file part is stored content-addressed and its arg is
+			// the sha256 — the command resolves SELF_HOME/files/<sha256> itself.
+			// The file.stored events ingest BEFORE the command runs, so its
+			// stdin log already names, sizes, and types what it was handed.
+			mr, err := r.MultipartReader()
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			var deposits []Event
+			for {
+				part, err := mr.NextPart()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					http.Error(w, err.Error(), 400)
+					return
+				}
+				if fn := part.FileName(); fn != "" {
+					hash, e, err := storeFile(home, fn, part)
+					if err != nil {
+						http.Error(w, err.Error(), 500)
+						return
+					}
+					deposits = append(deposits, e)
+					args = append(args, hash)
+				} else {
+					data, _ := io.ReadAll(part)
+					args = append(args, string(data))
+				}
+			}
+			if len(deposits) > 0 {
+				if err := ingest(home, deposits); err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+			}
+		case strings.HasPrefix(ct, "application/x-www-form-urlencoded"):
+			body, _ := io.ReadAll(r.Body)
 			for _, pair := range strings.Split(string(body), "&") {
 				if pair == "" {
 					continue
@@ -126,8 +244,11 @@ func cmdServe(home string) error {
 				}
 				args = append(args, v)
 			}
-		} else if msg := strings.TrimSpace(string(body)); msg != "" {
-			args = []string{msg}
+		default:
+			body, _ := io.ReadAll(r.Body)
+			if msg := strings.TrimSpace(string(body)); msg != "" {
+				args = []string{msg}
+			}
 		}
 		if _, err := runCommand(home, command, args); err != nil {
 			http.Error(w, err.Error(), 500)
@@ -140,19 +261,5 @@ func cmdServe(home string) error {
 		fmt.Fprint(w, "ok")
 	})
 
-	// Loopback by default: the write path (/run/<command>) has no auth, and
-	// local-first means local. SELF_BIND is the whole bind address, host or
-	// host:port (default 127.0.0.1:7777) — 0.0.0.0 opens it to the network
-	// for anyone who knowingly wants that.
-	addr := envOr("SELF_BIND", "127.0.0.1")
-	if !strings.Contains(addr, ":") {
-		addr += ":7777"
-	}
-	fmt.Fprintf(os.Stderr, "self: serving at http://%s (home %s)\n", addr, home)
-	fmt.Fprintf(os.Stderr, "  /                      my identity — capabilities, paths, contract\n")
-	fmt.Fprintf(os.Stderr, "  /<projection>          a projection, re-rendered live\n")
-	fmt.Fprintf(os.Stderr, "  /run/<command>         run a capability (plain HTML forms)\n")
-	fmt.Fprintf(os.Stderr, "  /events                the raw event log\n")
-	fmt.Fprintf(os.Stderr, "  /orchestration_core    how self orchestrates itself (for agents)\n")
-	return http.ListenAndServe(addr, mux)
+	return mux
 }
