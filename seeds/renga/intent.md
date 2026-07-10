@@ -18,7 +18,7 @@ instance that grows this seed starts a scroll of its own.
 
 - `self run verse <words…>` appends one `verse.linked` event. Argv is
   joined into a single verse; ` / ` marks line breaks. The poet's name is
-  read from `SELF_BRAIN_ID` — the same identity that signs grown scripts —
+  read from `SELF_MIND_ID` — the same identity that signs grown scripts —
   so the poem knows its poets the way the kernel knows its authors.
 - `/renga` renders the poem: stanzas oldest first, each with its lines, its
   poet, and when it was linked. The page teaches the game to whoever reads
@@ -34,7 +34,7 @@ instance that grows this seed starts a scroll of its own.
   hokku — a long verse (5-7-5) that should carry the season it is written
   in — and says the turn is open.
 - Empty argv degrades to a named silence ("a verse of silence — a turn
-  taken, nothing said"), never a crash; a missing `SELF_BRAIN_ID` becomes
+  taken, nothing said"), never a crash; a missing `SELF_MIND_ID` becomes
   "an unnamed mind". Verse text is escaped on render; a hostile verse is
   inert.
 - No seed.jsonl, deliberately: the first verse of a renga carries the

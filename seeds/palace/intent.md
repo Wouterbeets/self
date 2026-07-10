@@ -23,7 +23,7 @@ instances that adopt this seed each get a palace shaped like their own past.
   **seq of the destination room, resolved at walk time** and replayed
   verbatim forever after. A door that does not exist in the current room
   appends `palace.stumbled` `{door, by}` instead — never an error. `by` is
-  read from `SELF_BRAIN_ID`, defaulting to "an unnamed walker".
+  read from `SELF_MIND_ID`, defaulting to "an unnamed walker".
 - `/palace` renders, in order: the current room (its number, its derived
   name, and the inscriptions on its walls — the underlying event's name,
   timestamp, and payload fields, escaped and truncated); one small form per

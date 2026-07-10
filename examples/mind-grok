@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""brain-grok - a SELF_BRAIN adapter backed by `grok --single`.
+"""mind-grok - a SELF_MIND adapter backed by `grok --single`.
 
-The self kernel expects a brain process to print self event JSONL (or prose).
+The self kernel expects a mind process to print self event JSONL (or prose).
 This adapter forwards the kernel's prompt (which contains all protocol
-instructions via brainAnswerContract, thinkPrompt etc.) and brief to the
+instructions via mindAnswerContract, thinkPrompt etc.) and brief to the
 Grok CLI. The kernel prompt remains the single source of protocol instructions.
 
 Usage:
 
-    export SELF_BRAIN="$PWD/examples/brain-grok"
+    export SELF_MIND="$PWD/examples/mind-grok"
     export SELF_GROK_MODEL=...  # optional
     self grow seeds/chat
 """
@@ -25,14 +25,14 @@ def grok_command(prompt):
     model = os.environ.get("SELF_GROK_MODEL", "")
     if model:
         cmd.extend(["--model", model])
-    # Flags for reliable non-interactive single-turn use as a brain.
+    # Flags for reliable non-interactive single-turn use as a mind.
     # --always-approve lets the agent use tools without interactive prompts.
     cmd.extend(["--output-format", "plain", "--always-approve", "--no-alt-screen"])
     return cmd
 
 
 def run_grok(message, brief):
-    # Mirror brain-opencode as closely as possible:
+    # Mirror mind-opencode as closely as possible:
     # - kernel prompt (message) is the primary ask passed to the tool
     # - brief (from our stdin) is delivered to the tool
     #

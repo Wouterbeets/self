@@ -3,7 +3,7 @@
 // One append-only event log (events.jsonl) is the only truth. Every view is a
 // pure replay of it, rendered as HTML that you and your agent read identically.
 // Capabilities are standalone scripts the kernel pipes events through, and code
-// is never shipped — a brain process (SELF_BRAIN) authors every script from a
+// is never shipped — a mind process (SELF_MIND) authors every script from a
 // declaration, for this receiver; the kernel holds no model of its own. A
 // running capability can declare new capabilities and the
 // kernel compiles them on the spot (the strange loop). Every compile is logged

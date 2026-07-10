@@ -52,10 +52,10 @@ a signed receipt.
 usage: self [command] [args]
 
   self                 rehydrate the instance from the log, then serve it (the default)
-  self grow <seed>     grow a seed's intent into capabilities (needs a brain)
+  self grow <seed>     grow a seed's intent into capabilities (needs a mind)
   self run <cmd> ...   run a capability — append events, refresh projections
-  self think "..."     ask the brain; returns {response, events} JSON
-  self heartbeat       one self-improvement cycle (the brain reflects & grows)
+  self think "..."     ask the mind; returns {response, events} JSON
+  self heartbeat       one self-improvement cycle (the mind reflects & grows)
   self show <name>     render a projection to stdout
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
   self share <cap>     print a seed to stdout — the capability's declarations and
@@ -70,27 +70,27 @@ usage: self [command] [args]
                        edit an installed local capability with its current script as context
   self retire <target> retire a capability — its script and page leave the
                        surface; the log keeps every event, re-declaring revives
-  self protocol        print the brain + capability wire protocol
+  self protocol        print the mind + capability wire protocol
 
 environment:
   SELF_HOME         the instance — a dir holding events.jsonl + .secret
                     (default: current working directory; set it in your shell rc
                     to pin a shared instance, e.g. export SELF_HOME=~/.self)
 
-  plug a brain (one seam; think, heartbeat, grow, and compile all pass through it):
-  SELF_BRAIN        a tool-capable executable, e.g. "claude -p" or
-                    examples/brain-opencode — it gets the ask's kind in
+  plug a mind (one seam; think, heartbeat, grow, and compile all pass through it):
+  SELF_MIND        a tool-capable executable, e.g. "claude -p" or
+                    examples/mind-opencode — it gets the ask's kind in
                     $SELF_ASK, the prompt as its last argument, and an
                     orientation brief on stdin; it answers in event JSONL,
-                    prose tolerated. The brain must inspect SELF_HOME itself
+                    prose tolerated. The mind must inspect SELF_HOME itself
                     (site/*.html, events.jsonl, capabilities/) with its own
-                    tools. See examples/README.md. examples/brain-stub is a
-                    deterministic offline brain for demos/tests;
-                    examples/brain-openai is a reference adapter that
+                    tools. See examples/README.md. examples/mind-stub is a
+                    deterministic offline mind for demos/tests;
+                    examples/mind-openai is a reference adapter that
                     illustrates the wire shape but is incomplete by spec
                     (no tool loop).
-  SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
-                    (default: the brain executable)
+  SELF_MIND_ID     provenance by-line signed into script.compiled receipts
+                    (default: the mind executable)
   SELF_THEME        default page design when serving: grove | micro | paper |
                     spec (default grove); a ?theme= link or the on-page picker
                     overrides it per viewer. Presentation only — never logged.
@@ -100,24 +100,24 @@ environment:
 func protocolText() string {
 	return `self protocol — the wire contracts
 
-Brain process contract
+Mind process contract
 
   The same seam handles think, heartbeat, grow, and compile.
 
-  SELF_BRAIN   executable to spawn, optionally with args. A brain MUST be able to
+  SELF_MIND   executable to spawn, optionally with args. A mind MUST be able to
               inspect files under SELF_HOME (site/*.html, events.jsonl,
               capabilities/) with its own tools — a plain stdin/stdout adapter
-              with no file access cannot do the job. Coding-agent brains
+              with no file access cannot do the job. Coding-agent minds
               (opencode run, claude -p) already have such tools.
   SELF_ASK     request kind: think | heartbeat | grow | compile
   argv         the prompt is passed as the last argument
-  stdin        an orientation brief (plain text): where the brain is, what
-               capabilities exist, and where to look for the rest. The brain is
+  stdin        an orientation brief (plain text): where the mind is, what
+               capabilities exist, and where to look for the rest. The mind is
                expected to explore SELF_HOME itself for depth — this is a
                wake-up card, not a context dump.
   stdout       event JSONL; non-JSON lines are tolerated as prose reply text
 
-Brain reply events
+Mind reply events
 
   chat.message        prose reply for think:
                       {"name":"chat.message","payload":{"role":"assistant","content":"..."}}
@@ -188,28 +188,28 @@ Effects
 
 Declarations cross instance boundaries; runnable code does not. A generated
 script installs only after the local kernel signs a script.compiled receipt with
-SELF_HOME/.secret and the current SELF_BRAIN_ID.
+SELF_HOME/.secret and the current SELF_MIND_ID.
 `
 }
 
 func commandHelp(cmd string) (string, bool) {
 	switch cmd {
 	case "grow":
-		return "usage: self grow <seed-dir>\n\nRead <seed-dir>/intent.md, ask the brain to declare capabilities, compile them, and install signed receipts.\n", true
+		return "usage: self grow <seed-dir>\n\nRead <seed-dir>/intent.md, ask the mind to declare capabilities, compile them, and install signed receipts.\n", true
 	case "run":
 		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then the projections consuming them re-render. An arg spelled @<path> deposits that file into the store first (files/<sha256> + a file.stored event) and the command receives its sha256.\n", true
 	case "think":
-		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, events} JSON and appends nothing.\n", true
+		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the mind through the SELF_MIND protocol. Prints {response, events} JSON and appends nothing.\n", true
 	case "heartbeat":
-		return "usage: self heartbeat\n\nAppend a heartbeat event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
+		return "usage: self heartbeat\n\nAppend a heartbeat event, ask the mind for one small improvement, and compile any declarations it emits.\n", true
 	case "show":
 		return "usage: self show <projection>\n\nRender a projection to stdout by replaying the current log. Use 'kernel' for the instance index.\n", true
 	case "rehydrate":
-		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a brain.\n", true
+		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a mind.\n", true
 	case "share":
 		return "usage: self share <capability>\n\nPrint the capability's declarations and receipts as a JSONL seed.\n", true
 	case "export":
-		return "usage: self export <event-prefix> <dir> [<new-prefix>]\n\nWrite a content seed from this log: every event whose name starts with <event-prefix>, the file.stored metadata and blobs those events reference, and an intent.md stub to edit. Dates are preserved; an optional <new-prefix> renames the events on the way out (the sender-side remap for when two instances share a vocabulary), recorded in the seed's provenance. The receiver grows the directory and their brain decides how the records merge. The export is remembered as a seed.exported event.\n", true
+		return "usage: self export <event-prefix> <dir> [<new-prefix>]\n\nWrite a content seed from this log: every event whose name starts with <event-prefix>, the file.stored metadata and blobs those events reference, and an intent.md stub to edit. Dates are preserved; an optional <new-prefix> renames the events on the way out (the sender-side remap for when two instances share a vocabulary), recorded in the seed's provenance. The receiver grows the directory and their mind decides how the records merge. The export is remembered as a seed.exported event.\n", true
 	case "adopt":
 		return "usage: self adopt <seed.jsonl>\n       self adopt - < seed.jsonl\n\nRecord a shared seed and re-generate its capability locally; foreign code never installs.\n", true
 	case "revise":

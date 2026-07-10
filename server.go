@@ -88,7 +88,7 @@ func serveMux(home string) *http.ServeMux {
 		}
 		// Any on-disk site artifact by bare name: brief, kernel, etc.
 		// .html goes through the shell; .md and .txt are served verbatim as
-		// text/plain. A brain (or human, or external agent) can reach any
+		// text/plain. A mind (or human, or external agent) can reach any
 		// kernel-resident surface by name.
 		if p, ext := siteFile(home, name); p != "" {
 			if name == "brief" {
@@ -159,7 +159,7 @@ func serveMux(home string) *http.ServeMux {
 	})
 
 	// GET /orchestration_core → the orchestration_core.go source
-	// Allows the brain (or any agent) to understand how the system orchestrates itself
+	// Allows the mind (or any agent) to understand how the system orchestrates itself
 	mux.HandleFunc("/orchestration_core", func(w http.ResponseWriter, r *http.Request) {
 		source, err := os.ReadFile(filepath.Join(os.Getenv("SELF_GOPATH"), "orchestration_core.go"))
 		if err != nil {

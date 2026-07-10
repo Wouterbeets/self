@@ -25,7 +25,7 @@ from the one gauge that sits on private land he'd rather not advertise
 (the seed is plain text; curation is deletion), and writes the intent
 stub properly — what the readings are, which instruments, what he thinks
 they mean, what he is not sure of. Amara plants it, reads his intent, and
-grows this seed. The merge is hers: his events on her machine, her brain
+grows this seed. The merge is hers: his events on her machine, her mind
 writing the projection, her key signing it.
 
 ## surface

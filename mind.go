@@ -11,8 +11,8 @@ import (
 )
 
 // The kernel holds no model — not even a fake one. Every ask — think,
-// heartbeat, grow, and each compile — is handed to a brain PROCESS
-// (SELF_BRAIN, e.g. "claude -p"; examples/brain-stub is a deterministic
+// heartbeat, grow, and each compile — is handed to a mind PROCESS
+// (SELF_MIND, e.g. "claude -p"; examples/mind-stub is a deterministic
 // offline one for demos and tests), which explores and writes scripts with
 // its own tools; the kernel only installs and signs what comes back. The llm
 // value carries just enough to route a compile: the home it runs against,
@@ -27,17 +27,20 @@ type llm struct {
 	reasoning string
 }
 
-// identity names the brain for provenance: who authored the bytes a receipt
-// carries. SELF_BRAIN_ID lets an agent name itself; otherwise the brain
+// identity names the mind for provenance: who authored the bytes a receipt
+// carries. SELF_MIND_ID lets an agent name itself; otherwise the mind
 // executable is the honest mechanical answer.
 func (c *llm) identity() string {
-	if id := strings.TrimSpace(os.Getenv("SELF_BRAIN_ID")); id != "" {
+	if id := strings.TrimSpace(os.Getenv("SELF_MIND_ID")); id != "" {
 		return id
 	}
-	if exe := brainExe(); exe != "" {
+	if id := strings.TrimSpace(os.Getenv("SELF_BRAIN_ID")); id != "" { // the former name still answers
+		return id
+	}
+	if exe := mindExe(); exe != "" {
 		return exe
 	}
-	return "brain"
+	return "mind"
 }
 
 func newLLM(home string) *llm {
@@ -53,36 +56,36 @@ effects: a command MAY act on the world — spawn the OS's own tools (lp to prin
 timers: a timer.declared event {name, every, command, args} makes the serving kernel run an installed command on a cadence — every is a Go duration ("24h", "168h"), "off" disables, the latest declaration per name wins, and each firing appends timer.fired before the command runs. Declare a timer when the intent asks for anything scheduled or recurring; the bound command decides what is actually due by reading the log, so a timer plus a log-reading command is a follow-up machine.
 The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries (the OS's installed tools are fair game for effects).`
 
-// brainAnswerContract tells a capable, tool-using brain how to hand its answer
-// back. A coding-agent brain (claude -p) will otherwise try to persist its work
+// mindAnswerContract tells a capable, tool-using mind how to hand its answer
+// back. A coding-agent mind (claude -p) will otherwise try to persist its work
 // itself — write events.jsonl, run `self`, install a script — and that effort is
 // wasted and denied: the kernel reads ONLY stdout and appends what it finds
 // there, under its own signature. It also emits Markdown by habit; the pipe
 // tolerates fences, but one clean JSON object per line is what actually wants
 // ingesting. Woven into every ask that expects events (grow, heartbeat, compile).
-const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To persist ordinary state, print the domain event that records it. To add capabilities, print command.declared / projector.declared events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing; ordinary domain events are not capability growth.
+const mindAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To persist ordinary state, print the domain event that records it. To add capabilities, print command.declared / projector.declared events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing; ordinary domain events are not capability growth.
 
 THIS REPLY IS FINAL — you run once per ask and are never re-invoked. Explore first, THEN answer completely: never end on a plan or a promise ("I'll explore and then respond") — whatever you have not said when you exit was never said.
 
-WHAT YOU ARE GIVEN — your stdin is an orientation brief: where you are, what capabilities exist, where to look for the rest. That is all. To do your job you must EXPLORE the instance surface with your tools: read ` + "`SELF_HOME/site/kernel.html`" + ` for the full self-description, ` + "`SELF_HOME/site/*.html`" + ` for the rendered state a human sees, ` + "`SELF_HOME/events.jsonl`" + ` for the raw log, ` + "`SELF_HOME/capabilities/`" + ` for the compiled scripts. The kernel holds no internal state you cannot see on disk. A brain without tools to read those files cannot do this job.`
+WHAT YOU ARE GIVEN — your stdin is an orientation brief: where you are, what capabilities exist, where to look for the rest. That is all. To do your job you must EXPLORE the instance surface with your tools: read ` + "`SELF_HOME/site/kernel.html`" + ` for the full self-description, ` + "`SELF_HOME/site/*.html`" + ` for the rendered state a human sees, ` + "`SELF_HOME/events.jsonl`" + ` for the raw log, ` + "`SELF_HOME/capabilities/`" + ` for the compiled scripts. The kernel holds no internal state you cannot see on disk. A mind without tools to read those files cannot do this job.`
 
 // ────────────────────────────── the compiler ────────────────────────────────
 
 func (c *llm) compileCommand(d commandDecl) (string, error) {
-	return compileViaBrain(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d))
+	return compileViaMind(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d))
 }
 
 func (c *llm) compileProjector(d projectorDecl) (string, error) {
-	return compileViaBrain(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d))
+	return compileViaMind(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d))
 }
 
-// compileViaBrain hands a compile ask to the plugged brain through the same
+// compileViaMind hands a compile ask to the plugged mind through the same
 // seam as every other ask. The declaration (its optional implementation
 // reference included) rides in the prompt; an orientation brief rides on stdin
-// (the brain inspects SELF_HOME itself for depth — site/*.html, events.jsonl,
+// (the mind inspects SELF_HOME itself for depth — site/*.html, events.jsonl,
 // capabilities/); the answer is one script.authored event. During a grow the
 // whole intent rides along too, so each piece is compiled toward the same
-// product. The kernel still installs and signs — a brain authors bytes, only
+// product. The kernel still installs and signs — a mind authors bytes, only
 // the kernel makes them real.
 // compilePrompt is the text of a compile ask: author one script honoring the
 // pipe contract, test it with your own tools, and hand back exactly one
@@ -114,7 +117,7 @@ Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 // exemplarScript returns the source of the most recently compiled capability
 // of the same type (excluding the one being compiled, so a recompile is never
 // anchored to its own broken past). Read from the log's verified receipts —
-// traced compiles show a brain spends its first minute rediscovering the
+// traced compiles show a mind spends its first minute rediscovering the
 // instance's idiom from disk; handing it one exemplar removes that phase.
 func exemplarScript(home, typ, name string) (exName, exScript string) {
 	events, err := readEvents(home)
@@ -140,57 +143,62 @@ func exemplarScript(home, typ, name string) (exName, exScript string) {
 	return exName, exScript
 }
 
-func compileViaBrain(home, intent, reasoning, typ, name, decl string) (string, error) {
+func compileViaMind(home, intent, reasoning, typ, name, decl string) (string, error) {
 	exName, exScript := exemplarScript(home, typ, name)
-	res, err := pipeBrain(home, "compile", compilePrompt(intent, reasoning, exName, exScript, typ, name, decl))
+	res, err := pipeMind(home, "compile", compilePrompt(intent, reasoning, exName, exScript, typ, name, decl))
 	if err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(res.Script) == "" {
-		return "", fmt.Errorf("the brain answered a compile ask without a script.authored event")
+		return "", fmt.Errorf("the mind answered a compile ask without a script.authored event")
 	}
 	return res.Script, nil
 }
 
-// ──────────────────────────────── the brain ─────────────────────────────────
+// ──────────────────────────────── the mind ─────────────────────────────────
 
-// brainExe is the plugged brain, if any: SELF_BRAIN is the one way a brain is
-// named, and a process behind it honors the one brain contract.
-func brainExe() string {
+// mindExe is the plugged mind, if any: SELF_MIND is the one way a mind is
+// named, and a process behind it honors the one mind contract. SELF_BRAIN is
+// the variable's former name and still answers, so a rename never strands an
+// instance mid-life; SELF_MIND wins when both are set.
+func mindExe() string {
+	if v := strings.TrimSpace(os.Getenv("SELF_MIND")); v != "" {
+		return v
+	}
 	return strings.TrimSpace(os.Getenv("SELF_BRAIN"))
 }
 
-func brainEnv(home, kind string) []string {
+func mindEnv(home, kind string) []string {
 	return append(os.Environ(), "SELF_HOME="+home, "SELF_ASK="+kind)
 }
 
-// pipeBrain is the ONE seam through which the kernel asks for intelligence —
-// think, heartbeat, grow, and compile all pass here. It spawns $SELF_BRAIN with
+// pipeMind is the ONE seam through which the kernel asks for intelligence —
+// think, heartbeat, grow, and compile all pass here. It spawns $SELF_MIND with
 // the ask's kind in $SELF_ASK, the prompt as the last argument, and a freshly
 // written orientation brief from SELF_HOME/site/brief.md on stdin: where the
-// brain is, what capabilities exist, and where to look for the rest — nothing
+// mind is, what capabilities exist, and where to look for the rest — nothing
 // more. The brief is on disk, like every other piece of state, so a tool-using
-// brain can read it itself (cat SELF_HOME/site/brief.md) and the kernel has no
-// internal state a brain cannot see. The brief is recomputed before every ask
-// so a brain never reads stale orientation — the kernel writes the file, then
-// reads back exactly what it wrote, and feeds that. A real brain MUST inspect
+// mind can read it itself (cat SELF_HOME/site/brief.md) and the kernel has no
+// internal state a mind cannot see. The brief is recomputed before every ask
+// so a mind never reads stale orientation — the kernel writes the file, then
+// reads back exactly what it wrote, and feeds that. A real mind MUST inspect
 // SELF_HOME itself (site/*.html, events.jsonl, capabilities/) with its own
 // tools: the brief is a wake-up card, not a context dump, and a process without
-// that exploration ability is not a complete brain. The kernel's seam is still
-// a pipe; the tool loop is the brain's concern, never the kernel's. The parse
-// of the brain's stdout is tolerant on purpose: JSON lines with a name are
+// that exploration ability is not a complete mind. The kernel's seam is still
+// a pipe; the tool loop is the mind's concern, never the kernel's. The parse
+// of the mind's stdout is tolerant on purpose: JSON lines with a name are
 // events — script.authored answers a compile, chat.message carries the reply,
 // anything else is a returned event — and bare prose joins the reply. With no
-// brain plugged in, the ask fails with a hint.
-func pipeBrain(home, kind, prompt string) (*brainResult, error) {
-	exe := brainExe()
+// mind plugged in, the ask fails with a hint.
+func pipeMind(home, kind, prompt string) (*mindResult, error) {
+	exe := mindExe()
 	if exe == "" {
-		return nil, fmt.Errorf("no brain is plugged in — %s", brainHint)
+		return nil, fmt.Errorf("no mind is plugged in — %s", mindHint)
 	}
 	brief := freshBrief(home)
-	bin, argv := brainCommand(exe, prompt)
+	bin, argv := mindCommand(exe, prompt)
 	cmd := exec.Command(bin, argv...)
-	cmd.Env = brainEnv(home, kind)
+	cmd.Env = mindEnv(home, kind)
 	cmd.Dir = home
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -202,10 +210,10 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start brain %s: %w (%s)", filepath.Base(bin), err, brainHint)
+		return nil, fmt.Errorf("start mind %s: %w (%s)", filepath.Base(bin), err, mindHint)
 	}
 	feedText(stdin, brief)
-	res := &brainResult{Events: []map[string]any{}}
+	res := &mindResult{Events: []map[string]any{}}
 	var prose []string
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1024*1024), 8*1024*1024)
@@ -242,28 +250,28 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 		}
 	}
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("brain %s exited: %w", filepath.Base(bin), err)
+		return nil, fmt.Errorf("mind %s exited: %w", filepath.Base(bin), err)
 	}
 	res.Response = strings.Join(prose, "\n")
 	return res, nil
 }
 
-const brainHint = `plug a brain: SELF_BRAIN=<a tool-capable executable, e.g. "claude -p" or examples/brain-opencode>; the brain must inspect SELF_HOME itself. See examples/README.md. For offline demos/tests, examples/brain-stub is a deterministic no-LLM brain.`
+const mindHint = `plug a mind: SELF_MIND=<a tool-capable executable, e.g. "claude -p" or examples/mind-opencode>; the mind must inspect SELF_HOME itself. See examples/README.md. For offline demos/tests, examples/mind-stub is a deterministic no-LLM mind.`
 
-// brainCommand splits a configured executable into command and args, appending
+// mindCommand splits a configured executable into command and args, appending
 // the prompt as the last argument.
-func brainCommand(exe, prompt string) (string, []string) {
+func mindCommand(exe, prompt string) (string, []string) {
 	parts := strings.Fields(exe)
 	return parts[0], append(parts[1:], prompt)
 }
 
-// unfence strips the Markdown a chat-shaped brain (claude -p and its kin) wraps
+// unfence strips the Markdown a chat-shaped mind (claude -p and its kin) wraps
 // JSON in, so a model that answers in prose still plugs into the pipe unchanged.
 // A line that is a bare fence marker (``` or ```json) is decoration, reported by
 // the second return so the caller drops it from the reply text; a single line
 // wrapped in backticks (`{…}`) is unwrapped to its content. Anything else — plain
 // JSON from the stub or an adapter, or ordinary prose — passes through untouched,
-// so no existing brain regresses.
+// so no existing mind regresses.
 func unfence(line string) (content string, fence bool) {
 	t := strings.TrimSpace(line)
 	if strings.HasPrefix(t, "```") {

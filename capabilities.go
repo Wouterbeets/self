@@ -23,7 +23,7 @@ func feedEvents(stdin io.WriteCloser, events []Event) {
 }
 
 // feedText writes a plain-text string to a process's stdin and closes it. Used
-// for the brain, which receives an orientation brief — not the raw log — so it
+// for the mind, which receives an orientation brief — not the raw log — so it
 // reads where to look, then explores SELF_HOME itself with its own tools
 // instead of being force-fed a firehose of events.
 func feedText(stdin io.WriteCloser, text string) {
@@ -87,28 +87,28 @@ func declaredCaps(events []Event) (commands map[string]commandDecl, cmdOrder []s
 	return commands, cmdOrder, projectors, projOrder
 }
 
-// stateBrief is the kernel's wake-up card for a brain: pure orientation, not a
-// log digest. It tells the brain where it is, what capabilities exist, and
-// where to look for the rest — and nothing else. The brain is expected to
+// stateBrief is the kernel's wake-up card for a mind: pure orientation, not a
+// log digest. It tells the mind where it is, what capabilities exist, and
+// where to look for the rest — and nothing else. The mind is expected to
 // explore SELF_HOME itself: read site/kernel.html for the full
 // self-description, site/*.html for the rendered state a human sees,
 // events.jsonl for the raw log, capabilities/ for the compiled scripts. The
-// kernel holds no internal state a brain cannot see on disk.
+// kernel holds no internal state a mind cannot see on disk.
 //
-// A consequence: a brain that cannot inspect files under SELF_HOME — a plain
+// A consequence: a mind that cannot inspect files under SELF_HOME — a plain
 // stdin/stdout API adapter with no tools — cannot do the job. The kernel's
-// seam is still a pipe, but a real brain needs a tool loop on its side of it.
-// The kernel does not sandbox or supply tools; isolating the brain's
-// exploration is the brain's own concern (a coding agent already has its own).
+// seam is still a pipe, but a real mind needs a tool loop on its side of it.
+// The kernel does not sandbox or supply tools; isolating the mind's
+// exploration is the mind's own concern (a coding agent already has its own).
 //
 // The kernel materializes the brief to SELF_HOME/site/brief.md (see
 // renderBriefFile) so it is explorable on disk like every other piece of
-// state. Markdown on purpose — readable as plain text to a brain, to `cat`, and
+// state. Markdown on purpose — readable as plain text to a mind, to `cat`, and
 // served verbatim as text/plain like any other .md file under site/.
 func stateBrief(home string) string {
 	events, err := readEvents(home)
 	if err != nil {
-		// a corrupt log is the kernel's failure, not the brain's; surface it
+		// a corrupt log is the kernel's failure, not the mind's; surface it
 		return fmt.Sprintf("# self — orientation brief\n\nInstance: `%s`\n\n**ERROR reading the log:** %s\n", home, err)
 	}
 	commands, cmdOrder, projectors, projOrder := declaredCaps(events)
@@ -159,7 +159,7 @@ func stateBrief(home string) string {
 }
 
 // storedFileCount counts the blobs on disk — what actually exists, orphans
-// included, which is what a brain exploring the store will find.
+// included, which is what a mind exploring the store will find.
 func storedFileCount(home string) int {
 	entries, err := os.ReadDir(blobsDir(home))
 	if err != nil {
@@ -175,9 +175,9 @@ func storedFileCount(home string) int {
 }
 
 // renderBriefFile writes the orientation brief to SELF_HOME/site/brief.md,
-// the kernel-resident surface a brain reads. Called alongside renderKernelHTML
-// whenever the log changes, and re-run immediately before every brain ask (see
-// freshBrief) so a brain never reads stale orientation. Served verbatim as
+// the kernel-resident surface a mind reads. Called alongside renderKernelHTML
+// whenever the log changes, and re-run immediately before every mind ask (see
+// freshBrief) so a mind never reads stale orientation. Served verbatim as
 // text/plain like any other .md file under site/.
 func renderBriefFile(home string) {
 	siteDir := filepath.Join(home, "site")
@@ -186,10 +186,10 @@ func renderBriefFile(home string) {
 }
 
 // freshBrief writes the orientation brief to disk and returns the exact bytes
-// the kernel just wrote. Used by pipeBrain so the brain is always fed the
+// the kernel just wrote. Used by pipeMind so the mind is always fed the
 // current state of the instance — never a cached file that could grow stale if
 // the log changed outside the normal refresh path (e.g. a CLI `run` between a
-// serve request and a brain call). The disk is the source; the brain can read
+// serve request and a mind call). The disk is the source; the mind can read
 // the same file itself to explore. Write then read back would be redundant —
 // stateBrief is deterministic, so the bytes written are the bytes returned.
 func freshBrief(home string) string {
@@ -201,7 +201,7 @@ func freshBrief(home string) string {
 }
 
 // pipeProcess runs an executable as a Unix pipeline node — the one shape the
-// kernel uses to talk to any outside process, a compiled command or the brain.
+// kernel uses to talk to any outside process, a compiled command or the mind.
 func pipeProcess(home, bin string, argv []string) ([]Event, error) {
 	current, err := readEvents(home)
 	if err != nil {

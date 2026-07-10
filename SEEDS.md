@@ -1,7 +1,7 @@
 # Writing a seed
 
 A seed is how you teach an instance a new set of capabilities. It is not code.
-It is a description of intent that the instance's own brain reads and compiles
+It is a description of intent that the instance's own mind reads and compiles
 into scripts locally. The same seed grown on two instances can produce two
 different implementations — each adapted to what that instance already has.
 
@@ -22,9 +22,9 @@ myseed/
 `self grow myseed/` does the rest:
 
 1. It records an `intent.declared` event.
-2. It hands `intent.md` to the brain (a real brain writes real capabilities;
-   `examples/brain-stub` is a deterministic offline one that declares a
-   minimal command + projection, enough to exercise the loop). The brain reads
+2. It hands `intent.md` to the mind (a real mind writes real capabilities;
+   `examples/mind-stub` is a deterministic offline one that declares a
+   minimal command + projection, enough to exercise the loop). The mind reads
    the intent, looks at what the instance already has, and decides how to
    decompose it into **commands** (verbs that emit events) and **projections**
    (HTML views over events).
@@ -40,7 +40,7 @@ myseed/
 
 ## The contract your capabilities must honor
 
-The brain writes the scripts, but they must fit the kernel's pipe contract, so
+The mind writes the scripts, but they must fit the kernel's pipe contract, so
 describe capabilities that can be built this way:
 
 - **A command** receives its arguments as `argv` and the current log as JSONL on
@@ -143,7 +143,7 @@ is actually *due*. A weekly timer bound to a command that scans for unpaid
 invoices, lapsed clients, or this-week-last-year is a follow-up machine —
 and an empty week costs one no-op event. When an intent says "every
 Monday", "after thirty days", "when it's been six weeks" — that is a timer
-plus a command, and the brain may declare both.
+plus a command, and the mind may declare both.
 
 ## Sharing content: export and the merge
 
@@ -153,12 +153,12 @@ holding every `matchday.*` event (original dates preserved), the files
 those events reference (hash-verified on arrival), and an `intent.md` stub
 the sender edits before sending — who I am, what these events mean, what I
 hope grows from them. The receiver grows the directory like any seed, and
-this is where it gets interesting: the receiver's brain reads the sender's
+this is where it gets interesting: the receiver's mind reads the sender's
 intent *against what already lives in this instance* and decides what the
 merge should look like. Two supporters' seasons become one head-to-head
 page; two researchers' field notes become a timeline where her nesting
 dates finally sit next to his temperature series. The insight lives in the
-merge projection — which the receiver's own brain writes, for the
+merge projection — which the receiver's own mind writes, for the
 receiver's own log, under the receiver's own key.
 
 Intents for shareable seeds should say so: name which events are meant to
@@ -179,12 +179,12 @@ A good intent tends to cover:
 - **Purpose** — what this is for, in a sentence or two.
 - **Surface** — the exact public names: which commands, which projections, which
   event names, and what arguments each command takes. Fix the names you care
-  about; leave the brain free on everything else.
+  about; leave the mind free on everything else.
 - **Constraints / mechanics** — anything the implementation must get right for
   the idea to work (field names, ordering, how views consume which events).
 - **Anti-goals** — what it must *not* do. These are as useful as the goals.
 - **What good looks like** — a short end-to-end walkthrough. If you can describe
-  the demo, the brain can build toward it.
+  the demo, the mind can build toward it.
 
 Two rules of thumb:
 
@@ -203,7 +203,7 @@ cross — never runnable code:
 - `self share <capability>` prints a slice of your log: every declaration of that
   capability and every receipt your kernel signed for it, as JSONL.
 - `self adopt <file>` (or `-` for stdin) takes such a slice, records it, and
-  re-declares the capability. Your instance's own brain re-authors the script and
+  re-declares the capability. Your instance's own mind re-authors the script and
   signs it with your key. The sender's script rides along only as a reference for
   the compiler to check against — it is never installed as-is.
 

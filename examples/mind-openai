@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
-"""brain-openai — a reference SELF_BRAIN adapter for any OpenAI-compatible endpoint.
+"""mind-openai — a reference SELF_MIND adapter for any OpenAI-compatible endpoint.
 
-self's kernel holds no model. A brain is a process honoring the contract:
+self's kernel holds no model. A mind is a process honoring the contract:
 
     $SELF_ASK   the request kind: think | heartbeat | grow | compile
     argv[-1]    the prompt
-    stdin       an orientation brief (plain text): where the brain is, what
-                capabilities exist, where to look for the rest. The brain is
+    stdin       an orientation brief (plain text): where the mind is, what
+                capabilities exist, where to look for the rest. The mind is
                 expected to explore SELF_HOME itself for depth (site/*.html,
                 events.jsonl, capabilities/) — this is a wake-up card, not a
                 context dump.
     stdout      event JSONL (one {name, payload} per line); bare prose is the reply
 
 This adapter illustrates the contract SHAPE for an OpenAI-compatible chat
-endpoint. It is NOT a complete brain: it makes a single completion with the
-brief as context and answers, without inspecting SELF_HOME itself. A real brain
+endpoint. It is NOT a complete mind: it makes a single completion with the
+brief as context and answers, without inspecting SELF_HOME itself. A real mind
 needs a tool loop (read files, run candidate scripts, explore the rendered
 state) to do what the kernel asks. Use it to understand the wire format; for
-real capabilities, plug a tool-capable coding agent (examples/brain-opencode or
+real capabilities, plug a tool-capable coding agent (examples/mind-opencode or
 `claude -p`). It uses only the Python standard library, so there is nothing to
 install. Point self at it:
 
-    export SELF_BRAIN="$PWD/examples/brain-openai"
+    export SELF_MIND="$PWD/examples/mind-openai"
     export SELF_LLM_URL=http://127.0.0.1:8080     # any /v1/chat/completions server
     export SELF_LLM_API_KEY=...                   # if the endpoint needs one
     export SELF_LLM_MODEL=local                   # the model name to request
     self grow seeds/chat
 
 It is deliberately single-shot — no tool loop, no sandbox — so it is easy to
-read and adapt. A more capable brain (a coding agent like `claude -p`) explores
+read and adapt. A more capable mind (a coding agent like `claude -p`) explores
 and verifies before answering; this one just asks the model once. Treat it as a
 reference, not a ceiling.
 """
@@ -59,8 +59,8 @@ COMPILE_SYSTEM = (
     "it blindly. Reply with the script and nothing else — no prose, no code fences."
 )
 
-BRAIN_SYSTEM = (
-    "You are this instance's brain. You read the orientation brief and answer the prompt. "
+MIND_SYSTEM = (
+    "You are this instance's mind. You read the orientation brief and answer the prompt. "
     "Reply in plain prose. To ADD a capability, additionally emit declaration "
     "events, one compact JSON object per line, exactly in these shapes:\n"
     '  {"name":"command.declared","payload":{"name":"note","description":"...",'
@@ -128,7 +128,7 @@ def main():
         return
 
     # think / heartbeat / grow: prose plus optional declaration lines.
-    reply = call_model(BRAIN_SYSTEM, prompt + context)
+    reply = call_model(MIND_SYSTEM, prompt + context)
     for line in reply.splitlines():
         s = line.strip()
         if not s:

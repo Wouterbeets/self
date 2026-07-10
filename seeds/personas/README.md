@@ -13,7 +13,7 @@ can see her allotment in it, it is a product.
 
 None of these people type `self run` anything. They reach every command
 through the HTML form the kernel serves at `/run/<command>`, or through
-chat. The CLI spellings in each intent fix the public surface for the brain
+chat. The CLI spellings in each intent fix the public surface for the mind
 that grows it; the person only ever sees a page with a form on it.
 
 The natural shape of a log is a diary, and the first draft of every one of
@@ -31,7 +31,7 @@ ceiling, and the personas now exercise all of them:
   event.
 - **Content sharing** (`export`/`grow`): a slice of one person's record,
   curated by hand, planted in another person's instance, where the
-  receiver's own brain writes the merge. Fred and Jake's derby; Amara and
+  receiver's own mind writes the merge. Fred and Jake's derby; Amara and
   Ben's confluence.
 
 A word on what got *removed* to make room. Early drafts of these intents
@@ -58,12 +58,12 @@ its receipt event and its restraint.
 | `flare` | June, 45, lives with rheumatoid arthritis | symptoms, meds, a summary for the doctor | dated photos as evidence; `handover` freezes what each appointment was given |
 | `contactsheet` | Ana, 29, film on weekends, weddings for friends | the photos she keeps, tagged her way | the photos ARE files; `printorder` zips the chosen frames, lab-ready |
 | `awayend` | Fred, 54 (Newcastle) & Jake, 52 (Sunderland), thirty years of derby arguments | two rival match records | Fred exports his record as `fred.*`; Jake plants it; `/derby` puts both memories on one page and takes no side |
-| `fieldnotes` | Amara, 41, marine ecologist & Ben, 47, hydrologist | shore observations; water readings | Ben curates his export line by line; Amara's brain writes the merge; `/confluence` shows the six-week lag neither record contained |
+| `fieldnotes` | Amara, 41, marine ecologist & Ben, 47, hydrologist | shore observations; water readings | Ben curates his export line by line; Amara's mind writes the merge; `/confluence` shows the six-week lag neither record contained |
 
 Try one:
 
 ```sh
-export SELF_BRAIN="claude -p"
+export SELF_MIND="claude -p"
 self grow seeds/personas/tables
 self
 ```

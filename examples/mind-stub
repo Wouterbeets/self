@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""brain-stub — a deterministic, offline SELF_BRAIN. No LLM, no network.
+"""mind-stub — a deterministic, offline SELF_MIND. No LLM, no network.
 
-This is the brain the tests and demo.sh plug in. It honors the same contract
-as every real brain — $SELF_ASK on the environment, the prompt as the last
+This is the mind the tests and demo.sh plug in. It honors the same contract
+as every real mind — $SELF_ASK on the environment, the prompt as the last
 argument, an orientation brief on stdin, event JSONL on stdout — and it is
 deliberately dumb: it proves the machinery, not the intelligence. It used to
 live inside the kernel as a special case; it is a process now, because the
-kernel holds no brain, not even a fake one.
+kernel holds no mind, not even a fake one.
 
-    export SELF_BRAIN="$PWD/examples/brain-stub"
+    export SELF_MIND="$PWD/examples/mind-stub"
 
 think/heartbeat answer with fixed prose. grow reads the latest intent.declared
 from the instance's own log and declares one command and one projection named
@@ -68,7 +68,7 @@ def first_event(intent):
 
 
 def latest_intent(home):
-    """The stub explores like any brain: it reads the instance's own log."""
+    """The stub explores like any mind: it reads the instance's own log."""
     name = intent = ""
     try:
         with open(os.path.join(home, "events.jsonl")) as f:

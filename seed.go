@@ -42,7 +42,7 @@ func readSeedSource(ref string) (name, intent string, deposit []Event, err error
 // reference, the blobs themselves, and an editable intent — a directory
 // another instance can grow. This is how lived content travels: capabilities
 // cross as declarations (share/adopt); records cross as seeds, with their
-// dates and their files intact, and the receiver's brain decides how two
+// dates and their files intact, and the receiver's mind decides how two
 // lives merge on one page. Export selects, the human curates — the intent
 // stub is written to be edited before the directory is sent — and the
 // sender's log remembers the giving.
@@ -136,7 +136,7 @@ func cmdExport(home, prefix, dir, as string) error {
 		return err
 	}
 	// An intent stub, written once and never clobbered: editing it is the
-	// sender's moment of curation, and the receiver's brain reads it to
+	// sender's moment of curation, and the receiver's mind reads it to
 	// decide how two records merge.
 	intentPath := filepath.Join(dir, "intent.md")
 	if !fileExists(intentPath) {

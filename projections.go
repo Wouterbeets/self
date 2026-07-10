@@ -91,7 +91,7 @@ func sitePagePath(home, name string) string {
 }
 
 // writeSitePage persists a rendered projection atomically (temp + rename), so
-// a reader — the server's fast path, a brain, cat — never sees a half page.
+// a reader — the server's fast path, a mind, cat — never sees a half page.
 func writeSitePage(home, name string, page []byte) error {
 	out := sitePagePath(home, name)
 	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
@@ -178,10 +178,10 @@ func touchesCapabilities(fresh []Event) bool {
 
 // refreshSite writes every kernel-resident view of state and re-runs every
 // declared projector. Call this whenever the log changes: it keeps disk in
-// lockstep with the log so a brain (or a human, or an external agent) reading
+// lockstep with the log so a mind (or a human, or an external agent) reading
 // files under SELF_HOME/site/ sees current state, never a stale view. There is
-// no internal state the kernel renders into a brain prompt that is not on disk.
-// The brief is written LAST, after the projections, so a brain that reads the
+// no internal state the kernel renders into a mind prompt that is not on disk.
+// The brief is written LAST, after the projections, so a mind that reads the
 // brief and then follows its pointers to site/*.html always finds pages at
 // least as fresh as the brief that sent it there.
 func refreshSite(home string) {

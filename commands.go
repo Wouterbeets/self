@@ -108,9 +108,9 @@ func cmdGrow(home, ref string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "self: orchestrating %q from intent…\n", name)
-	res, err := pipeBrain(home, "grow", growPrompt(intent))
+	res, err := pipeMind(home, "grow", growPrompt(intent))
 	if err != nil {
-		return fmt.Errorf("orchestrate %q: %w (growing needs a brain — %s)", name, err, brainHint)
+		return fmt.Errorf("orchestrate %q: %w (growing needs a mind — %s)", name, err, mindHint)
 	}
 	c := newLLM(home)
 	c.intent = intent
@@ -182,7 +182,7 @@ func cmdGrow(home, ref string) error {
 // capabilities, and hand them back the one way the kernel accepts them.
 func growPrompt(intent string) string {
 	return "Grow the capabilities that realize this product: declare each one by emitting a command.declared / projector.declared event, then summarize in one line.\n\n" +
-		brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
+		mindAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
 }
 
 func cmdThink(home, prompt string) error {
@@ -193,9 +193,9 @@ func cmdThink(home, prompt string) error {
 	if prompt == "" {
 		return fmt.Errorf("usage: self think <prompt> (or pipe it on stdin)")
 	}
-	res, err := pipeBrain(home, "think", thinkPrompt(prompt))
+	res, err := pipeMind(home, "think", thinkPrompt(prompt))
 	if err != nil {
-		return fmt.Errorf("brain: %w", err)
+		return fmt.Errorf("mind: %w", err)
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -203,13 +203,13 @@ func cmdThink(home, prompt string) error {
 }
 
 // thinkPrompt wraps a think ask with the answer contract. A think is
-// report-only — the kernel returns brain-authored events to the caller instead
-// of ingesting them — but the brain still needs to know its stdout is the only
-// channel: without the contract, a tool-capable brain wastes its session trying
+// report-only — the kernel returns mind-authored events to the caller instead
+// of ingesting them — but the mind still needs to know its stdout is the only
+// channel: without the contract, a tool-capable mind wastes its session trying
 // to persist its work itself (edit the log, run the CLI) and gets denied. Every
 // event-expecting ask carries the same guidance; this was the one naked ask left.
 func thinkPrompt(prompt string) string {
-	return prompt + "\n\n" + brainAnswerContract
+	return prompt + "\n\n" + mindAnswerContract
 }
 
 func cmdHeartbeat(home string) error {
@@ -219,8 +219,8 @@ func cmdHeartbeat(home string) error {
 		return err
 	}
 	prompt := `This is a self-improvement heartbeat. Explore your instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (emit command.declared / projector.declared); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` +
-		"\n\n" + brainAnswerContract + heartbeatContext(prior)
-	res, err := pipeBrain(home, "heartbeat", prompt)
+		"\n\n" + mindAnswerContract + heartbeatContext(prior)
+	res, err := pipeMind(home, "heartbeat", prompt)
 	if err != nil {
 		return err
 	}
@@ -229,7 +229,7 @@ func cmdHeartbeat(home string) error {
 	return nil
 }
 
-// heartbeatContext hands the brain the events since its last beat — capped,
+// heartbeatContext hands the mind the events since its last beat — capped,
 // minus kernel bookkeeping receipts — so a beat reacts to what changed instead
 // of exploring from scratch.
 func heartbeatContext(events []Event) string {
@@ -395,7 +395,7 @@ func cmdAdopt(home, path string) error {
 	// so "the file exists" proves nothing. The honest signal is the log: this
 	// adopt succeeded only if it minted a fresh signed receipt.
 	if receiptCount(home, typ, name) <= before {
-		return fmt.Errorf("adopted %q into the log, but the compile produced no signed receipt (any script on disk is from an earlier receipt) — wire a brain and declare it again", name)
+		return fmt.Errorf("adopted %q into the log, but the compile produced no signed receipt (any script on disk is from an earlier receipt) — wire a mind and declare it again", name)
 	}
 	fmt.Printf("adopted %q — re-authored by this instance's own compiler, signed by its own key\n", name)
 	return nil
