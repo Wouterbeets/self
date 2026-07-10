@@ -31,6 +31,11 @@ onto a form he fills in by hand, in the vestry, under time pressure.
   month, donations received, volunteers and their shifts — deposited into
   the store and recorded by one `pantry.return` event carrying its hash.
   The diocese's question, answered as a document Ray hands over.
+- A weekly timer runs `self run callout` on Tuesday mornings: one message
+  to the volunteers' group chat through the gateway Ray configured —
+  "we're on today, 12 till 2; last week was 41 households, thank you" —
+  and one `pantry.callout` event recording it. Logistics and gratitude,
+  never data about anyone served.
 
 ## constraints
 
@@ -51,8 +56,10 @@ onto a form he fills in by hand, in the vestry, under time pressure.
   of anyone, ever: a camera pointed at donations on a table is gratitude,
   a camera pointed anywhere else in that hall is surveillance. Dignity is
   the operating principle; the log holds the operation, not the queue.
-- No rota-planning, no shift reminders. Ray asks people face to face;
-  the page just remembers who said yes.
+- No rota-planning, no individual reminders, no chasing anyone. The
+  Tuesday call-out goes to the group Ray already runs, says only what the
+  noticeboard would say, and never names who is expected. Ray asks people
+  face to face; the page just remembers who said yes.
 - The return states what the log knows; it never estimates, projects, or
   rounds up. If the diocese wants a bigger number, the diocese can come
   on a Tuesday.

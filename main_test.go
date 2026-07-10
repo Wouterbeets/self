@@ -1850,3 +1850,153 @@ func TestStoredFilesServeInert(t *testing.T) {
 		t.Fatal("a plain-text blob needs no sandbox — images and downloads stay untouched")
 	}
 }
+
+// TestTimersFireFromTheLog pins the timer contract: a timer.declared event
+// binds an installed command to a cadence; a due timer appends timer.fired
+// and runs the command; a timer that just fired is not due again; "off"
+// disables. The log alone decides all of it.
+func TestTimersFireFromTheLog(t *testing.T) {
+	home := t.TempDir()
+	if _, err := loadSecret(home); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '{\"name\":\"digest.sent\",\"payload\":{}}\\n'\n"
+	if err := installTrustedScript(home, "command", "digest", script, "test"); err != nil {
+		t.Fatal(err)
+	}
+	decl, _ := json.Marshal(map[string]any{"name": "weekly", "every": "1h", "command": "digest"})
+	e := newEvent("timer.declared", decl)
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+
+	count := func(name string) int {
+		events, _ := readEvents(home)
+		n := 0
+		for _, e := range events {
+			if e.Name == name {
+				n++
+			}
+		}
+		return n
+	}
+
+	tickTimers(home, time.Now().UTC().Add(30*time.Minute)) // not yet due
+	if count("timer.fired") != 0 {
+		t.Fatal("a timer fired before its interval elapsed")
+	}
+	tickTimers(home, time.Now().UTC().Add(2*time.Hour)) // due
+	if count("timer.fired") != 1 || count("digest.sent") != 1 {
+		t.Fatalf("due timer: fired=%d sent=%d, want 1/1", count("timer.fired"), count("digest.sent"))
+	}
+	tickTimers(home, time.Now().UTC().Add(30*time.Minute)) // just fired — not due
+	if count("timer.fired") != 1 {
+		t.Fatal("a timer re-fired inside its interval")
+	}
+	off, _ := json.Marshal(map[string]any{"name": "weekly", "every": "off", "command": "digest"})
+	e = newEvent("timer.declared", off)
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	tickTimers(home, time.Now().UTC().Add(48*time.Hour))
+	if count("timer.fired") != 1 {
+		t.Fatal(`every "off" must disable the timer`)
+	}
+}
+
+// TestTimerFailureLeavesAReceipt pins the honesty of scheduled effects: the
+// firing is logged before the command runs, and a command that errors leaves
+// a timer.failed event rather than silence.
+func TestTimerFailureLeavesAReceipt(t *testing.T) {
+	home := t.TempDir()
+	if _, err := loadSecret(home); err != nil {
+		t.Fatal(err)
+	}
+	if err := installTrustedScript(home, "command", "flaky", "#!/bin/sh\nexit 1\n", "test"); err != nil {
+		t.Fatal(err)
+	}
+	decl, _ := json.Marshal(map[string]any{"name": "chase", "every": "1h", "command": "flaky"})
+	e := newEvent("timer.declared", decl)
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	tickTimers(home, time.Now().UTC().Add(2*time.Hour))
+	events, _ := readEvents(home)
+	var fired, failed bool
+	for _, e := range events {
+		fired = fired || e.Name == "timer.fired"
+		failed = failed || e.Name == "timer.failed"
+	}
+	if !fired || !failed {
+		t.Fatalf("fired=%v failed=%v, want both — the attempt and the outcome are both events", fired, failed)
+	}
+}
+
+// TestExportPlantsElsewhere drives content sharing end to end: instance A
+// exports a slice of its life (events + the files they reference), instance B
+// grows the directory, and B's log holds A's records with their original
+// moments and their bytes — Fred's season on Jake's page.
+func TestExportPlantsElsewhere(t *testing.T) {
+	sender := t.TempDir()
+	if _, err := loadSecret(sender); err != nil {
+		t.Fatal(err)
+	}
+	hash, stored, err := storeFile(sender, "stub.jpg", strings.NewReader("ticket stub bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := appendEvent(sender, &stored); err != nil {
+		t.Fatal(err)
+	}
+	then := time.Date(2025, 8, 16, 15, 0, 0, 0, time.UTC)
+	payload, _ := json.Marshal(map[string]any{"opponent": "arsenal", "score": "2-1", "photo": hash})
+	match := newEvent("matchday.match", payload)
+	match.OccurredAt = then
+	if err := appendEvent(sender, &match); err != nil {
+		t.Fatal(err)
+	}
+	noise := newEvent("pantry.donation", json.RawMessage(`{"what":"beans"}`))
+	if err := appendEvent(sender, &noise); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "for-jake")
+	if err := cmdExport(sender, "matchday.", dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(filepath.Join(dir, "files", "stub.jpg")) {
+		t.Fatal("the referenced blob must travel in the seed's files/")
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "seed.jsonl"))
+	if strings.Contains(string(raw), "pantry.donation") {
+		t.Fatal("export must select by prefix — the pantry stays home")
+	}
+	if senderEvents, _ := readEvents(sender); senderEvents[len(senderEvents)-1].Name != "seed.exported" {
+		t.Fatal("the sender's log must remember the giving")
+	}
+
+	t.Setenv("SELF_BRAIN", stubBrain(t))
+	receiver := t.TempDir()
+	if err := cmdGrow(receiver, dir); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := readEvents(receiver)
+	var planted *Event
+	for i, e := range events {
+		if e.Name == "matchday.match" {
+			planted = &events[i]
+		}
+	}
+	if planted == nil {
+		t.Fatal("the exported record did not arrive")
+	}
+	if !planted.OccurredAt.Equal(then) {
+		t.Fatalf("a planted record must keep its moment: got %s, want %s", planted.OccurredAt, then)
+	}
+	if planted.ID == match.ID {
+		t.Fatal("the receiver mints its own ids; only the moment is preserved")
+	}
+	if data, err := os.ReadFile(blobPath(receiver, hash)); err != nil || string(data) != "ticket stub bytes" {
+		t.Fatalf("receiver blob = %q, %v", data, err)
+	}
+}

@@ -24,6 +24,11 @@ handed to people — and wants that too.
   complete standalone HTML file — styled for print, hers to photocopy —
   deposited into the store and recorded by one `zine.issue` event carrying
   its hash and the chosen titles.
+- `self run print <issue-name> <copies>` sends an issue to the household
+  printer (plain `lp`, nothing configured beyond the printer being there)
+  and appends one `zine.printed` event: which issue, how many copies, what
+  the printer said. The library photocopier keeps its job for big runs;
+  Tuesday-night runs of five happen from her bed.
 - `/zine` renders posts newest first, skipping any post whose title has a
   later retraction. Between posts, moods appear as a small run of words —
   a weather report of the days when she didn't write. At the bottom, the
@@ -65,8 +70,9 @@ handed to people — and wants that too.
 
 Lena posts at 22:40 on a school night, titles it "clive rose and so did
 my hopes", attaches the photo of the jar, and adds a mood: `okay`. In
-March she picks six posts, runs `issue`, and prints it in the school
-library at lunch — twelve copies, stapled crooked, gone by Friday. Two
+March she picks six posts, runs `issue`, and hears the printer downstairs
+wake up — five copies, stapled crooked at the kitchen table, the other
+twelve done at the library at lunch, gone by Friday. Two
 weeks later she retracts a post about a friend and the page forgets it
 gracefully; the four paper copies in other people's bags are a lesson
 about paper, not a bug. Years from now the log still holds every word and

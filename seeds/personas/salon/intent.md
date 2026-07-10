@@ -31,6 +31,18 @@ screenshots clients send her captioned "this, exactly this".
   client, service, price, one row per visit, months subtotaled — deposited
   into the store and recorded by one `salon.taxpack` event. Her accountant
   gets one attachment, not a shoebox.
+- `self run nudge <client>` sends that client Fatima's rebooking message
+  ("been a while — shall I come by? — F") through the messaging gateway she
+  configured (WhatsApp bridge, SMS — the credentials live outside the log),
+  and appends one `salon.nudged` event: who, what was sent, what the
+  gateway answered. The client book shows the last nudge next to the last
+  visit, so she never asks twice.
+- A weekly timer runs `self run monday`: it reads the log for regulars
+  whose gap since their last visit has passed their own usual rhythm
+  (computed from their history, per client), and messages **Fatima** —
+  only Fatima — the list: "due this week: Mrs Achebe (9 wks, usually 6),
+  Dara (7 wks, usually 5)". One `salon.monday` event records what the list
+  said. She taps `nudge` on the ones she wants; some she'd rather call.
 
 ## constraints
 
@@ -48,10 +60,20 @@ screenshots clients send her captioned "this, exactly this".
 - The taxpack is a rendering of visits already logged: same year, same
   visits, same rows. It computes nothing the takings page doesn't already
   show.
+- `nudge` reads the log first and refuses its own excess: never the same
+  client twice in a month, never a client seen since the last nudge. The
+  refusal is an event too — the machine's restraint is part of the record.
+- A client's "usual rhythm" is computed from her own visits, never
+  assumed; a client with fewer than three visits has no rhythm yet and
+  never appears on the Monday list.
 
 ## anti-goals
 
-- No booking, no calendar, no reminders sent to anyone. Clients text her;
+- No automated messages to clients, ever. The Monday list goes to Fatima
+  and stops there; a nudge leaves only when Fatima presses the button with
+  a name on it. The machine remembers; Fatima speaks. Forty regulars stay
+  forty relationships.
+- No booking, no calendar sync, no appointment slots. Clients text her;
   that already works.
 - Nothing client-facing. This is the back of the notebook, not a website.
   Photos are working notes between Fatima and her own memory — never a
@@ -66,7 +88,10 @@ base, brassy if rushed, last visit eight weeks ago wanting to go warmer —
 and the photo from that visit, so both of them are looking at the same
 "warmer". The kitchen appointment goes perfectly because March-Fatima
 briefed her. The client's daughter sends a screenshot for her own
-appointment; it goes on her record in ten seconds. In January, Fatima runs
-`taxpack`, emails one file, and her accountant replies "this is the
-easiest you've ever been". The paper notebook stays home, demoted to
-shopping lists.
+appointment; it goes on her record in ten seconds. Monday, 8 a.m., the
+list arrives: Mrs Achebe is at nine weeks and she's usually a six. One
+tap, the nudge goes, and by lunch there's a kitchen booked for Thursday —
+a client quietly kept that a paper notebook would have quietly lost. In
+January, Fatima runs `taxpack`, emails one file, and her accountant
+replies "this is the easiest you've ever been". The paper notebook stays
+home, demoted to shopping lists.

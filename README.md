@@ -129,6 +129,25 @@ could script render sandboxed). Same hash, same file — dedup is free. Blobs
 are user content: `rehydrate` rebuilds scripts and pages from the log alone,
 and `files/` must be backed up alongside `events.jsonl` and `.secret`.
 
+**Effects.** Commands may act on the world; projections never do. A command
+is free to spawn the OS's own tools — `lp` to print, `curl` to poke a device
+on the LAN or a service the user configured, `sendmail` for the follow-up —
+because the discipline lives in the log, not in a sandbox: every effect
+leaves a receipt event (what was attempted, what came back), and an
+effectful command reads the log on stdin first so it never repeats what the
+log already says happened. Secrets and endpoints come from the environment
+or a config file outside the log — never from event payloads. This is the
+kernel as glue: the same append-only log, now with hands.
+
+**Timers.** A `timer.declared` event `{name, every, command, args}` binds an
+installed command to a cadence; the serving kernel ticks it. `every` is a Go
+duration ("24h", "168h"), `"off"` disables, the latest declaration per name
+wins, and every firing appends `timer.fired` before the command runs — so
+the log shows everything the instance did on its own, and a crashed command
+leaves a `timer.failed` receipt instead of silence. A timer plus a
+log-reading command is a follow-up machine: the timer supplies the moment,
+the log says what is actually due.
+
 **Runtime code generation.** A `command.declared` or `projector.declared` event
 triggers a compile: the kernel hands the declaration to the brain process, which
 writes the script; the kernel installs it and records a `script.compiled`
@@ -156,6 +175,10 @@ self show <name>     render a projection to stdout
 self rehydrate       rebuild capabilities/ + site/ from the log (offline)
 self share <cap>     print a capability's declarations + receipts as JSONL to stdout
 self adopt <seed>    re-generate a shared capability locally ("-" reads stdin)
+self export <prefix> <dir>
+                     write a content seed: every <prefix>* event, the files
+                     they reference, and an editable intent — another
+                     instance grows the directory, dates preserved
 self retire <t>/<n>  retire a capability: script + page leave the surface, the
                      log keeps every event, re-declaring revives it
 ```
@@ -276,6 +299,8 @@ tool loop of its own is incomplete by spec. Receipts are signed with
 ## Capability exchange
 
 Instances exchange **declarations and evidence, never runnable code.**
+Capabilities travel by `share`/`adopt`; lived content travels by
+`export`/`grow` — two flavors of the same seed idea.
 
 `self share <cap>` prints a slice of the local log: every declaration of that
 capability and every locally-signed receipt for it, as JSONL. `self adopt`
@@ -289,6 +314,20 @@ So: a hostile slice cannot install anything (there is a test for this);
 provenance survives adaptation (the sender's records stay in the receiver's log);
 and cross-instance authorship is recorded but not cryptographically verifiable,
 because the keys are symmetric and never leave an instance.
+
+**Content exchange** is the other direction: not "teach me your tool" but
+"here is a piece of my record." `self export <prefix> <dir>` writes a seed
+directory from the live log — every `<prefix>*` event with its original
+`occurred_at`, the blobs those events reference, and an `intent.md` stub the
+sender edits (who I am, what this means, what I hope grows from it). The
+receiver runs `self grow <dir>`: the events land with their own moments and
+this instance's ids, the files land in the store hash-verified, and the
+receiver's brain reads the intent against what already lives here to decide
+how two records merge — rendered side by side, overlaps surfaced,
+contradictions visible. Two friends' seasons become a head-to-head; two
+researchers' field notes become the correlation neither could see alone.
+The sender's log keeps a `seed.exported` event; the receiver's keeps
+`seed.provenance`. Both sides remember.
 
 ## Where the brain runs
 
@@ -362,6 +401,13 @@ These are current properties, stated plainly, not goals to aspire to.
   without a sandbox.** The kernel runs the brain as a plain subprocess (isolating
   its exploration is the brain's own concern) and runs the scripts it installs
   directly. The kernel's guarantee is the signed-receipt gate, not containment.
+- **Effectful commands raise the stakes of both points above.** A command that
+  prints, emails, or messages turns a prompt-injected script from a local
+  nuisance into an outward action, and a timer runs it with nobody watching.
+  The posture is unchanged but matters more: read the scripts that touch the
+  world before trusting them, keep credentials out of the log and out of
+  scripts, and let every effect leave a receipt event so the log can always
+  answer "what did this instance do on my behalf."
 - **The log is unbounded.** Every compile stores its script bytes, and every
   projection replays the whole log (O(history)). Snapshotting is not built in; a
   snapshot can itself be modeled as a seed and left to the user.

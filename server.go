@@ -17,6 +17,7 @@ import (
 func cmdServe(home string) error {
 	refreshSite(home)
 	mux := serveMux(home)
+	go serveTimers(home)
 
 	// Loopback by default: the write path (/run/<command>) has no auth, and
 	// local-first means local. SELF_BIND is the whole bind address, host or

@@ -26,6 +26,13 @@ from joining the third.
   with what she can still read of it ("spring sowings, the smudge was the
   carrots"). This is how eleven years of paper get in — one page at a
   time, over winter, with the radio on.
+- A weekly timer runs `self run thisweek`: it gathers what this calendar
+  week looked like in every past year of her own log — sowings, harvests,
+  the photographed pages that mention it — and emails her the digest on
+  Sunday evening ("week 11 in other years: leeks in on the 14th in 2014,
+  the 9th last year; first rhubarb pulled in 2022"). A week with no
+  history sends nothing. One `allotment.thisweek` event records each
+  digest sent.
 - `/allotment` renders the year: what is currently in each bed (the
   sowings of this year, grouped by bed, packet photos linked), then the
   harvest tally — every crop with its harvests listed, this year first.
@@ -50,16 +57,20 @@ from joining the third.
 
 - No planting calendars, no frost-date advice, no companion-planting tips.
   Bernadette has forgotten more about gardening than the internet knows;
-  this page holds her knowledge, it does not offer any of its own.
+  this page holds her knowledge, it does not offer any of its own. The
+  Sunday digest honors the same line: it is her own diary talking, in her
+  own words, from her own years — the machine only remembers which week
+  it is. The day it suggests anything she didn't once do herself, it has
+  broken.
 - No transcription of the exercise books. The photo of the page IS the
   record; typing it all out is a chore nobody assigned. Her notes on a
   page event say what matters; the ink says the rest.
 
 ## what good looks like
 
-March. Bernadette opens `/allotment/almanac`, finds she sowed leeks on the
-9th last year and — from a photographed page of the 2014 book — the 14th
-back then, and that the yellow courgettes gave one trug for a whole bed.
+March. Sunday's email says week 11 is leek week — the 9th last year, the
+14th in 2014, straight off a photographed page of the old book — and that
+the yellow courgettes gave one trug for a whole bed.
 The leeks go in on the 10th, photographed packet and all; the courgettes
 lose their bed to dahlias. Over Christmas she photographs the last of book
 two, and the exercise books retire to the shelf as objects, not as the

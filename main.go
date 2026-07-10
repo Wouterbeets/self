@@ -84,6 +84,15 @@ func main() {
 		} else {
 			err = cmdAdopt(home, args[0])
 		}
+	case "export":
+		switch len(args) {
+		case 2:
+			err = cmdExport(home, args[0], args[1], "")
+		case 3:
+			err = cmdExport(home, args[0], args[1], args[2])
+		default:
+			err = fmt.Errorf("usage: self export <event-prefix> <dir> [<new-prefix>]")
+		}
 	case "revise":
 		if len(args) < 2 {
 			err = fmt.Errorf("usage: self revise command/<name> <change request>")

@@ -157,6 +157,12 @@ func cmdGrow(home, ref string) error {
 			}
 		}
 		fresh := newEvent(e.Name, payload)
+		// A deposit that carries its own moment keeps it: an exported record
+		// planted here still says when it happened, not when it arrived. The
+		// id and seq are this instance's; the time is the event's.
+		if !e.OccurredAt.IsZero() {
+			fresh.OccurredAt = e.OccurredAt
+		}
 		if err := appendEvent(home, &fresh); err != nil {
 			return err
 		}

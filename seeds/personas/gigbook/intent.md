@@ -23,11 +23,21 @@ processor from scratch, every single time, badly.
   tune entering the repertoire, with the working notes ("in G not A,
   Sarah takes the second verse") and an optional chart file — the actual
   PDF everyone squints at, attached to the song instead of lost in a chat.
-- `self run invoice <venue> <fee> <details…>` produces a file: a plain,
-  numbered invoice — number derived from how many the log already holds,
-  band name, venue, fee, date — deposited into the store and recorded by
-  one `gigbook.invoice` event carrying its hash and number. Theo sends the
-  link or the file; the word processor is out of the band.
+- `self run invoice <venue> <fee> <email> <details…>` produces a file — a
+  plain, numbered invoice: number derived from how many the log already
+  holds, band name, venue, fee, date — deposits it, records it with one
+  `gigbook.invoice` event carrying its hash, number, and the venue's email,
+  and **sends it**: the mail goes out through the account Theo configured
+  (credentials outside the log), and a `gigbook.sent` event records the
+  send. The word processor and the attach-forward-hope loop are both out of
+  the band.
+- `self run paid <number>` appends one `gigbook.paid` event. Ten characters
+  typed when the transfer lands; everything else follows from it.
+- A monthly timer runs `self run chase`: it reads the log for invoices
+  past thirty days with no `gigbook.paid`, re-sends each one with a polite
+  one-line reminder — never more than three times, never twice in the same
+  month — and appends a `gigbook.chased` event per send. Theo finds out it
+  happened from the page, usually after the money arrives.
 - `/gigbook` renders the band's year: this year's fee total at the top,
   then gigs newest first with venue, fee, notes, and their attached files;
   invoices listed with their numbers; past years fold to one line each
@@ -45,6 +55,11 @@ processor from scratch, every single time, badly.
   the log is the ledger, so numbers never repeat and never skip. An
   invoice is frozen when made: a wrong fee is a new invoice and a note,
   never an edit, because the one already sent exists.
+- `chase` earns its autonomy by reading the log: paid invoices are never
+  chased, the three-chase ceiling is counted from `gigbook.chased` events,
+  and every send — and every skip at the ceiling — is an event. The page
+  shows unpaid invoices with their chase count, so Theo always knows what
+  the machine has said in the band's name.
 - Repeating `song` for the same title updates its story; the newest note
   and newest chart win the setlist page. Titles group case-insensitively.
 - Attached files are linked by name from their pages, never inlined; the
@@ -61,13 +76,18 @@ processor from scratch, every single time, badly.
 - The invoice is paper-plain: no logo uploads, no themes, no VAT wizardry.
   A band that needs real accounting software should buy some; this one
   needs a number, a name, and a fee on one page.
+- Chasing stops at three. After the third reminder it is a phone call and
+  a lesson about that venue, not a fourth email; the page marks the
+  invoice "gone quiet" and leaves it to the humans.
 
 ## what good looks like
 
 December. Someone types "how much did we make this year" into the chat and
 Theo answers with a number in under ten seconds, screenshot attached. The
 barn books them again; the gig from last time has the contract attached
-and the note about the A14, and `invoice` produces number 23 before the
-kettle boils. At rehearsal someone claims they know "Superstition"; the
-setlist page has the chart, in the right key, one tap, on the music stand
-before the argument develops. Nobody thanks Theo. The page knows.
+and the note about the A14, and `invoice` makes number 23 and sends it
+before the kettle boils. The barn pays five weeks late — after two polite
+chases Theo never wrote, never sent, and only noticed on the page after
+typing `paid 23`. At rehearsal someone claims they know "Superstition";
+the setlist page has the chart, in the right key, one tap, on the music
+stand before the argument develops. Nobody thanks Theo. The page knows.

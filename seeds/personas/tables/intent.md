@@ -29,6 +29,10 @@ where the receipt went, because expense day is the worst day of her month.
   date, restaurant, amount, and the receipt's `/files/…` link per row —
   deposited into the store and recorded by one `tables.report` event. She
   downloads it once and feeds the corporate tool in one sitting.
+- A weekly timer runs `self run monthend`: when a month has closed with
+  meals in it and no `tables.report` yet, it produces that month's report
+  and emails it to Priya (her own address, configured outside the log),
+  recording the send. Expense day now starts in her inbox, already done.
 
 ## constraints
 
@@ -60,6 +64,7 @@ A client says "somewhere good near the station, nothing loud". Priya opens
 `/tables`, and the third entry has her own note from March: "quiet, corner
 tables, the duck". She books it, it lands, and from the taxi she adds the
 meal — rating, 84 euro, receipt photographed before it dissolves in her
-bag. On the last Friday of the month she runs `expense-report`, downloads
-one CSV, and does a month of expenses in eleven minutes — every receipt one
-click away, none of them in a coat pocket.
+bag. On the first of the month the finished CSV is already in her inbox —
+the timer noticed March had closed before she did — and a month of
+expenses takes eleven minutes, every receipt one click away, none of them
+in a coat pocket.
