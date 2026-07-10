@@ -62,6 +62,10 @@ usage: self [command] [args]
                        receipts, a verbatim slice of this log
   self adopt <seed>    re-grow a shared capability here ("-" reads stdin) — this
                        instance's own compiler re-authors it; foreign bytes never install
+  self export <prefix> <dir>
+                       write a content seed: every <prefix>* event, its files,
+                       and an editable intent — a directory another instance
+                       can grow, dates preserved
   self revise <target> <request>
                        edit an installed local capability with its current script as context
   self retire <target> retire a capability — its script and page leave the
@@ -148,9 +152,12 @@ Compiled capability contract
 
 Files
 
-  Bytes never ride in events. A file enters the store three ways — a browser
+  Bytes never ride in events. A file enters the store four ways — a browser
   form's file input (multipart POST /run/<command>), an @<path> arg to
-  self run, or a seed's files/ dir at grow time — and each deposit writes the
+  self run, a seed's files/ dir at grow time, or a command's own output (the
+  command writes bytes to a scratch path and emits file.stored {name, path};
+  the kernel copies them in, completes the payload, and verifies before
+  appending) — and each deposit writes the
   blob to SELF_HOME/files/<sha256> and appends one file.stored event
   {name, mime, size, sha256}. The command behind the form or run receives the
   sha256 as the arg's value and resolves SELF_HOME/files/<sha256> itself when
@@ -159,6 +166,25 @@ Files
   so a projector shows a file by linking its hash. Blobs are user content:
   rehydrate rebuilds scripts and pages from the log, but files/ must be backed
   up alongside events.jsonl and .secret.
+
+Timers
+
+  A timer.declared event {name, every, command, args} binds an installed
+  command to a cadence; the serving kernel ticks it. every is a Go duration
+  ("24h", "168h"); "off" disables; the latest declaration per name wins;
+  capability.retired {type: "timer", name} retires. Each firing appends
+  timer.fired before the command runs, and a command that errors leaves a
+  timer.failed receipt. The bound command reads the log on stdin like any
+  command run, so it decides what is actually due — the timer is the
+  metronome, the log is the memory.
+
+Effects
+
+  Commands may act on the world (print, mail, call a local device);
+  projectors never may. Every effect leaves a receipt event recording the
+  attempt and the outcome, an effectful command consults the log first so
+  it never repeats what already happened, and secrets stay in the
+  environment or a config file — never in events or scripts.
 
 Declarations cross instance boundaries; runnable code does not. A generated
 script installs only after the local kernel signs a script.compiled receipt with
@@ -182,6 +208,8 @@ func commandHelp(cmd string) (string, bool) {
 		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a brain.\n", true
 	case "share":
 		return "usage: self share <capability>\n\nPrint the capability's declarations and receipts as a JSONL seed.\n", true
+	case "export":
+		return "usage: self export <event-prefix> <dir> [<new-prefix>]\n\nWrite a content seed from this log: every event whose name starts with <event-prefix>, the file.stored metadata and blobs those events reference, and an intent.md stub to edit. Dates are preserved; an optional <new-prefix> renames the events on the way out (the sender-side remap for when two instances share a vocabulary), recorded in the seed's provenance. The receiver grows the directory and their brain decides how the records merge. The export is remembered as a seed.exported event.\n", true
 	case "adopt":
 		return "usage: self adopt <seed.jsonl>\n       self adopt - < seed.jsonl\n\nRecord a shared seed and re-generate its capability locally; foreign code never installs.\n", true
 	case "revise":

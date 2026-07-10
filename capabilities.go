@@ -259,6 +259,20 @@ func runCommand(home, command string, args []string) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A command may deposit files it produced: each emitted file.stored is
+	// realized — bytes copied into the store, payload completed and verified —
+	// before anything is appended, so the log never claims bytes the store
+	// does not hold.
+	for i := range evs {
+		if evs[i].Name != "file.stored" {
+			continue
+		}
+		payload, err := depositCommandFile(home, evs[i].Payload)
+		if err != nil {
+			return nil, err
+		}
+		evs[i].Payload = payload
+	}
 	return evs, ingest(home, evs)
 }
 

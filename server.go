@@ -17,6 +17,7 @@ import (
 func cmdServe(home string) error {
 	refreshSite(home)
 	mux := serveMux(home)
+	go serveTimers(home)
 
 	// Loopback by default: the write path (/run/<command>) has no auth, and
 	// local-first means local. SELF_BIND is the whole bind address, host or
@@ -133,8 +134,18 @@ func serveMux(home string) *http.ServeMux {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		w.Header().Set("Content-Type", blobMime(display, head[:n]))
+		ct := blobMime(display, head[:n])
+		w.Header().Set("Content-Type", ct)
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		// A blob is user content on the instance's own origin — the origin
+		// that also serves the unauthenticated write path. nosniff pins the
+		// declared type, and any type a browser would execute (HTML, SVG,
+		// anything XML-flavored) renders sandboxed: visible, never scripting.
+		// Images, PDFs, and downloads are untouched.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if strings.Contains(ct, "html") || strings.Contains(ct, "xml") {
+			w.Header().Set("Content-Security-Policy", "sandbox")
+		}
 		if display != "" {
 			safe := strings.Map(func(c rune) rune {
 				if c < 32 || c == '"' || c == '\\' {

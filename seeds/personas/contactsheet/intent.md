@@ -7,7 +7,9 @@ Her keepers live in seventeen folders named `final`, `final2`, and
 `FINAL-print`, on two laptops. She does not want a photo manager — she has
 one and never opens it. She wants the fifty photos she is proud of this
 year in one place, tagged in her own words, visible from her phone when
-someone at a dinner says "show me".
+someone at a dinner says "show me". And every January she wants prints of
+the best ones, an errand that currently dies at "which files, and where
+are they".
 
 ## surface
 
@@ -17,12 +19,19 @@ someone at a dinner says "show me".
 - `self run note <sha256-or-recent> <text…>` appends one
   `contactsheet.noted` event: a caption or darkroom note attached to an
   already-kept photo.
+- `self run printorder <tag-or-year>` produces a file: a zip of the
+  matching photos — the original bytes, untouched — plus a plain-text
+  manifest (filename, hash, tags, notes), deposited into the store and
+  recorded by one `contactsheet.order` event listing what went in. Every
+  photo whose notes say "print this" is what a year's order means; a tag
+  order means that tag. One download, straight to the lab.
 - `/contactsheet` renders the wall: every kept photo newest first as
   `<img src="/files/<sha256>/<original-name>">` inside a figure with its
   tags and any notes. Each distinct tag becomes a section anchor at the top
   of the page, so "show me the black-and-whites" is one tap on `#bw`.
 - `contactsheet/roll` renders a plain chronological list — filename, date
-  kept, tags, size — the inventory view, one link down from the wall.
+  kept, tags, size — the inventory view, one link down from the wall, with
+  past print orders listed at the bottom, each linking its zip.
 
 ## constraints
 
@@ -34,21 +43,28 @@ someone at a dinner says "show me".
 - A `contactsheet.noted` event naming a hash no `contactsheet.kept` event
   mentions still renders, grouped under "notes without photos" on the roll —
   a lost event is worse than an untidy page.
+- A print order packs the original bytes exactly — the zip is a container,
+  never a conversion — and its event records precisely which hashes went
+  in, so "what did I send the lab in January" has an answer forever.
 - An empty log renders the wall with the keep form and nothing else — an
   invitation, not an error.
 
 ## anti-goals
 
 - No thumbnails, no resizing, no EXIF parsing. The browser scales images;
-  the original bytes are the only bytes.
+  the original bytes are the only bytes, on the wall and in the zip alike.
 - Not an archive. Ana's raw shoots stay wherever they are; this holds only
   what she chooses to keep, one photo at a time.
 - No albums, no ordering UI. Tags and time are the whole organization.
+- No lab integration, no upload to anyone. The zip lands in her store;
+  where it goes next is her errand, made short.
 
 ## what good looks like
 
 Sunday night, Ana develops a roll, scans it, keeps three frames with tags
 `portra street winter`. At dinner on Thursday she opens `/contactsheet#bw`
-on her phone and hands it over. In January she opens `/contactsheet/roll`,
-sees ninety-one keepers for the year, and orders prints of the ones with a
-note that says "print this".
+on her phone and hands it over. In January she opens the roll, sees
+ninety-one keepers for the year, and runs `printorder 2026`: the eleven
+frames with a "print this" note, original bytes and a manifest, one zip,
+one trip to the lab site. The seventeen `final` folders never find out how
+it ended.
