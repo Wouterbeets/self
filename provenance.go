@@ -14,10 +14,20 @@ import (
 
 func loadSecret(home string) ([]byte, error) {
 	p := filepath.Join(home, ".secret")
-	if data, err := os.ReadFile(p); err == nil {
-		if key, err := hex.DecodeString(strings.TrimSpace(string(data))); err == nil && len(key) > 0 {
-			return key, nil
+	data, err := os.ReadFile(p)
+	if err == nil {
+		key, derr := hex.DecodeString(strings.TrimSpace(string(data)))
+		if derr != nil || len(key) == 0 {
+			// Never rotate over a key that exists but does not decode: every
+			// signed receipt verifies only under the original bytes, so
+			// replacing them would orphan the instance's whole capability
+			// history. Corruption is the user's to repair, loudly.
+			return nil, fmt.Errorf("%s exists but is not a hex key — refusing to replace it (all signed receipts verify only under it); restore it from backup", p)
 		}
+		return key, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read %s: %w", p, err)
 	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
@@ -66,6 +76,34 @@ func verifiedReceipt(secret []byte, payload json.RawMessage) (receipt, bool) {
 		return r, false
 	}
 	return r, hmac.Equal([]byte(sign(secret, r.Type, r.Name, r.Script, r.By)), []byte(r.Sig))
+}
+
+// compiledReceipt returns the verified receipt an event carries, if it is a
+// kernel-signed script.compiled record; anything else in the log is inert data.
+func compiledReceipt(secret []byte, e Event) (receipt, bool) {
+	if e.Name != "script.compiled" {
+		return receipt{}, false
+	}
+	return verifiedReceipt(secret, e.Payload)
+}
+
+// forEachVerifiedReceipt replays the log's signed receipts in order. An
+// unreadable log or secret yields no receipts, like every other replay of an
+// empty instance.
+func forEachVerifiedReceipt(home string, fn func(e Event, r receipt)) {
+	events, err := readEvents(home)
+	if err != nil {
+		return
+	}
+	secret, err := loadSecret(home)
+	if err != nil {
+		return
+	}
+	for _, e := range events {
+		if r, ok := compiledReceipt(secret, e); ok {
+			fn(e, r)
+		}
+	}
 }
 
 func scriptPath(home, typ, name string) (string, error) {

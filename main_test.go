@@ -1407,8 +1407,8 @@ func TestLastSeqScansOnlyTheTail(t *testing.T) {
 	if after.Seq != 5 {
 		t.Fatalf("seq after oversized line = %d, want 5", after.Seq)
 	}
-	if n, err := lastSeq(home); n != 5 || err != nil {
-		t.Fatalf("lastSeq = %d, %v", n, err)
+	if n, torn, err := lastSeq(home); n != 5 || torn != -1 || err != nil {
+		t.Fatalf("lastSeq = %d, torn %d, %v", n, torn, err)
 	}
 }
 
@@ -1998,5 +1998,149 @@ func TestExportPlantsElsewhere(t *testing.T) {
 	}
 	if data, err := os.ReadFile(blobPath(receiver, hash)); err != nil || string(data) != "ticket stub bytes" {
 		t.Fatalf("receiver blob = %q, %v", data, err)
+	}
+}
+
+// TestTornFinalLogLineIsRepaired pins crash recovery: a partial final line —
+// a crashed append's torn write, never an acknowledged event — must not brick
+// the instance. Replays drop it with a warning; the next append truncates it
+// and the log returns to one consistent record.
+func TestTornFinalLogLine(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"a", "b"} {
+		e := newEvent(name, json.RawMessage(`{}`))
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := os.OpenFile(logPath(home), os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"id":"dead","seq":3,"name":"torn`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatalf("a torn final line must not fail replay: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2 — the torn line is not an event", len(events))
+	}
+
+	e := newEvent("c", json.RawMessage(`{}`))
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatalf("append must repair the torn tail: %v", err)
+	}
+	if e.Seq != 3 {
+		t.Fatalf("seq after repair = %d, want 3", e.Seq)
+	}
+	events, err = readEvents(home)
+	if err != nil || len(events) != 3 {
+		t.Fatalf("after repair: %d events, %v — want 3, nil", len(events), err)
+	}
+	data, _ := os.ReadFile(logPath(home))
+	if strings.Contains(string(data), "torn") {
+		t.Fatal("the torn bytes must be gone after repair")
+	}
+}
+
+// TestMalformedMidLogLineIsFatal pins the flip side of torn-tail tolerance:
+// a line that fails to parse anywhere BEFORE the end is real corruption, and
+// replay must refuse rather than silently skip history.
+func TestMalformedMidLogLineIsFatal(t *testing.T) {
+	home := t.TempDir()
+	e := newEvent("a", json.RawMessage(`{}`))
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.OpenFile(logPath(home), os.O_WRONLY|os.O_APPEND, 0644)
+	f.WriteString("not json at all\n")
+	f.Close()
+	e2 := newEvent("b", json.RawMessage(`{}`))
+	if err := appendEvent(home, &e2); err == nil {
+		// the malformed line was final at append time, so this repairs it —
+		// recreate the mid-log shape instead
+		f, _ := os.OpenFile(logPath(home), os.O_WRONLY|os.O_APPEND, 0644)
+		f.WriteString("not json either\n")
+		f.Close()
+		line, _ := json.Marshal(newEvent("c", json.RawMessage(`{}`)))
+		f, _ = os.OpenFile(logPath(home), os.O_WRONLY|os.O_APPEND, 0644)
+		f.WriteString(string(line) + "\n")
+		f.Close()
+	}
+	if _, err := readEvents(home); err == nil {
+		t.Fatal("a malformed line mid-log must fail replay")
+	}
+}
+
+// TestOversizedEventIsRefusedAtAppend pins the shared line limit: an event too
+// large for a replay to scan back must be refused before it reaches disk, so
+// one oversized record can never poison every future read.
+func TestOversizedEventIsRefused(t *testing.T) {
+	home := t.TempDir()
+	big := newEvent("blob", json.RawMessage(`{"x":"`+strings.Repeat("y", maxEventLine)+`"}`))
+	if err := appendEvent(home, &big); err == nil {
+		t.Fatal("an event larger than maxEventLine must be refused")
+	}
+	if _, err := readEvents(home); err != nil {
+		t.Fatalf("the log must stay readable after a refused append: %v", err)
+	}
+	ok := newEvent("tick", json.RawMessage(`{}`))
+	if err := appendEvent(home, &ok); err != nil || ok.Seq != 1 {
+		t.Fatalf("append after refusal: seq %d, %v", ok.Seq, err)
+	}
+}
+
+// TestCorruptSecretRefusesRotation pins key safety: a .secret that exists but
+// does not decode must never be silently replaced — every signed receipt
+// verifies only under the original key, so rotation would orphan the
+// instance's whole capability history (and rehydrate would then wipe it).
+func TestCorruptSecretRefusesRotation(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".secret"), []byte("not hex!!"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadSecret(home); err == nil {
+		t.Fatal("a corrupt .secret must be an error, not a rotation")
+	}
+	if data, _ := os.ReadFile(filepath.Join(home, ".secret")); string(data) != "not hex!!" {
+		t.Fatal("the corrupt key bytes must be left untouched for repair")
+	}
+	e := newEvent("a", json.RawMessage(`{}`))
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	if err := rehydrate(home); err == nil {
+		t.Fatal("rehydrate must refuse to run against a corrupt key")
+	}
+}
+
+// TestCommandOversizedOutputFailsInsteadOfHanging pins the pipe scanner's
+// failure mode: a command emitting a line the scanner cannot hold must fail
+// the run — never hang the kernel on a full pipe, never silently drop events.
+func TestCommandOversizedOutputFails(t *testing.T) {
+	home := t.TempDir()
+	bin, _ := scriptPath(home, "command", "flood")
+	os.MkdirAll(filepath.Dir(bin), 0755)
+	script := "#!/bin/sh\nprintf '{\"name\":\"ok\",\"payload\":{}}\\n'\nhead -c " +
+		"9000000 /dev/zero | tr '\\0' 'x'\nprintf '\\n'\n"
+	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := pipeProcess(home, bin, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("an oversized output line must fail the run")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("pipeProcess hung on an oversized output line")
 	}
 }

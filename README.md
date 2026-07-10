@@ -175,18 +175,26 @@ self show <name>     render a projection to stdout
 self rehydrate       rebuild capabilities/ + site/ from the log (offline)
 self share <cap>     print a capability's declarations + receipts as JSONL to stdout
 self adopt <seed>    re-generate a shared capability locally ("-" reads stdin)
-self export <prefix> <dir>
+self export <prefix> <dir> [<new-prefix>]
                      write a content seed: every <prefix>* event, the files
                      they reference, and an editable intent — another
-                     instance grows the directory, dates preserved
+                     instance grows the directory, dates preserved; an
+                     optional <new-prefix> renames the events on the way
+                     out, recorded in the seed's provenance
+self revise <t>/<n> "<request>"
+                     recompile an installed capability with its current
+                     script as context (needs a brain)
 self retire <t>/<n>  retire a capability: script + page leave the surface, the
                      log keeps every event, re-declaring revives it
+self protocol        print the brain + capability wire protocol
 ```
 
 Server routes: `/` (instance self-description), `/<projection>`,
 `/run/<command>` (plain HTML forms; `multipart/form-data` file inputs are
 stored and passed as hashes), `/files/<sha256>[/<name>]` (stored files),
-`/events` (raw log). The server binds
+`/events` (raw log), `/orchestration_core` (the kernel's orchestration
+source, plain text, so an agent can read how the instance runs itself).
+The server binds
 `127.0.0.1:7777` by default; `SELF_BIND` is the whole bind address, host or
 `host:port` — set `SELF_BIND=0.0.0.0` to expose it (see
 [Limits](#limits-and-threat-model)).
@@ -358,18 +366,25 @@ SELF_THEME        default page design: grove | micro | paper | spec
 
 ## Repository layout
 
-- `main.go` — the entire runtime: log, signed install, pipe orchestration, the
-  brain seam, HTTP server. One file by design.
+- `*.go` — the runtime kernel: one package, split by concern. `main.go` is
+  the CLI dispatch; `eventlog.go` the append-only log; `capabilities.go`
+  compile + signed install; `orchestration_core.go` ingestion and the pipe
+  orchestration; `brain.go` the brain seam; `projections.go`, `files.go`,
+  `timers.go` the three derived surfaces; `server.go` HTTP; `shell.go` +
+  `shell/` + `themes/` the injected shell and its designs; `seed.go` +
+  `provenance.go` share/adopt/export; `rehydrate.go` offline reconstruction.
 - `main_test.go` — the pinned invariants: log semantics, offline runtime
   generation, the forged-receipt gate, receipt provenance, share/adopt
   independence, the pluggable brain, and byte-stable reconstruction.
 - `examples/` — brains that plug in through `SELF_BRAIN`. `brain-stub` is the
   deterministic offline brain the tests and `demo.sh` use (no LLM, no
   network); `brain-opencode` is a working tool-capable brain (it delegates to
-  `opencode run`, which can inspect `SELF_HOME`); `brain-openai` is a reference
-  adapter that illustrates the contract's wire shape but is incomplete by spec
-  (no tool loop of its own). Not part of the kernel.
-- `demo.sh` — the offline, no-brain walkthrough of the loop.
+  `opencode run`, which can inspect `SELF_HOME`); `brain-grok` adapts the
+  Grok Build CLI the same way; `brain-openai` is a reference adapter that
+  illustrates the contract's wire shape but is incomplete by spec (no tool
+  loop of its own). Not part of the kernel.
+- `demo.sh` — the offline, no-LLM walkthrough of the loop (plugs
+  `examples/brain-stub`).
 - `seeds/notes` / `seeds/journal` — small examples: one command, one projection.
 - `seeds/memory` — durable memory for a stateless brain: `remember` writes
   facts to the log; a cold brain orients from `/memory`. The in-log answer to
@@ -382,6 +397,9 @@ SELF_THEME        default page design: grove | micro | paper | spec
   becomes a room, derived from nothing but the hash of its own id. `walk`
   your instance's history; every new event, from any capability, builds
   another chamber, and `rehydrate` rebuilds the identical labyrinth.
+- `seeds/personas` — thirteen seeds written for people who will never open a
+  terminal: what the intents look like outside this repo's own walls (see
+  its README).
 
 ## Limits and threat model
 
@@ -411,9 +429,18 @@ These are current properties, stated plainly, not goals to aspire to.
 - **The log is unbounded.** Every compile stores its script bytes, and every
   projection replays the whole log (O(history)). Snapshotting is not built in; a
   snapshot can itself be modeled as a seed and left to the user.
-- **One writer at a time.** Sequence numbers are assigned by reading the log and
-  adding one, without locking. Two writers at once (say a server POST and a CLI
-  `run`) can race. Route writes through a single process.
+- **One writer at a time.** Sequence numbers are assigned by reading the log
+  and adding one, under an advisory lock that serializes appends but not the
+  read-render cycles around them. Two writers at once (say a server POST and
+  a CLI `run`) can still interleave; a replay warns when it sees the result
+  (a duplicate or non-monotonic seq). Within the serving process, page
+  freshness is an mtime check, so concurrent writes can briefly serve a page
+  one event stale — it heals on the next matching append. Route writes
+  through a single process.
+- **Stored files are verified on write, not on read.** Every deposit is
+  hashed and checked before its `file.stored` event appends, but a blob that
+  rots on disk afterwards serves as-is under its old hash. Back up `files/`;
+  a scrub is a seed away.
 - **The server has no authentication** on `/run`. It binds loopback by default
   for this reason; only expose it with `SELF_BIND` on a network you trust.
 - **Cross-instance identity is asserted, not proven,** because HMAC keys are

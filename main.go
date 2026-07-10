@@ -11,7 +11,7 @@
 // receipts ever install, so `self rehydrate` rebuilds the whole instance from
 // the log alone — an instance is just events.jsonl + .secret.
 //
-// This file is the whole kernel.
+// The kernel is one package, split by concern; this file is the CLI dispatch.
 package main
 
 import (

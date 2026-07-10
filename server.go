@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// The orchestration source travels in the binary so /orchestration_core
+// answers from any install, not just a dev checkout.
+//
+//go:embed orchestration_core.go
+var orchestrationCoreSource []byte
 
 // cmdServe serves the instance: every page provably current against the log,
 // every affordance a plain HTML form. The injected shell layers feel on top —
@@ -23,7 +30,10 @@ func cmdServe(home string) error {
 	// local-first means local. SELF_BIND is the whole bind address, host or
 	// host:port (default 127.0.0.1:7777) — 0.0.0.0 opens it to the network
 	// for anyone who knowingly wants that.
-	addr := envOr("SELF_BIND", "127.0.0.1")
+	addr := os.Getenv("SELF_BIND")
+	if addr == "" {
+		addr = "127.0.0.1"
+	}
 	if !strings.Contains(addr, ":") {
 		addr += ":7777"
 	}
@@ -35,6 +45,22 @@ func cmdServe(home string) error {
 	fmt.Fprintf(os.Stderr, "  /events                the raw event log\n")
 	fmt.Fprintf(os.Stderr, "  /orchestration_core    how self orchestrates itself (for agents)\n")
 	return http.ListenAndServe(addr, mux)
+}
+
+// readBounded reads a request body (or form field) whole, refusing anything
+// past the log's own line limit and failing loudly on a broken read — a
+// client that disconnected mid-body must never run a command with a silently
+// truncated argument. File uploads are exempt: they stream to the blob store,
+// never through memory.
+func readBounded(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxEventLine+1))
+	if err != nil {
+		return nil, fmt.Errorf("read request body: %w", err)
+	}
+	if len(data) > maxEventLine {
+		return nil, fmt.Errorf("request body exceeds %d bytes", maxEventLine)
+	}
+	return data, nil
 }
 
 // serveMux is the instance's whole HTTP surface, separable from the listener
@@ -59,9 +85,7 @@ func serveMux(home string) *http.ServeMux {
 			}
 		}
 		if name == "kernel" {
-			renderKernelHTML(home)
-			renderBriefFile(home)
-			page, err := os.ReadFile(filepath.Join(home, "site", "kernel.html"))
+			page, err := kernelPage(home)
 			if err != nil {
 				http.Error(w, err.Error(), 500)
 				return
@@ -158,28 +182,12 @@ func serveMux(home string) *http.ServeMux {
 		http.ServeContent(w, r, "", st.ModTime(), f)
 	})
 
-	// GET /orchestration_core → the orchestration_core.go source
-	// Allows the brain (or any agent) to understand how the system orchestrates itself
+	// GET /orchestration_core → the orchestration_core.go source, embedded at
+	// build time, so the brain (or any agent) can read how the system
+	// orchestrates itself.
 	mux.HandleFunc("/orchestration_core", func(w http.ResponseWriter, r *http.Request) {
-		source, err := os.ReadFile(filepath.Join(os.Getenv("SELF_GOPATH"), "orchestration_core.go"))
-		if err != nil {
-			// Fallback: try current directory or common locations
-			for _, p := range []string{
-				"orchestration_core.go",
-				filepath.Join(os.Getenv("SELF_HOME"), "orchestration_core.go"),
-			} {
-				if s, err := os.ReadFile(p); err == nil {
-					source = s
-					break
-				}
-			}
-		}
-		if source == nil {
-			http.Error(w, "orchestration_core.go not found", 404)
-			return
-		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write(source)
+		w.Write(orchestrationCoreSource)
 	})
 
 	// POST /run/<command> → run a capability from the browser. A form's field
@@ -232,7 +240,11 @@ func serveMux(home string) *http.ServeMux {
 					deposits = append(deposits, e)
 					args = append(args, hash)
 				} else {
-					data, _ := io.ReadAll(part)
+					data, err := readBounded(part)
+					if err != nil {
+						http.Error(w, err.Error(), 400)
+						return
+					}
 					args = append(args, string(data))
 				}
 			}
@@ -243,7 +255,11 @@ func serveMux(home string) *http.ServeMux {
 				}
 			}
 		case strings.HasPrefix(ct, "application/x-www-form-urlencoded"):
-			body, _ := io.ReadAll(r.Body)
+			body, err := readBounded(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
 			for _, pair := range strings.Split(string(body), "&") {
 				if pair == "" {
 					continue
@@ -256,7 +272,11 @@ func serveMux(home string) *http.ServeMux {
 				args = append(args, v)
 			}
 		default:
-			body, _ := io.ReadAll(r.Body)
+			body, err := readBounded(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
 			if msg := strings.TrimSpace(string(body)); msg != "" {
 				args = []string{msg}
 			}

@@ -223,15 +223,6 @@ func depositSeedFile(home, seedDir string, payload json.RawMessage) (json.RawMes
 		return nil, fmt.Errorf("seed file %q: %w", p.Name, err)
 	}
 	defer f.Close()
-	hash, size, head, err := storeBlob(home, f)
-	if err != nil {
-		return nil, err
-	}
-	if p.Sha256 != "" && p.Sha256 != hash {
-		return nil, fmt.Errorf("seed file %q hashes to %s, not the declared %s", p.Name, hash, p.Sha256)
-	}
-	full, _ := json.Marshal(map[string]any{
-		"name": base, "mime": blobMime(base, head), "size": size, "sha256": hash,
-	})
-	return full, nil
+	_, full, err := realizeBlob(home, base, p.Sha256, f)
+	return full, err
 }

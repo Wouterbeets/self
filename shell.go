@@ -25,16 +25,11 @@ func renderKernelHTML(home string) {
 	// grownBy is provenance: the latest kernel-signed receipt's By per capability.
 	// Verified, not merely read — an unsigned or forged by-line never renders.
 	grownBy := map[string]string{}
-	if secret, _ := loadSecret(home); secret != nil {
-		for _, e := range events {
-			if e.Name != "script.compiled" {
-				continue
-			}
-			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.By != "" {
-				grownBy[r.Type+"/"+r.Name] = r.By
-			}
+	forEachVerifiedReceipt(home, func(_ Event, r receipt) {
+		if r.By != "" {
+			grownBy[r.Type+"/"+r.Name] = r.By
 		}
-	}
+	})
 
 	esc := html.EscapeString
 	var b strings.Builder
@@ -92,9 +87,16 @@ func renderKernelHTML(home string) {
 	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it. <code>file.stored</code> records a file entering my content-addressed store (an upload, an <code>@path</code> arg, a seed's <code>files/</code>): the bytes live at <code>files/&lt;sha256&gt;</code> and serve at <code>/files/&lt;sha256&gt;</code>; the log carries only the metadata (a command may also deposit a file it produced: <code>file.stored {name, path}</code>, completed and verified by me before it appends). <code>timer.declared</code> binds an installed command to a cadence while I serve — latest per name wins, <code>every: \"off\"</code> disables — and every firing appends <code>timer.fired</code> before the command runs, <code>timer.failed</code> if it errors: what I do on my own schedule is in the log like everything else.</p>\n")
 	b.WriteString("</body></html>\n")
 
-	siteDir := filepath.Join(home, "site")
-	os.MkdirAll(siteDir, 0755)
-	os.WriteFile(filepath.Join(siteDir, "kernel.html"), []byte(b.String()), 0644)
+	writeFileAtomic(filepath.Join(home, "site", "kernel.html"), []byte(b.String()))
+}
+
+// kernelPage renders the kernel's self-description (and the brief beside it)
+// fresh from the log and returns the page bytes — the one path behind both
+// `self show kernel` and GET /.
+func kernelPage(home string) ([]byte, error) {
+	renderKernelHTML(home)
+	renderBriefFile(home)
+	return os.ReadFile(filepath.Join(home, "site", "kernel.html"))
 }
 
 // ─────────────────────────────── the surface ────────────────────────────────
@@ -163,11 +165,9 @@ func loadThemes() (map[string]theme, []string) {
 	return m, append([]string{defaultTheme}, extra...)
 }
 
-// themeLabel is the picker's display name for a theme id: its capitalized form.
+// themeLabel is the picker's display name for a theme id: its capitalized
+// form. Callers guarantee a non-empty name (loadThemes skips empty ids).
 func themeLabel(name string) string {
-	if name == "" {
-		return name
-	}
 	return strings.ToUpper(name[:1]) + name[1:]
 }
 

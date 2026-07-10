@@ -50,10 +50,7 @@ func declaredTimers(events []Event) map[string]timerDecl {
 			}
 			timers[d.Name] = d
 		case "capability.retired":
-			var r struct {
-				Type string `json:"type"`
-				Name string `json:"name"`
-			}
+			var r retirement
 			if json.Unmarshal(e.Payload, &r) == nil && r.Type == "timer" {
 				delete(timers, r.Name)
 			}
@@ -87,6 +84,9 @@ func timerEpochs(events []Event) map[string]time.Time {
 func tickTimers(home string, now time.Time) {
 	events, err := readEvents(home)
 	if err != nil {
+		// Never silently: an unreadable log means NO timer will fire, and
+		// that must be observable, not a quiet stop.
+		fmt.Fprintf(os.Stderr, "self: timers idle — cannot read the log: %s\n", err)
 		return
 	}
 	epochs := timerEpochs(events)

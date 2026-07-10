@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,14 +69,6 @@ WHAT YOU ARE GIVEN — your stdin is an orientation brief: where you are, what c
 
 // ────────────────────────────── the compiler ────────────────────────────────
 
-func (c *llm) compileCommand(d commandDecl) (string, error) {
-	return compileViaBrain(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d))
-}
-
-func (c *llm) compileProjector(d projectorDecl) (string, error) {
-	return compileViaBrain(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d))
-}
-
 // compileViaBrain hands a compile ask to the plugged brain through the same
 // seam as every other ask. The declaration (its optional implementation
 // reference included) rides in the prompt; an orientation brief rides on stdin
@@ -117,25 +110,14 @@ Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 // traced compiles show a brain spends its first minute rediscovering the
 // instance's idiom from disk; handing it one exemplar removes that phase.
 func exemplarScript(home, typ, name string) (exName, exScript string) {
-	events, err := readEvents(home)
-	if err != nil {
-		return "", ""
-	}
-	secret, err := loadSecret(home)
-	if err != nil {
-		return "", ""
-	}
-	for _, e := range events {
-		if e.Name != "script.compiled" {
-			continue
-		}
-		if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Type == typ && r.Name != name {
+	forEachVerifiedReceipt(home, func(_ Event, r receipt) {
+		if r.Type == typ && r.Name != name {
 			exName, exScript = r.Name, r.Script
 		}
-	}
-	const cap = 4096
-	if len(exScript) > cap {
-		exScript = exScript[:cap] + "\n… (truncated)"
+	})
+	const maxExemplar = 4096
+	if len(exScript) > maxExemplar {
+		exScript = exScript[:maxExemplar] + "\n… (truncated)"
 	}
 	return exName, exScript
 }
@@ -158,10 +140,6 @@ func compileViaBrain(home, intent, reasoning, typ, name, decl string) (string, e
 // named, and a process behind it honors the one brain contract.
 func brainExe() string {
 	return strings.TrimSpace(os.Getenv("SELF_BRAIN"))
-}
-
-func brainEnv(home, kind string) []string {
-	return append(os.Environ(), "SELF_HOME="+home, "SELF_ASK="+kind)
 }
 
 // pipeBrain is the ONE seam through which the kernel asks for intelligence —
@@ -187,10 +165,10 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	if exe == "" {
 		return nil, fmt.Errorf("no brain is plugged in — %s", brainHint)
 	}
-	brief := freshBrief(home)
+	brief := renderBriefFile(home)
 	bin, argv := brainCommand(exe, prompt)
 	cmd := exec.Command(bin, argv...)
-	cmd.Env = brainEnv(home, kind)
+	cmd.Env = append(os.Environ(), "SELF_HOME="+home, "SELF_ASK="+kind)
 	cmd.Dir = home
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -208,7 +186,7 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 	res := &brainResult{Events: []map[string]any{}}
 	var prose []string
 	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 1024*1024), 8*1024*1024)
+	sc.Buffer(make([]byte, 64*1024), maxEventLine)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
@@ -240,6 +218,12 @@ func pipeBrain(home, kind, prompt string) (*brainResult, error) {
 		default:
 			res.Events = append(res.Events, map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)})
 		}
+	}
+	if serr := sc.Err(); serr != nil {
+		// Drain so the brain can exit instead of blocking on a full pipe.
+		io.Copy(io.Discard, stdout)
+		cmd.Wait()
+		return nil, fmt.Errorf("brain %s output: %w", filepath.Base(bin), serr)
 	}
 	if err := cmd.Wait(); err != nil {
 		return nil, fmt.Errorf("brain %s exited: %w", filepath.Base(bin), err)

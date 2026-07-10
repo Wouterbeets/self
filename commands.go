@@ -51,10 +51,7 @@ func latestCapabilitySource(home, typ, name string) (decl json.RawMessage, scrip
 			decl = e.Payload
 			continue
 		}
-		if e.Name != "script.compiled" {
-			continue
-		}
-		if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Type == typ && r.Name == name {
+		if r, ok := compiledReceipt(secret, e); ok && r.Type == typ && r.Name == name {
 			script = r.Script
 			receiptID = e.ID
 		}
@@ -69,23 +66,12 @@ func latestCapabilitySource(home, typ, name string) (decl json.RawMessage, scrip
 }
 
 func receiptCount(home, typ, name string) int {
-	secret, err := loadSecret(home)
-	if err != nil {
-		return 0
-	}
-	events, err := readEvents(home)
-	if err != nil {
-		return 0
-	}
 	n := 0
-	for _, e := range events {
-		if e.Name != "script.compiled" {
-			continue
-		}
-		if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Type == typ && r.Name == name {
+	forEachVerifiedReceipt(home, func(_ Event, r receipt) {
+		if r.Type == typ && r.Name == name {
 			n++
 		}
-	}
+	})
 	return n
 }
 
@@ -199,7 +185,7 @@ func cmdThink(home, prompt string) error {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(map[string]any{"response": res.Response, "events": res.Events, "declarations": res.Events})
+	return enc.Encode(map[string]any{"response": res.Response, "declarations": res.Events})
 }
 
 // thinkPrompt wraps a think ask with the answer contract. A think is
@@ -293,9 +279,7 @@ func cmdRun(home, command string, args []string) error {
 
 func cmdShow(home, name string) error {
 	if name == "kernel" {
-		renderKernelHTML(home)
-		renderBriefFile(home)
-		page, err := os.ReadFile(filepath.Join(home, "site", "kernel.html"))
+		page, err := kernelPage(home)
 		if err != nil {
 			return err
 		}
@@ -415,10 +399,8 @@ func cmdShare(home, name string) error {
 	for _, e := range events {
 		if _, n := declName(e); n == name {
 			seed, hasDecl = append(seed, e), true
-		} else if e.Name == "script.compiled" {
-			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Name == name {
-				seed = append(seed, e)
-			}
+		} else if r, ok := compiledReceipt(secret, e); ok && r.Name == name {
+			seed = append(seed, e)
 		}
 	}
 	if !hasDecl {

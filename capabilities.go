@@ -174,29 +174,17 @@ func storedFileCount(home string) int {
 	return n
 }
 
-// renderBriefFile writes the orientation brief to SELF_HOME/site/brief.md,
-// the kernel-resident surface a brain reads. Called alongside renderKernelHTML
-// whenever the log changes, and re-run immediately before every brain ask (see
-// freshBrief) so a brain never reads stale orientation. Served verbatim as
-// text/plain like any other .md file under site/.
-func renderBriefFile(home string) {
-	siteDir := filepath.Join(home, "site")
-	os.MkdirAll(siteDir, 0755)
-	os.WriteFile(filepath.Join(siteDir, "brief.md"), []byte(stateBrief(home)), 0644)
-}
-
-// freshBrief writes the orientation brief to disk and returns the exact bytes
-// the kernel just wrote. Used by pipeBrain so the brain is always fed the
-// current state of the instance — never a cached file that could grow stale if
-// the log changed outside the normal refresh path (e.g. a CLI `run` between a
-// serve request and a brain call). The disk is the source; the brain can read
-// the same file itself to explore. Write then read back would be redundant —
-// stateBrief is deterministic, so the bytes written are the bytes returned.
-func freshBrief(home string) string {
+// renderBriefFile writes the orientation brief to SELF_HOME/site/brief.md —
+// the kernel-resident surface a brain reads — and returns the exact bytes it
+// wrote (stateBrief is deterministic, so the bytes written are the bytes
+// returned). Called whenever the log changes, and again immediately before
+// every brain ask, so a brain never reads stale orientation — never a cached
+// file that could drift if the log changed outside the normal refresh path
+// (e.g. a CLI `run` between a serve request and a brain call). Served
+// verbatim as text/plain like any other .md file under site/.
+func renderBriefFile(home string) string {
 	brief := stateBrief(home)
-	siteDir := filepath.Join(home, "site")
-	os.MkdirAll(siteDir, 0755)
-	os.WriteFile(filepath.Join(siteDir, "brief.md"), []byte(brief), 0644)
+	writeFileAtomic(filepath.Join(home, "site", "brief.md"), []byte(brief))
 	return brief
 }
 
@@ -225,8 +213,9 @@ func pipeProcess(home, bin string, argv []string) ([]Event, error) {
 	feedEvents(stdin, current)
 
 	var out []Event
+	var scanErr error
 	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+	sc.Buffer(make([]byte, 64*1024), maxEventLine)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
@@ -237,12 +226,27 @@ func pipeProcess(home, bin string, argv []string) ([]Event, error) {
 			Payload json.RawMessage `json:"payload"`
 		}
 		if err := json.Unmarshal([]byte(line), &partial); err != nil {
-			return nil, fmt.Errorf("%s output parse error: %w", filepath.Base(bin), err)
+			scanErr = fmt.Errorf("%s output parse error: %w", filepath.Base(bin), err)
+			break
 		}
 		if partial.Name == "" {
-			return nil, fmt.Errorf("%s output missing event name: %s", filepath.Base(bin), line)
+			scanErr = fmt.Errorf("%s output missing event name: %s", filepath.Base(bin), line)
+			break
 		}
 		out = append(out, newEvent(partial.Name, partial.Payload))
+	}
+	if scanErr == nil && sc.Err() != nil {
+		// An unscannable line (usually over maxEventLine) must fail the run:
+		// scanning past it would silently drop events, and this is the system
+		// whose motto is "what is not in the log did not happen".
+		scanErr = fmt.Errorf("%s output: %w", filepath.Base(bin), sc.Err())
+	}
+	// On any failure, drain the rest of stdout so the child can exit — a
+	// stopped scanner otherwise leaves it blocked on a full pipe forever.
+	if scanErr != nil {
+		io.Copy(io.Discard, stdout)
+		cmd.Wait()
+		return nil, scanErr
 	}
 	if err := cmd.Wait(); err != nil {
 		return nil, fmt.Errorf("%s exited: %w", filepath.Base(bin), err)

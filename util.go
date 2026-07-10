@@ -54,7 +54,7 @@ usage: self [command] [args]
   self                 rehydrate the instance from the log, then serve it (the default)
   self grow <seed>     grow a seed's intent into capabilities (needs a brain)
   self run <cmd> ...   run a capability — append events, refresh projections
-  self think "..."     ask the brain; returns {response, events} JSON
+  self think "..."     ask the brain; returns {response, declarations} JSON
   self heartbeat       one self-improvement cycle (the brain reflects & grows)
   self show <name>     render a projection to stdout
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
@@ -91,6 +91,8 @@ environment:
                     (no tool loop).
   SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
                     (default: the brain executable)
+  SELF_BIND         bind address when serving, host or host:port
+                    (default 127.0.0.1:7777; set 0.0.0.0 to expose)
   SELF_THEME        default page design when serving: grove | micro | paper |
                     spec (default grove); a ?theme= link or the on-page picker
                     overrides it per viewer. Presentation only — never logged.
@@ -199,7 +201,7 @@ func commandHelp(cmd string) (string, bool) {
 	case "run":
 		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then the projections consuming them re-render. An arg spelled @<path> deposits that file into the store first (files/<sha256> + a file.stored event) and the command receives its sha256.\n", true
 	case "think":
-		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, events} JSON and appends nothing.\n", true
+		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, declarations} JSON and appends nothing.\n", true
 	case "heartbeat":
 		return "usage: self heartbeat\n\nAppend a heartbeat event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
 	case "show":
@@ -229,13 +231,6 @@ func wantsHelp(args []string) bool {
 		}
 	}
 	return false
-}
-
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }
 
 func fileExists(p string) bool {
