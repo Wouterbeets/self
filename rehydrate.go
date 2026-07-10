@@ -26,7 +26,7 @@ func rehydrate(home string) error {
 	for _, e := range events {
 		switch e.Name {
 		case "script.compiled":
-			r, ok := verifiedReceipt(secret, e.Payload)
+			r, ok := compiledReceipt(secret, e)
 			if !ok {
 				continue
 			}

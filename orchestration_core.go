@@ -13,12 +13,20 @@ import (
 // re-running any of them is always correct; skipping one whose consumed events
 // did not grow is the same page for free.
 func ingest(home string, evs []Event) error {
+	return ingestWith(home, evs, "")
+}
+
+// ingestWith is ingest carrying the reasoning that accompanies the events —
+// a heartbeat brain's stated plan — woven into any compile they trigger, so
+// no piece is authored in a dark room.
+func ingestWith(home string, evs []Event, reasoning string) error {
 	for i := range evs {
 		if err := appendEvent(home, &evs[i]); err != nil {
 			return err
 		}
 	}
 	c := newLLM(home)
+	c.reasoning = reasoning
 	if n := compileDeclarations(c, home, evs); n > 0 {
 		fmt.Fprintf(os.Stderr, "self: self-improved — %d capabilit(ies) compiled\n", n)
 	}
@@ -47,7 +55,7 @@ func compileDeclarations(c *llm, home string, evs []Event) int {
 			}
 			typ, name = "command", d.Name
 			fmt.Fprintf(os.Stderr, "self: compiling command %q…\n", name)
-			script, err = c.compileCommand(d)
+			script, err = compileViaBrain(c.home, c.intent, c.reasoning, typ, name, jsonRepr(d))
 		case "projector.declared":
 			var d projectorDecl
 			if json.Unmarshal(e.Payload, &d) != nil || d.Name == "" {
@@ -55,7 +63,7 @@ func compileDeclarations(c *llm, home string, evs []Event) int {
 			}
 			typ, name = "projector", d.Name
 			fmt.Fprintf(os.Stderr, "self: compiling projector %q…\n", name)
-			script, err = c.compileProjector(d)
+			script, err = compileViaBrain(c.home, c.intent, c.reasoning, typ, name, jsonRepr(d))
 		default:
 			continue
 		}
@@ -110,8 +118,12 @@ type brainResult struct {
 	Script   string // a compile ask's answer, from a script.authored event
 }
 
-// applyEvents appends events the brain returned and runs any capability
-// declarations among them through the strange loop.
+// applyEvents converts the events a brain returned into log events and runs
+// them through the same ingest as every other producer — the brain's stated
+// reasoning woven into any compile they trigger. A file.stored among them is
+// realized first (bytes copied into the store, payload completed and
+// verified), exactly as a command's deposits are: the log never claims bytes
+// the store does not hold, whoever emitted the claim.
 func applyEvents(home string, res *brainResult) {
 	var evs []Event
 	for _, d := range res.Events {
@@ -120,21 +132,21 @@ func applyEvents(home string, res *brainResult) {
 		if name == "" || string(payload) == "null" {
 			continue
 		}
-		e := newEvent(name, payload)
-		if err := appendEvent(home, &e); err != nil {
-			fmt.Fprintf(os.Stderr, "self: append brain event: %s\n", err)
-			return
+		e := newEvent(name, json.RawMessage(payload))
+		if name == "file.stored" {
+			full, err := depositCommandFile(home, e.Payload)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "self: brain file.stored: %s\n", err)
+				continue
+			}
+			e.Payload = full
 		}
 		evs = append(evs, e)
 	}
-	if len(evs) > 0 {
-		c := newLLM(home)
-		c.reasoning = res.Response
-		n := compileDeclarations(c, home, evs)
-		fmt.Fprintf(os.Stderr, "self: grew %d capabilit(ies)\n", n)
-		if r := applyRetirements(home, evs); r > 0 {
-			fmt.Fprintf(os.Stderr, "self: retired %d capabilit(ies)\n", r)
-		}
-		refreshSite(home)
+	if len(evs) == 0 {
+		return
+	}
+	if err := ingestWith(home, evs, res.Response); err != nil {
+		fmt.Fprintf(os.Stderr, "self: apply brain events: %s\n", err)
 	}
 }

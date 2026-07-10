@@ -62,6 +62,11 @@ func storeBlob(home string, r io.Reader) (hash string, size int64, head []byte, 
 	defer os.Remove(tmp.Name())
 	h := sha256.New()
 	size, err = io.Copy(io.MultiWriter(h, tmp, headWriter{&head}), r)
+	if err == nil {
+		// Sync before the rename publishes the content address: a blob is
+		// immutable and cached forever, so it must never be a short file.
+		err = tmp.Sync()
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
@@ -100,6 +105,27 @@ func blobMime(name string, head []byte) string {
 	return http.DetectContentType(head)
 }
 
+// realizeBlob copies one named stream into the store and returns its hash and
+// the completed file.stored payload {name, mime, size, sha256}, built from
+// the bytes themselves. A pinned sha256 is verified, never believed: the
+// kernel is the only hasher, so a depositor can neither mislabel a blob nor
+// claim bytes the store does not hold. Every deposit tail — upload, @path
+// arg, seed file, command output — ends here.
+func realizeBlob(home, name, pinned string, r io.Reader) (string, json.RawMessage, error) {
+	hash, size, head, err := storeBlob(home, r)
+	if err != nil {
+		return "", nil, err
+	}
+	if pinned != "" && pinned != hash {
+		return "", nil, fmt.Errorf("file %q hashes to %s, not the declared %s", name, hash, pinned)
+	}
+	base := filepath.Base(name)
+	payload, _ := json.Marshal(map[string]any{
+		"name": base, "mime": blobMime(base, head), "size": size, "sha256": hash,
+	})
+	return hash, payload, nil
+}
+
 // storeFile stores one named stream and returns the file.stored event that
 // records it: {name, mime, size, sha256}. This is the one ingress every path
 // shares — a browser upload, an @path CLI arg, a seed's files/ — so the log
@@ -107,13 +133,10 @@ func blobMime(name string, head []byte) string {
 // running any command that receives the hash, so the command's stdin log
 // already carries the file's metadata).
 func storeFile(home, name string, r io.Reader) (string, Event, error) {
-	hash, size, head, err := storeBlob(home, r)
+	hash, payload, err := realizeBlob(home, name, "", r)
 	if err != nil {
 		return "", Event{}, err
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"name": filepath.Base(name), "mime": blobMime(name, head), "size": size, "sha256": hash,
-	})
 	return hash, newEvent("file.stored", payload), nil
 }
 
@@ -182,18 +205,8 @@ func depositCommandFile(home string, payload json.RawMessage) (json.RawMessage, 
 		return nil, fmt.Errorf("file.stored %q: %w", p.Name, err)
 	}
 	defer f.Close()
-	hash, size, head, err := storeBlob(home, f)
-	if err != nil {
-		return nil, err
-	}
-	if p.Sha256 != "" && p.Sha256 != hash {
-		return nil, fmt.Errorf("file.stored %q: bytes hash to %s, not the declared %s", p.Name, hash, p.Sha256)
-	}
-	base := filepath.Base(p.Name)
-	full, _ := json.Marshal(map[string]any{
-		"name": base, "mime": blobMime(base, head), "size": size, "sha256": hash,
-	})
-	return full, nil
+	_, full, err := realizeBlob(home, p.Name, p.Sha256, f)
+	return full, err
 }
 
 // danglingFiles scans file.stored events for blobs missing from the store —

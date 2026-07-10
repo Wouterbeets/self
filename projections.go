@@ -90,26 +90,32 @@ func sitePagePath(home, name string) string {
 	return filepath.Join(home, "site", name+".html")
 }
 
-// writeSitePage persists a rendered projection atomically (temp + rename), so
-// a reader — the server's fast path, a brain, cat — never sees a half page.
-func writeSitePage(home, name string, page []byte) error {
-	out := sitePagePath(home, name)
-	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
+// writeFileAtomic persists derived state (temp + rename), so a reader — the
+// server's fast path, a brain, cat — never sees a half-written file. Every
+// kernel-rendered surface goes through here: projections, kernel.html, the
+// brief.
+func writeFileAtomic(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(out), "."+filepath.Base(out)+"-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(page); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), out)
+	return os.Rename(tmp.Name(), path)
+}
+
+// writeSitePage persists a rendered projection atomically.
+func writeSitePage(home, name string, page []byte) error {
+	return writeFileAtomic(sitePagePath(home, name), page)
 }
 
 // freshSitePage returns the materialized page when it is provably current —
