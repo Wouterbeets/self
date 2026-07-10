@@ -148,9 +148,12 @@ Compiled capability contract
 
 Files
 
-  Bytes never ride in events. A file enters the store three ways — a browser
+  Bytes never ride in events. A file enters the store four ways — a browser
   form's file input (multipart POST /run/<command>), an @<path> arg to
-  self run, or a seed's files/ dir at grow time — and each deposit writes the
+  self run, a seed's files/ dir at grow time, or a command's own output (the
+  command writes bytes to a scratch path and emits file.stored {name, path};
+  the kernel copies them in, completes the payload, and verifies before
+  appending) — and each deposit writes the
   blob to SELF_HOME/files/<sha256> and appends one file.stored event
   {name, mime, size, sha256}. The command behind the form or run receives the
   sha256 as the arg's value and resolves SELF_HOME/files/<sha256> itself when

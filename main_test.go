@@ -1739,3 +1739,114 @@ func TestDanglingFilesAreNamed(t *testing.T) {
 		t.Fatal("a present blob was reported missing")
 	}
 }
+
+// TestCommandDepositsDerivedFile pins the fourth ingress: a command that
+// produces a file deposits it by writing bytes to a scratch path and emitting
+// file.stored {name, path}. The kernel copies the bytes into the store,
+// completes the payload from the bytes themselves, and appends — so commands
+// are producers, not just recorders.
+func TestCommandDepositsDerivedFile(t *testing.T) {
+	home := t.TempDir()
+	if _, err := loadSecret(home); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n" +
+		"printf 'venue,fee\\nbarn,450' > \"$SELF_HOME/scratch-export\"\n" +
+		`printf '{"name":"file.stored","payload":{"name":"gigs-2026.csv","path":"scratch-export"}}` + "\\n'\n" +
+		`printf '{"name":"gigbook.exported","payload":{"year":"2026"}}` + "\\n'\n"
+	if err := installTrustedScript(home, "command", "export", script, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(home, "export", nil); err != nil {
+		t.Fatal(err)
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deposit Event
+	for _, e := range events {
+		if e.Name == "file.stored" {
+			deposit = e
+		}
+	}
+	hash := jsonField(deposit.Payload, "sha256")
+	if !validFileHash(hash) {
+		t.Fatalf("deposit payload not completed: %s", deposit.Payload)
+	}
+	if jsonField(deposit.Payload, "path") != "" {
+		t.Fatalf("the scratch path is transport, not truth — it must not reach the log: %s", deposit.Payload)
+	}
+	if name := jsonField(deposit.Payload, "name"); name != "gigs-2026.csv" {
+		t.Fatalf("deposit name %q", name)
+	}
+	if data, err := os.ReadFile(blobPath(home, hash)); err != nil || string(data) != "venue,fee\nbarn,450" {
+		t.Fatalf("blob = %q, %v", data, err)
+	}
+}
+
+// TestCommandFileStoredIsVerifiedBeforeAppend pins the gate: a command cannot
+// put a file.stored on the log that the store cannot back. Missing bytes and
+// a mislabeled hash both refuse the whole run — nothing appends.
+func TestCommandFileStoredIsVerifiedBeforeAppend(t *testing.T) {
+	home := t.TempDir()
+	if _, err := loadSecret(home); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"ghost": "#!/bin/sh\n" +
+			`printf '{"name":"file.stored","payload":{"name":"ghost.txt","path":"no/such/scratch"}}` + "\\n'\n",
+		"mislabel": "#!/bin/sh\n" +
+			"printf 'real bytes' > \"$SELF_HOME/scratch\"\n" +
+			`printf '{"name":"file.stored","payload":{"name":"x.txt","path":"scratch","sha256":"` +
+			strings.Repeat("0", 64) + `"}}` + "\\n'\n",
+		"nameless": "#!/bin/sh\n" +
+			`printf '{"name":"file.stored","payload":{"path":"scratch"}}` + "\\n'\n",
+	}
+	for label, script := range cases {
+		if err := installTrustedScript(home, "command", label, script, "test"); err != nil {
+			t.Fatal(err)
+		}
+		before, _ := readEvents(home)
+		if _, err := runCommand(home, label, nil); err == nil {
+			t.Fatalf("%s: an unverifiable file.stored must refuse the run", label)
+		}
+		after, _ := readEvents(home)
+		if len(after) != len(before) {
+			t.Fatalf("%s: a refused run must append nothing (%d -> %d events)", label, len(before), len(after))
+		}
+	}
+}
+
+// TestStoredFilesServeInert pins the browser posture: blobs are user content
+// on the same origin as the unauthenticated write path, so the declared type
+// is final (nosniff) and any executable document type renders sandboxed.
+func TestStoredFilesServeInert(t *testing.T) {
+	home := t.TempDir()
+	if _, err := loadSecret(home); err != nil {
+		t.Fatal(err)
+	}
+	hash, _, _, err := storeBlob(home, strings.NewReader("<script>alert(1)</script>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		serveMux(home).ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		return w
+	}
+	w := get("/files/" + hash + "/page.html")
+	if w.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal("a stored file must serve with nosniff")
+	}
+	if w.Header().Get("Content-Security-Policy") != "sandbox" {
+		t.Fatalf("an HTML blob must render sandboxed, got CSP %q", w.Header().Get("Content-Security-Policy"))
+	}
+	w = get("/files/" + hash + "/notes.txt")
+	if w.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal("every stored file serves with nosniff")
+	}
+	if w.Header().Get("Content-Security-Policy") != "" {
+		t.Fatal("a plain-text blob needs no sandbox — images and downloads stay untouched")
+	}
+}

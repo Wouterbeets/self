@@ -115,14 +115,19 @@ bytes. The kernel re-runs a projection only when the log grows events it
 consumes; a page whose events did not change is served as already materialized.
 
 **Files.** Bytes never ride in events. A file enters the store through a
-browser form's file input, an `@<path>` arg to `self run`, or a seed's
-`files/` dir; each deposit writes the blob to `files/<sha256>` and appends one
-small `file.stored` event `{name, mime, size, sha256}`. Commands receive file
-args as hashes and read `SELF_HOME/files/<sha256>` themselves; projections
-link `/files/<sha256>/<name>` and the server serves the blob (immutable, so
-browsers cache it forever). Same hash, same file — dedup is free. Blobs are
-user content: `rehydrate` rebuilds scripts and pages from the log alone, and
-`files/` must be backed up alongside `events.jsonl` and `.secret`.
+browser form's file input, an `@<path>` arg to `self run`, a seed's
+`files/` dir — or a command's own output: a command that produces a file (an
+export, an invoice, a generated booklet) writes the bytes to a scratch path
+and emits `file.stored {name, path}`, and the kernel copies them in,
+completes the payload, and verifies before appending. Every deposit writes
+the blob to `files/<sha256>` and appends one small `file.stored` event
+`{name, mime, size, sha256}`. Commands receive file args as hashes and read
+`SELF_HOME/files/<sha256>` themselves; projections link
+`/files/<sha256>/<name>` and the server serves the blob (immutable, so
+browsers cache it forever; served inert — `nosniff`, and document types that
+could script render sandboxed). Same hash, same file — dedup is free. Blobs
+are user content: `rehydrate` rebuilds scripts and pages from the log alone,
+and `files/` must be backed up alongside `events.jsonl` and `.secret`.
 
 **Runtime code generation.** A `command.declared` or `projector.declared` event
 triggers a compile: the kernel hands the declaration to the brain process, which

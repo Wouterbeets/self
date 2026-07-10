@@ -60,7 +60,8 @@ describe capabilities that can be built this way:
   reads `SELF_HOME/files/<sha256>`; a projection that shows the file links
   `/files/<sha256>/<name>` (an `<img>`, a download link) and never inlines
   bytes into HTML. Describe file-taking commands accordingly: the argument is
-  a file, the event field carries its hash.
+  a file, the event field carries its hash. Commands can also **produce**
+  files — see the next section.
 - **Names may nest.** A projector named `finances/bills` renders to
   `site/finances/bills.html` and serves at `/finances/bills`. Only top-level
   pages appear in the shell's nav; the parent page links down. This is the
@@ -69,11 +70,50 @@ describe capabilities that can be built this way:
   or agent. Commands nest the same way (`finances/add-bill`).
 - Any language with a shebang works; use only its standard library.
 
+## What files unlock
+
+The reflex, once files exist, is to treat them as attachments — a photo
+stapled to a diary entry. That underuses them. A file argument gives a
+command *bytes to compute over*, and the derived-file ingress lets a command
+*hand something back*. Four patterns, in rising order of ambition:
+
+- **Attach.** The photo rides the event as a hash; the projection shows it.
+  The baseline — an event gains evidence.
+- **Extract.** The command reads the deposited bytes once, at deposit time,
+  and writes what it learned into the event payload: the filament grams a
+  slicer wrote into its G-code comments, the total on a receipt's filename,
+  the duration in an audio file's header. The person stops typing what the
+  file already knows. Extract into events rather than making projections read
+  blobs: the log stays self-describing, and a projection keeps consuming
+  events alone.
+- **Import.** One file becomes many events. The abandoned spreadsheet, the
+  bank's CSV export, the old app's data dump — a command parses the upload
+  and emits an event per row. This is how a person's history *before* the
+  instance gets in, and it is the single strongest answer to "I already have
+  three years of this in a file somewhere."
+- **Produce.** A command derives a file and deposits it: write the bytes to a
+  scratch path, emit `file.stored {"name": …, "path": …}`, and the kernel
+  stores the blob content-addressed, completes the payload from the bytes,
+  and verifies before anything is appended. The instance stops being a place
+  where records go and starts being a place documents come *from* — the
+  accountant's CSV, the numbered invoice, the printable booklet, the
+  lab-ready zip of chosen frames. When another event in the same run must
+  reference the produced file, hash the bytes in the script (sha256 is
+  standard library everywhere), pin it in the `file.stored` payload, and use
+  the same hash in the domain event — a pinned hash that does not match the
+  bytes refuses the whole run.
+
+Two disciplines keep all four honest. A produced file is *user content*, not
+derived state: `rehydrate` will not regenerate it (though re-running the
+command will), and it must be backed up with the rest of `files/`. And the
+log stays the truth: a produced file is a rendering of events that already
+happened, never the only place a fact lives.
+
 ## Writing a good `intent.md`
 
 The three seeds in `seeds/` are the worked examples. Read them. `journal` is the
 smallest; `chat` is a full surface; `renga` shows a seed with no initial content.
-`seeds/personas/` holds ten more, each written for a person who will never open
+`seeds/personas/` holds eleven more, each written for a person who will never open
 a terminal — a feel for what intents look like outside this repo's own walls.
 A good intent tends to cover:
 

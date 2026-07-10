@@ -145,6 +145,57 @@ func storeFileArgs(home string, args []string) (resolved []string, deposits []Ev
 	return resolved, deposits, nil
 }
 
+// depositCommandFile realizes a file.stored event a command emitted — the
+// fourth ingress, the one that makes commands producers and not just
+// recorders. A command that derives a file (an export, an invoice, a booklet)
+// writes the bytes wherever it likes and emits file.stored
+// {"name": …, "path": …}; the kernel — keeper of the store and the only
+// hasher — copies the bytes in content-addressed, completes the payload
+// {name, mime, size, sha256} from the bytes themselves, and drops the path
+// (transport, never truth). A relative path resolves under SELF_HOME. A
+// payload carrying a sha256 is verified against the bytes, so a command can
+// neither mislabel a blob nor claim one that does not exist: with no path,
+// the sha256 must already name a blob in the store, which is re-hashed rather
+// than believed. The source file is never deleted — the kernel copies, the
+// command owns its scratch.
+func depositCommandFile(home string, payload json.RawMessage) (json.RawMessage, error) {
+	var p struct {
+		Name   string `json:"name"`
+		Path   string `json:"path"`
+		Sha256 string `json:"sha256"`
+	}
+	if json.Unmarshal(payload, &p) != nil || p.Name == "" {
+		return nil, fmt.Errorf(`a file.stored event from a command needs {"name": …} and a "path" to the bytes (or the "sha256" of a blob already in the store)`)
+	}
+	src := p.Path
+	switch {
+	case src == "":
+		if !validFileHash(p.Sha256) {
+			return nil, fmt.Errorf("file.stored %q: give a path to the bytes, or the sha256 of a blob already in the store", p.Name)
+		}
+		src = blobPath(home, p.Sha256)
+	case !filepath.IsAbs(src):
+		src = filepath.Join(home, src)
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return nil, fmt.Errorf("file.stored %q: %w", p.Name, err)
+	}
+	defer f.Close()
+	hash, size, head, err := storeBlob(home, f)
+	if err != nil {
+		return nil, err
+	}
+	if p.Sha256 != "" && p.Sha256 != hash {
+		return nil, fmt.Errorf("file.stored %q: bytes hash to %s, not the declared %s", p.Name, hash, p.Sha256)
+	}
+	base := filepath.Base(p.Name)
+	full, _ := json.Marshal(map[string]any{
+		"name": base, "mime": blobMime(base, head), "size": size, "sha256": hash,
+	})
+	return full, nil
+}
+
 // danglingFiles scans file.stored events for blobs missing from the store —
 // a log restored without its files/ dir. A warning, never a failure: the
 // kernel rebuilds itself fine, only the referenced bytes are gone.
