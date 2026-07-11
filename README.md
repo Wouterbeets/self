@@ -1,7 +1,7 @@
 # self
 
 `self` is a small, local-first runtime. It keeps one append-only event log as
-its only state, and rebuilds every view — and every capability — from that log.
+its authoritative structured state, and rebuilds every view — and every capability — from that log.
 Capabilities are not shipped as code. You describe what you want, and a brain of
 your choosing — a tool-capable coding agent like `opencode run` or `claude -p` —
 writes the script for it, on your machine, after inspecting the instance's
@@ -87,10 +87,10 @@ agent instructions. To write your own capability sets, see [`SEEDS.md`](SEEDS.md
 ## How it works
 
 An instance is a directory (`SELF_HOME`, defaulting to the current working
-directory) with two files of real state:
+directory) with one authoritative log, one local key, and an optional content store:
 
 ```
-events.jsonl    the append-only log — the only state
+events.jsonl    the append-only log — the only structured state
 .secret         a per-instance signing key (32 random bytes, hex; mode 0600)
 files/          stored files, content-addressed by sha256 — user content
 ```
@@ -173,12 +173,18 @@ self think "..."     query the brain; returns {response, declarations} JSON
 self heartbeat       one improvement cycle: the brain inspects the log and may declare
 self show <name>     render a projection to stdout
 self rehydrate       rebuild capabilities/ + site/ from the log (offline)
-self share <cap>     print a capability's declarations + receipts as JSONL to stdout
+self share <t>/<name>
+                     print one command/projector's declarations + receipts as JSONL
 self adopt <seed>    re-generate a shared capability locally ("-" reads stdin)
 self export <prefix> <dir>
                      write a content seed: every <prefix>* event, the files
                      they reference, and an editable intent — another
                      instance grows the directory, dates preserved
+self export <prefix> <dir> <new-prefix>
+                     export while remapping the event-name prefix
+self revise <t>/<name> <request>
+                     recompile a local capability with its current source as context
+self protocol        print the brain and capability wire contracts
 self retire <t>/<n>  retire a capability: script + page leave the surface, the
                      log keeps every event, re-declaring revives it
 ```
@@ -302,8 +308,9 @@ Instances exchange **declarations and evidence, never runnable code.**
 Capabilities travel by `share`/`adopt`; lived content travels by
 `export`/`grow` — two flavors of the same seed idea.
 
-`self share <cap>` prints a slice of the local log: every declaration of that
-capability and every locally-signed receipt for it, as JSONL. `self adopt`
+`self share command/<name>` or `self share projector/<name>` prints a slice of
+the local log: every declaration and locally-signed receipt for that exact
+capability, as JSONL. A bare name is accepted only when it names one type. `self adopt`
 records the whole slice inside a single `capability.adopted` event (the foreign
 receipts sit there as data, which the installer never reads), then re-declares
 the capability locally. The local brain re-generates the script — the sender's
@@ -358,8 +365,9 @@ SELF_THEME        default page design: grove | micro | paper | spec
 
 ## Repository layout
 
-- `main.go` — the entire runtime: log, signed install, pipe orchestration, the
-  brain seam, HTTP server. One file by design.
+- The top-level Go files divide the small kernel by concern: CLI dispatch,
+  event log, signed installation, orchestration, projections, files, timers,
+  brain seam, HTTP server, and reconstruction.
 - `main_test.go` — the pinned invariants: log semantics, offline runtime
   generation, the forged-receipt gate, receipt provenance, share/adopt
   independence, the pluggable brain, and byte-stable reconstruction.
@@ -411,9 +419,11 @@ These are current properties, stated plainly, not goals to aspire to.
 - **The log is unbounded.** Every compile stores its script bytes, and every
   projection replays the whole log (O(history)). Snapshotting is not built in; a
   snapshot can itself be modeled as a seed and left to the user.
-- **One writer at a time.** Sequence numbers are assigned by reading the log and
-  adding one, without locking. Two writers at once (say a server POST and a CLI
-  `run`) can race. Route writes through a single process.
+- **Individual appends are locked; operations are not transactions.** Sequence
+  assignment is serialized with an advisory file lock, but a command or grow
+  may append several events and perform derived-state work between them. Two
+  concurrent operations can therefore interleave. Route writes through one
+  serving process when operation-level ordering matters.
 - **The server has no authentication** on `/run`. It binds loopback by default
   for this reason; only expose it with `SELF_BIND` on a network you trust.
 - **Cross-instance identity is asserted, not proven,** because HMAC keys are

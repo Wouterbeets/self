@@ -51,9 +51,9 @@ func matchingEvents(events []Event, consumes []string) []Event {
 // unchanged — stdin is event JSONL, stdout is HTML — the kernel just stopped
 // feeding it events it declared no interest in.
 func projectionPage(home, name string, d projectorDecl, events []Event) ([]byte, error) {
-	bin, _ := scriptPath(home, "projector", name)
-	if _, err := os.Stat(bin); err != nil {
-		return nil, fmt.Errorf("projection %q not found", name)
+	bin, err := verifyInstalledScript(home, "projector", name)
+	if err != nil {
+		return nil, err
 	}
 	cmd := exec.Command(bin)
 	cmd.Env = append(os.Environ(), "SELF_HOME="+home)

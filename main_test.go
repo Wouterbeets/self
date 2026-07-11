@@ -215,6 +215,48 @@ func TestRehydrateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRehydrateEmptyLogClearsDerivedState(t *testing.T) {
+	home := t.TempDir()
+	stale := filepath.Join(home, "capabilities", "commands", "stale", "run")
+	if err := os.MkdirAll(filepath.Dir(stale), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := rehydrate(home); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(stale) {
+		t.Fatal("empty-log rehydrate preserved stale executable state")
+	}
+}
+
+func TestRehydrateFailurePreservesWorkingDerivedState(t *testing.T) {
+	home := t.TempDir()
+	page := filepath.Join(home, "site", "working.html")
+	if err := os.MkdirAll(filepath.Dir(page), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(page, []byte("working before rebuild"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	decl := newEvent("projector.declared", json.RawMessage(`{"name":"broken","description":"fails","consumes":[]}`))
+	if err := appendEvent(home, &decl); err != nil {
+		t.Fatal(err)
+	}
+	if err := installTrustedScript(home, "projector", "broken", "#!/bin/sh\nexit 1\n", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rehydrate(home); err == nil {
+		t.Fatal("rehydrate succeeded despite a failing staged projector")
+	}
+	got, err := os.ReadFile(page)
+	if err != nil || string(got) != "working before rebuild" {
+		t.Fatalf("failed rehydrate damaged working derived state: %q, %v", got, err)
+	}
+}
+
 // TestRehydrateTypeCollision pins that a command and a projector sharing a
 // name both reconstruct: receipts are keyed by (type, name), not name. The
 // chat seed (a chat command and a chat projector) is the natural collision.
@@ -461,6 +503,43 @@ func TestShareAdopt(t *testing.T) {
 	}
 	if !fileExists(filepath.Join(second, "capabilities", "commands", "note", "run")) {
 		t.Fatal("adopting a seed from stdin did not install")
+	}
+}
+
+func TestShareDisambiguatesCapabilityType(t *testing.T) {
+	t.Setenv("SELF_BRAIN", stubBrain(t))
+	home := t.TempDir()
+	if err := ingest(home, []Event{
+		newEvent("command.declared", json.RawMessage(`{"name":"chat","description":"command","event":{"name":"chat.message"}}`)),
+		newEvent("projector.declared", json.RawMessage(`{"name":"chat","description":"projector","consumes":["chat.message"]}`)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := shareToFile(t, home, "chat", filepath.Join(t.TempDir(), "ambiguous.jsonl")); err == nil {
+		t.Fatal("ambiguous bare capability name was shared")
+	}
+	path := filepath.Join(t.TempDir(), "command.jsonl")
+	if err := shareToFile(t, home, "command/chat", path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"type":"projector"`) || strings.Contains(string(data), `"name":"projector.declared"`) {
+		t.Fatalf("typed command share included projector evidence:\n%s", data)
+	}
+}
+
+func TestAdoptRejectsMixedCapabilities(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mixed.jsonl")
+	data := `{"name":"command.declared","payload":{"name":"chat","description":"command","event":{"name":"chat.message"}}}` + "\n" +
+		`{"name":"projector.declared","payload":{"name":"chat","description":"projector","consumes":["chat.message"]}}` + "\n"
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdAdopt(t.TempDir(), path); err == nil {
+		t.Fatal("adopt accepted a slice containing two capability types")
 	}
 }
 
@@ -909,6 +988,91 @@ func TestStubBrainCoversThinkAndGrow(t *testing.T) {
 	}
 }
 
+func TestGrowPersistsTimerDeclarations(t *testing.T) {
+	brain := filepath.Join(t.TempDir(), "brain")
+	if err := os.WriteFile(brain, []byte(`#!/usr/bin/env python3
+import json, os, sys
+sys.stdin.read()
+if os.environ.get("SELF_ASK") == "compile":
+    script = "#!/bin/sh\\necho '{\\\"name\\\":\\\"digest.ran\\\",\\\"payload\\\":{}}'\\n"
+    print(json.dumps({"name":"script.authored","payload":{"script":script}}))
+else:
+    print(json.dumps({"name":"command.declared","payload":{"name":"digest","description":"run digest","event":{"name":"digest.ran"}}}))
+    print(json.dumps({"name":"timer.declared","payload":{"name":"weekly","every":"168h","command":"digest","args":[]}}))
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_BRAIN", brain)
+	seed := filepath.Join(t.TempDir(), "timed")
+	if err := os.Mkdir(seed, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "intent.md"), []byte("run a weekly digest"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if err := cmdGrow(home, seed); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := readEvents(home)
+	if _, ok := declaredTimers(events)["weekly"]; !ok {
+		t.Fatal("grow discarded timer.declared")
+	}
+}
+
+func TestGrowFailsWhenCompilationFails(t *testing.T) {
+	brain := filepath.Join(t.TempDir(), "brain")
+	if err := os.WriteFile(brain, []byte("#!/bin/sh\nif [ \"$SELF_ASK\" = grow ]; then printf '%s\\n' '{\"name\":\"command.declared\",\"payload\":{\"name\":\"broken\",\"description\":\"broken\",\"event\":{\"name\":\"broken.ran\"}}}'; else exit 1; fi\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_BRAIN", brain)
+	seed := filepath.Join(t.TempDir(), "broken")
+	if err := os.Mkdir(seed, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "intent.md"), []byte("declare broken"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if err := cmdGrow(home, seed); err == nil {
+		t.Fatal("grow reported success after compile failure")
+	}
+	events, _ := readEvents(home)
+	for _, e := range events {
+		if e.Name == "seed.planted" {
+			t.Fatal("failed grow wrote seed.planted")
+		}
+	}
+	if err := rehydrate(home); err != nil {
+		t.Fatalf("failed declaration made the instance unreconstructable: %v", err)
+	}
+}
+
+func TestLiveExecutionRejectsTamperedScripts(t *testing.T) {
+	t.Setenv("SELF_BRAIN", stubBrain(t))
+	home := t.TempDir()
+	if err := ingest(home, []Event{
+		newEvent("command.declared", json.RawMessage(`{"name":"note","description":"note","event":{"name":"note.added","fields":{"text":"string"}}}`)),
+		newEvent("projector.declared", json.RawMessage(`{"name":"notes","description":"notes","consumes":["note.added"]}`)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	command, _ := scriptPath(home, "command", "note")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\necho tampered\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(home, "note", []string{"x"}); err == nil || !strings.Contains(err.Error(), "verified receipt") {
+		t.Fatalf("tampered command execution error = %v", err)
+	}
+	projector, _ := scriptPath(home, "projector", "notes")
+	if err := os.WriteFile(projector, []byte("#!/bin/sh\necho tampered\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runProjection(home, "notes"); err == nil || !strings.Contains(err.Error(), "verified receipt") {
+		t.Fatalf("tampered projector execution error = %v", err)
+	}
+}
+
 func TestStubCommandHonorsDeclaredField(t *testing.T) {
 	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
@@ -1146,6 +1310,15 @@ func TestInjectShellShape(t *testing.T) {
 	// Unknown theme falls back to the default theme, never empty/arbitrary CSS.
 	if !strings.Contains(string(injectShell(page, "bogus", "")), themes[defaultTheme].css) {
 		t.Fatal("unknown theme did not fall back to the default")
+	}
+}
+
+func TestShellPreservesMultipartForms(t *testing.T) {
+	if !strings.Contains(shellScript, "const body = new FormData(f)") {
+		t.Fatal("shell does not submit forms as FormData")
+	}
+	if strings.Contains(shellScript, "new URLSearchParams(new FormData(f))") {
+		t.Fatal("shell still converts file inputs into URLSearchParams")
 	}
 }
 

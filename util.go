@@ -58,7 +58,7 @@ usage: self [command] [args]
   self heartbeat       one self-improvement cycle (the brain reflects & grows)
   self show <name>     render a projection to stdout
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
-  self share <cap>     print a seed to stdout — the capability's declarations and
+  self share <target>  print a seed to stdout — one command/<name> or projector/<name>'s declarations and
                        receipts, a verbatim slice of this log
   self adopt <seed>    re-grow a shared capability here ("-" reads stdin) — this
                        instance's own compiler re-authors it; foreign bytes never install
@@ -73,7 +73,7 @@ usage: self [command] [args]
   self protocol        print the brain + capability wire protocol
 
 environment:
-  SELF_HOME         the instance — a dir holding events.jsonl + .secret
+  SELF_HOME         the instance — a dir holding events.jsonl, .secret, and files/
                     (default: current working directory; set it in your shell rc
                     to pin a shared instance, e.g. export SELF_HOME=~/.self)
 
@@ -207,7 +207,7 @@ func commandHelp(cmd string) (string, bool) {
 	case "rehydrate":
 		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a brain.\n", true
 	case "share":
-		return "usage: self share <capability>\n\nPrint the capability's declarations and receipts as a JSONL seed.\n", true
+		return "usage: self share command/<name>\n       self share projector/<name>\n\nPrint one exact capability's declarations and receipts as a JSONL seed. A bare name is accepted only when it is unambiguous.\n", true
 	case "export":
 		return "usage: self export <event-prefix> <dir> [<new-prefix>]\n\nWrite a content seed from this log: every event whose name starts with <event-prefix>, the file.stored metadata and blobs those events reference, and an intent.md stub to edit. Dates are preserved; an optional <new-prefix> renames the events on the way out (the sender-side remap for when two instances share a vocabulary), recorded in the seed's provenance. The receiver grows the directory and their brain decides how the records merge. The export is remembered as a seed.exported event.\n", true
 	case "adopt":

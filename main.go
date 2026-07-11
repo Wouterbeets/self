@@ -8,10 +8,8 @@
 // running capability can declare new capabilities and the
 // kernel compiles them on the spot (the strange loop). Every compile is logged
 // as a script.compiled receipt signed with a per-home secret; only kernel-signed
-// receipts ever install, so `self rehydrate` rebuilds the whole instance from
-// the log alone — an instance is just events.jsonl + .secret.
-//
-// This file is the whole kernel.
+// receipts ever install, so `self rehydrate` rebuilds the derived instance from
+// events.jsonl + .secret; content-addressed user files are backed up separately.
 package main
 
 import (
@@ -74,7 +72,7 @@ func main() {
 		err = rehydrate(home)
 	case "share":
 		if len(args) != 1 {
-			err = fmt.Errorf("usage: self share <capability>  (the seed prints to stdout)")
+			err = fmt.Errorf("usage: self share command/<name> | projector/<name>  (a unique bare name is also accepted)")
 		} else {
 			err = cmdShare(home, args[0])
 		}

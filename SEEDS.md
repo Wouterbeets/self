@@ -170,8 +170,8 @@ events.
 
 ## Writing a good `intent.md`
 
-The three seeds in `seeds/` are the worked examples. Read them. `journal` is the
-smallest; `chat` is a full surface; `renga` shows a seed with no initial content.
+The top-level directories in `seeds/` are worked examples. Read them. `journal` is
+the smallest; `chat` is a full surface; `renga` shows a seed with no initial content.
 `seeds/personas/` holds thirteen more, each written for a person who will never open
 a terminal — a feel for what intents look like outside this repo's own walls.
 A good intent tends to cover:
@@ -200,8 +200,9 @@ Two rules of thumb:
 Capability seeds also travel between instances, and only intent and evidence
 cross — never runnable code:
 
-- `self share <capability>` prints a slice of your log: every declaration of that
-  capability and every receipt your kernel signed for it, as JSONL.
+- `self share command/<name>` or `self share projector/<name>` prints a slice of
+  your log: every declaration of that exact capability and every receipt your
+  kernel signed for it, as JSONL. A bare name works only when unambiguous.
 - `self adopt <file>` (or `-` for stdin) takes such a slice, records it, and
   re-declares the capability. Your instance's own brain re-authors the script and
   signs it with your key. The sender's script rides along only as a reference for

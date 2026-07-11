@@ -36,7 +36,7 @@ document.addEventListener("submit", e => {
   if (busy) return;
   busy = true;
   f.classList.add("busy");
-  const body = new URLSearchParams(new FormData(f));
+  const body = new FormData(f);
   const first = f.querySelector("input,textarea");
   const text = first ? first.value : "";
   let ghost, think;

@@ -250,10 +250,52 @@ func pipeProcess(home, bin string, argv []string) ([]Event, error) {
 	return out, nil
 }
 
+// verifyInstalledScript keeps live execution behind the same trust gate as
+// rehydrate: derived bytes must exactly match the latest live, locally signed
+// receipt for this capability.
+func verifyInstalledScript(home, typ, name string) (string, error) {
+	events, err := readEvents(home)
+	if err != nil {
+		return "", err
+	}
+	secret, err := loadSecret(home)
+	if err != nil {
+		return "", err
+	}
+	var trusted string
+	for _, e := range events {
+		switch e.Name {
+		case "script.compiled":
+			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Type == typ && r.Name == name {
+				trusted = r.Script
+			}
+		case "capability.retired":
+			if r, ok := parseRetirement(e.Payload); ok && r.Type == typ && r.Name == name {
+				trusted = ""
+			}
+		}
+	}
+	if trusted == "" {
+		return "", fmt.Errorf("%s %q has no live verified script receipt", typ, name)
+	}
+	bin, err := scriptPath(home, typ, name)
+	if err != nil {
+		return "", err
+	}
+	installed, err := os.ReadFile(bin)
+	if err != nil {
+		return "", fmt.Errorf("%s %q not found: %w", typ, name, err)
+	}
+	if string(installed) != trusted {
+		return "", fmt.Errorf("%s %q does not match its latest verified receipt; run self rehydrate", typ, name)
+	}
+	return bin, nil
+}
+
 func runCommand(home, command string, args []string) ([]Event, error) {
-	bin, _ := scriptPath(home, "command", command)
-	if _, err := os.Stat(bin); err != nil {
-		return nil, fmt.Errorf("command %q not found (grow a seed that declares it)", command)
+	bin, err := verifyInstalledScript(home, "command", command)
+	if err != nil {
+		return nil, err
 	}
 	evs, err := pipeProcess(home, bin, args)
 	if err != nil {

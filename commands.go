@@ -132,11 +132,15 @@ func cmdGrow(home, ref string) error {
 	}
 
 	var declEvents []Event
+	compilable := 0
 	for _, d := range res.Events {
 		n, _ := d["name"].(string)
 		p, _ := json.Marshal(d["payload"])
-		if (n != "command.declared" && n != "projector.declared") || string(p) == "null" {
+		if (n != "command.declared" && n != "projector.declared" && n != "timer.declared") || string(p) == "null" {
 			continue
+		}
+		if n == "command.declared" || n == "projector.declared" {
+			compilable++
 		}
 		e := newEvent(n, p)
 		if err := appendEvent(home, &e); err != nil {
@@ -145,6 +149,10 @@ func cmdGrow(home, ref string) error {
 		declEvents = append(declEvents, e)
 	}
 	grown := compileDeclarations(c, home, declEvents)
+	if grown != compilable {
+		refreshSite(home)
+		return fmt.Errorf("grew %q into the log, but %d of %d declared capabilities compiled; no seed.planted receipt was written", name, grown, compilable)
+	}
 
 	// The initial deposit: content laid once, so the surface has
 	// something to render from the first moment. A file.stored deposit also
@@ -181,7 +189,7 @@ func cmdGrow(home, ref string) error {
 // growPrompt frames the orchestration ask: decompose the intent into declared
 // capabilities, and hand them back the one way the kernel accepts them.
 func growPrompt(intent string) string {
-	return "Grow the capabilities that realize this product: declare each one by emitting a command.declared / projector.declared event, then summarize in one line.\n\n" +
+	return "Grow the capabilities that realize this product: declare each one by emitting a command.declared / projector.declared event, and emit timer.declared for any requested schedules, then summarize in one line.\n\n" +
 		brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
 }
 
@@ -349,7 +357,7 @@ func cmdAdopt(home, path string) error {
 	var seed []Event
 	var typ, name string
 	var declPayload json.RawMessage
-	reference := ""
+	var receipts []receipt
 	for _, line := range strings.Split(string(data), "\n") {
 		if line = strings.TrimSpace(line); line == "" {
 			continue
@@ -359,13 +367,16 @@ func cmdAdopt(home, path string) error {
 			return fmt.Errorf("not a seed — want event JSONL, one {name, payload} per line")
 		}
 		seed = append(seed, e)
-		if t, n := declName(e); n != "" { // the latest declaration is what grows here
+		if t, n := declName(e); n != "" { // revisions of one exact capability may travel together
+			if name != "" && (typ != t || name != n) {
+				return fmt.Errorf("the seed mixes %s/%s and %s/%s; share and adopt one exact capability at a time", typ, name, t, n)
+			}
 			typ, name, declPayload = t, n, e.Payload
 		}
 		if e.Name == "script.compiled" { // the latest script is reference, never install
 			var r receipt
 			if json.Unmarshal(e.Payload, &r) == nil && r.Script != "" {
-				reference = r.Script
+				receipts = append(receipts, r)
 			}
 		}
 	}
@@ -374,6 +385,12 @@ func cmdAdopt(home, path string) error {
 	}
 	if err := ensureHome(home); err != nil {
 		return err
+	}
+	reference := ""
+	for _, r := range receipts {
+		if r.Type == typ && r.Name == name {
+			reference = r.Script
+		}
 	}
 	if reference != "" {
 		var m map[string]any
@@ -401,7 +418,7 @@ func cmdAdopt(home, path string) error {
 	return nil
 }
 
-func cmdShare(home, name string) error {
+func cmdShare(home, target string) error {
 	events, err := readEvents(home)
 	if err != nil {
 		return err
@@ -410,13 +427,33 @@ func cmdShare(home, name string) error {
 	if err != nil {
 		return err
 	}
+	typ, name := "", target
+	if strings.Contains(target, "/") {
+		typ, name, err = parseCapabilityTarget(target)
+		if err != nil {
+			return err
+		}
+	} else {
+		seen := map[string]bool{}
+		for _, e := range events {
+			if t, n := declName(e); n == name {
+				seen[t] = true
+			}
+		}
+		if len(seen) > 1 {
+			return fmt.Errorf("capability %q is both a command and projector; use command/%s or projector/%s", name, name, name)
+		}
+		for t := range seen {
+			typ = t
+		}
+	}
 	var seed []Event
 	hasDecl := false
 	for _, e := range events {
-		if _, n := declName(e); n == name {
+		if t, n := declName(e); t == typ && n == name {
 			seed, hasDecl = append(seed, e), true
 		} else if e.Name == "script.compiled" {
-			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Name == name {
+			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Type == typ && r.Name == name {
 				seed = append(seed, e)
 			}
 		}
@@ -429,7 +466,7 @@ func cmdShare(home, name string) error {
 		enc.Encode(seed[i])
 	}
 	// The sender remembers giving: if it is not an event, it did not happen.
-	payload, _ := json.Marshal(map[string]any{"name": name, "events": len(seed)})
+	payload, _ := json.Marshal(map[string]any{"type": typ, "name": name, "events": len(seed)})
 	e := newEvent("capability.shared", payload)
 	if err := appendEvent(home, &e); err != nil {
 		return err

@@ -44,7 +44,8 @@ installed scripts, one directory per capability with the script at
   re-learning something the instance already knows.
 - **Extend.** Declarations compile on ingestion. `self grow <seed>` grows a
   capability set from an `intent.md`; `self adopt <seed>` re-generates a
-  capability another instance exported (`self share <cap>` exports);
+  capability another instance exported (`self share command/<name>` or
+  `self share projector/<name>` exports);
   `self revise command/<name> "<change request>"` recompiles an installed
   capability with its current script as context. `self think "<prompt>"`
   is report-only: it returns `{response, declarations}` without ingesting —

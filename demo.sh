@@ -26,8 +26,8 @@ self="$work/self"
 export SELF_HOME="$work/home"
 
 say "declare two capabilities (the stub brain authors, the kernel signs)"
-# A seed is event JSONL. `adopt` re-declares it, and the kernel compiles it
-# locally under a receipt signed by THIS instance's key.
+# A shared capability slice is event JSONL. `adopt` re-declares it, and the
+# kernel compiles it locally under a receipt signed by THIS instance's key.
 printf '{"name":"command.declared","payload":{"name":"entry","description":"record an entry","params":{"text":"string"},"event":{"name":"journal.entry","fields":{"title":"string"}}}}\n' > "$work/cmd.jsonl"
 printf '{"name":"projector.declared","payload":{"name":"journal","description":"all entries","consumes":["journal.entry"]}}\n' > "$work/proj.jsonl"
 "$self" adopt "$work/cmd.jsonl"
@@ -48,7 +48,8 @@ SELF_HOME="$mirror" "$self" rehydrate
 
 say "the rebuild is byte-for-byte identical"
 if diff -q "$SELF_HOME/site/journal.html" "$mirror/site/journal.html" >/dev/null \
-   && diff -q "$SELF_HOME/capabilities/commands/entry" "$mirror/capabilities/commands/entry" >/dev/null; then
+	&& diff -q "$SELF_HOME/capabilities/commands/entry/run" "$mirror/capabilities/commands/entry/run" >/dev/null \
+	&& diff -q "$SELF_HOME/capabilities/projectors/journal/run" "$mirror/capabilities/projectors/journal/run" >/dev/null; then
   printf 'OK — the projection and the compiled script reconstructed exactly.\n'
 else
   printf 'MISMATCH — reconstruction was not deterministic.\n' >&2

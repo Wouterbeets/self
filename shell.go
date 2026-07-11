@@ -41,7 +41,7 @@ func renderKernelHTML(home string) {
 	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>self</title></head><body>\n")
 	b.WriteString("<h1>self</h1>\n")
 	b.WriteString("<p class=\"muted\">a local-first, event-sourced runtime with LLM-generated capabilities</p>\n")
-	b.WriteString("<p>One append-only event log is the only state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log; humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
+	b.WriteString("<p>One append-only event log is the authoritative structured state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log; content-addressed user files live beside it. Humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
 	b.WriteString(orientationHTML)
 
 	b.WriteString("<h2>commands</h2>\n")
