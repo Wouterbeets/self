@@ -9,7 +9,7 @@
 // kernel compiles them on the spot (the strange loop). Every compile is logged
 // as a script.compiled receipt signed with a per-home secret; only kernel-signed
 // receipts ever install, so `self rehydrate` rebuilds the derived instance from
-// events.jsonl + .secret; content-addressed user files are backed up separately.
+// events.jsonl + .secret alone.
 package main
 
 import (
@@ -70,27 +70,6 @@ func main() {
 		}
 	case "rehydrate":
 		err = rehydrate(home)
-	case "share":
-		if len(args) != 1 {
-			err = fmt.Errorf("usage: self share command/<name> | projector/<name>  (a unique bare name is also accepted)")
-		} else {
-			err = cmdShare(home, args[0])
-		}
-	case "adopt":
-		if len(args) != 1 {
-			err = fmt.Errorf("usage: self adopt <seed.jsonl>")
-		} else {
-			err = cmdAdopt(home, args[0])
-		}
-	case "export":
-		switch len(args) {
-		case 2:
-			err = cmdExport(home, args[0], args[1], "")
-		case 3:
-			err = cmdExport(home, args[0], args[1], args[2])
-		default:
-			err = fmt.Errorf("usage: self export <event-prefix> <dir> [<new-prefix>]")
-		}
 	case "revise":
 		if len(args) < 2 {
 			err = fmt.Errorf("usage: self revise command/<name> <change request>")

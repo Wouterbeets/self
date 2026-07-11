@@ -1,3 +1,13 @@
+/* The one shared skin the kernel injects at serve time. Projections emit bare
+   semantic HTML; this sheet is the whole feel. */
+:root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#26231d;--muted:#7d7568;--line:#e5e0d5;--wash:#edeade;
+--accent:#2f6b4f;--accent-ink:#fff;--user-bg:#e3efe6;--user-line:#cbdfd2;--danger:#b3402e;
+--shadow:0 1px 3px rgba(60,50,30,.07);
+--font:system-ui,-apple-system,sans-serif;--head-font:Georgia,'Iowan Old Style',serif;--mono:ui-monospace,monospace;
+--radius:10px;--radius-sm:5px;--radius-msg:14px;--line-w:1px}
+@media (prefers-color-scheme:dark){:root{--bg:#16150f;--panel:#201e16;--ink:#e7e2d6;--muted:#948b7b;
+--line:#35322a;--wash:#2a2820;--accent:#69b98e;--accent-ink:#10231a;--user-bg:#233529;--user-line:#31513e;
+--danger:#e0755f;--shadow:0 1px 3px rgba(0,0,0,.4)}}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
 body{font-family:var(--font);margin:0 auto;max-width:72ch;padding:24px 20px 32px;
 background:var(--bg);color:var(--ink);line-height:1.55}
@@ -14,10 +24,6 @@ padding:8px 14px;margin:10px 0;box-shadow:var(--shadow);overflow-wrap:break-word
 .msg .who{display:block;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:1px}
 .msg.user{margin-left:auto;background:var(--user-bg);border-color:var(--user-line);border-bottom-right-radius:var(--radius-sm)}
 .msg.assistant{margin-right:auto;border-bottom-left-radius:var(--radius-sm)}
-.msg.pending{opacity:.65}
-.dots i{display:inline-block;width:5px;height:5px;margin:1px 2px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
-.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
-@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
 table{border-collapse:collapse;width:100%}
 th{text-align:left;color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}
 th,td{border-bottom:var(--line-w) solid var(--line);padding:7px 10px;font-size:14px}
@@ -30,20 +36,12 @@ input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;bo
 button{font:inherit;padding:9px 16px;border:var(--line-w) solid var(--accent);border-radius:var(--radius);background:var(--accent);color:var(--accent-ink);cursor:pointer;transition:filter .15s}
 button:hover{filter:brightness(1.08)}
 button.secondary{background:transparent;color:var(--accent)}button.danger{border-color:var(--danger);background:var(--danger);color:#fff}
-form.busy button{opacity:.55;pointer-events:none}
 body:has(.msg) form:last-of-type{position:sticky;bottom:0;padding:14px 0 10px;margin-top:6px;background:linear-gradient(transparent,var(--bg) 35%)}
-.rise{animation:rise .22s ease-out both}
-@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-::view-transition-old(root),::view-transition-new(root){animation-duration:.15s}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
-.self-themes{position:fixed;right:10px;bottom:10px;z-index:9;display:flex;gap:4px;padding:4px;
-background:var(--panel);border:var(--line-w) solid var(--line);border-radius:var(--radius-sm);box-shadow:var(--shadow);font-family:var(--mono);font-size:11px}
-.self-themes a{padding:2px 7px;border-radius:var(--radius-sm);color:var(--muted);text-decoration:none;line-height:1.4}
-.self-themes a[aria-current]{background:var(--accent);color:var(--accent-ink)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}html{scroll-behavior:auto}}
 .self-nav{display:flex;gap:2px;flex-wrap:wrap;align-items:baseline;margin:0 0 18px;padding-bottom:10px;
 border-bottom:var(--line-w) solid var(--line);font-family:var(--mono);font-size:13px}
 .self-nav a{padding:2px 8px;border-radius:var(--radius-sm);color:var(--muted);text-decoration:none}
 .self-nav a:hover{background:var(--wash);color:var(--accent)}
 .self-nav a[aria-current]{background:var(--accent);color:var(--accent-ink)}
 .self-nav .self-brand{font-weight:700;color:var(--ink);margin-right:6px}
-@media print{.self-themes,.self-nav{display:none}}
+@media print{.self-nav{display:none}}

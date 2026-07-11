@@ -12,7 +12,7 @@ This is the middle tier of the instance's memory. The newest events ride
 inside each ask; the rendered memory page is what a cold brain reads to
 orient; and the raw event log on disk is the deep archive it searches with
 its own tools. Nothing about memory lives outside the log — no session
-store, no harness state — so `rehydrate` replays it and `share` can carry it.
+store, no harness state — so `rehydrate` replays it.
 
 ## surface
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 func rehydrate(home string) error {
@@ -56,11 +55,6 @@ func rehydrate(home string) error {
 			return err
 		}
 	}
-	if fileExists(filepath.Join(home, "files")) {
-		if err := os.Symlink(filepath.Join(home, "files"), filepath.Join(stage, "files")); err != nil {
-			return err
-		}
-	}
 	for _, key := range order {
 		r, live := latest[key]
 		if !live {
@@ -81,13 +75,6 @@ func rehydrate(home string) error {
 	renderKernelHTML(home)
 	renderBriefFile(home)
 	fmt.Fprintf(os.Stderr, "self: rehydrated %d capabilit(ies) from the log\n", installed)
-	// Blobs are user content, not derived state: rehydrate rebuilds scripts
-	// and pages from the log alone, but bytes under files/ only ever arrive by
-	// deposit. A missing blob is a backup gap worth naming, never a failure.
-	if missing := danglingFiles(home, events); len(missing) > 0 {
-		fmt.Fprintf(os.Stderr, "self: warning — %d stored file(s) the log references are missing from files/ (restore that dir from backup): %s\n",
-			len(missing), strings.Join(missing, ", "))
-	}
 	return nil
 }
 
@@ -119,7 +106,7 @@ func renderRehydratedSite(stage string, events []Event) error {
 }
 
 // replaceDerived swaps a fully reconstructed pair into place and restores the
-// previous pair if either rename fails. The log and file store are untouched.
+// previous pair if either rename fails. The log is untouched.
 func replaceDerived(home, stage string) error {
 	backup, err := os.MkdirTemp(filepath.Dir(home), ".self-derived-backup-*")
 	if err != nil {

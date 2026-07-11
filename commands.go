@@ -132,15 +132,11 @@ func cmdGrow(home, ref string) error {
 	}
 
 	var declEvents []Event
-	compilable := 0
 	for _, d := range res.Events {
 		n, _ := d["name"].(string)
 		p, _ := json.Marshal(d["payload"])
-		if (n != "command.declared" && n != "projector.declared" && n != "timer.declared") || string(p) == "null" {
+		if (n != "command.declared" && n != "projector.declared") || string(p) == "null" {
 			continue
-		}
-		if n == "command.declared" || n == "projector.declared" {
-			compilable++
 		}
 		e := newEvent(n, p)
 		if err := appendEvent(home, &e); err != nil {
@@ -149,28 +145,15 @@ func cmdGrow(home, ref string) error {
 		declEvents = append(declEvents, e)
 	}
 	grown := compileDeclarations(c, home, declEvents)
-	if grown != compilable {
+	if grown != len(declEvents) {
 		refreshSite(home)
-		return fmt.Errorf("grew %q into the log, but %d of %d declared capabilities compiled; no seed.planted receipt was written", name, grown, compilable)
+		return fmt.Errorf("grew %q into the log, but %d of %d declared capabilities compiled; no seed.planted receipt was written", name, grown, len(declEvents))
 	}
 
 	// The initial deposit: content laid once, so the surface has
-	// something to render from the first moment. A file.stored deposit also
-	// carries its bytes — from the seed's files/ dir into the blob store.
+	// something to render from the first moment.
 	for _, e := range deposit {
-		payload := e.Payload
-		if e.Name == "file.stored" {
-			if payload, err = depositSeedFile(home, ref, e.Payload); err != nil {
-				return err
-			}
-		}
-		fresh := newEvent(e.Name, payload)
-		// A deposit that carries its own moment keeps it: an exported record
-		// planted here still says when it happened, not when it arrived. The
-		// id and seq are this instance's; the time is the event's.
-		if !e.OccurredAt.IsZero() {
-			fresh.OccurredAt = e.OccurredAt
-		}
+		fresh := newEvent(e.Name, e.Payload)
 		if err := appendEvent(home, &fresh); err != nil {
 			return err
 		}
@@ -189,7 +172,7 @@ func cmdGrow(home, ref string) error {
 // growPrompt frames the orchestration ask: decompose the intent into declared
 // capabilities, and hand them back the one way the kernel accepts them.
 func growPrompt(intent string) string {
-	return "Grow the capabilities that realize this product: declare each one by emitting a command.declared / projector.declared event, and emit timer.declared for any requested schedules, then summarize in one line.\n\n" +
+	return "Grow the capabilities that realize this product: declare each one by emitting a command.declared / projector.declared event, then summarize in one line.\n\n" +
 		brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
 }
 
@@ -277,18 +260,6 @@ func cmdRun(home, command string, args []string) error {
 	if p, _ := scriptPath(home, "command", command); !fileExists(p) {
 		return fmt.Errorf("command %q not found (grow a seed that declares it)", command)
 	}
-	args, deposits, err := storeFileArgs(home, args)
-	if err != nil {
-		return err
-	}
-	if len(deposits) > 0 {
-		if err := ingest(home, deposits); err != nil {
-			return err
-		}
-		for _, e := range deposits {
-			fmt.Printf("stored %s as files/%s\n", jsonField(e.Payload, "name"), jsonField(e.Payload, "sha256"))
-		}
-	}
 	evs, err := runCommand(home, command, args)
 	if err != nil {
 		return err
@@ -341,139 +312,6 @@ func cmdShow(home, name string) error {
 		return nil
 	}
 	return fmt.Errorf("projection %q not found", name)
-}
-
-func cmdAdopt(home, path string) error {
-	var data []byte
-	var err error
-	if path == "-" {
-		data, err = io.ReadAll(os.Stdin)
-	} else {
-		data, err = os.ReadFile(path)
-	}
-	if err != nil {
-		return err
-	}
-	var seed []Event
-	var typ, name string
-	var declPayload json.RawMessage
-	var receipts []receipt
-	for _, line := range strings.Split(string(data), "\n") {
-		if line = strings.TrimSpace(line); line == "" {
-			continue
-		}
-		var e Event
-		if json.Unmarshal([]byte(line), &e) != nil || e.Name == "" {
-			return fmt.Errorf("not a seed — want event JSONL, one {name, payload} per line")
-		}
-		seed = append(seed, e)
-		if t, n := declName(e); n != "" { // revisions of one exact capability may travel together
-			if name != "" && (typ != t || name != n) {
-				return fmt.Errorf("the seed mixes %s/%s and %s/%s; share and adopt one exact capability at a time", typ, name, t, n)
-			}
-			typ, name, declPayload = t, n, e.Payload
-		}
-		if e.Name == "script.compiled" { // the latest script is reference, never install
-			var r receipt
-			if json.Unmarshal(e.Payload, &r) == nil && r.Script != "" {
-				receipts = append(receipts, r)
-			}
-		}
-	}
-	if declPayload == nil {
-		return fmt.Errorf("the seed carries no declaration — nothing can grow from it")
-	}
-	if err := ensureHome(home); err != nil {
-		return err
-	}
-	reference := ""
-	for _, r := range receipts {
-		if r.Type == typ && r.Name == name {
-			reference = r.Script
-		}
-	}
-	if reference != "" {
-		var m map[string]any
-		if err := json.Unmarshal(declPayload, &m); err != nil {
-			return fmt.Errorf("the seed's declaration is not an object: %w", err)
-		}
-		m["implementation"] = reference
-		declPayload, _ = json.Marshal(m)
-	}
-	ap, _ := json.Marshal(map[string]any{"type": typ, "name": name, "seed": seed})
-	before := receiptCount(home, typ, name)
-	if err := ingest(home, []Event{
-		newEvent("capability.adopted", ap),
-		newEvent(typ+".declared", declPayload),
-	}); err != nil {
-		return err
-	}
-	// A stale script from an earlier receipt can outlive a failed recompile,
-	// so "the file exists" proves nothing. The honest signal is the log: this
-	// adopt succeeded only if it minted a fresh signed receipt.
-	if receiptCount(home, typ, name) <= before {
-		return fmt.Errorf("adopted %q into the log, but the compile produced no signed receipt (any script on disk is from an earlier receipt) — wire a brain and declare it again", name)
-	}
-	fmt.Printf("adopted %q — re-authored by this instance's own compiler, signed by its own key\n", name)
-	return nil
-}
-
-func cmdShare(home, target string) error {
-	events, err := readEvents(home)
-	if err != nil {
-		return err
-	}
-	secret, err := loadSecret(home)
-	if err != nil {
-		return err
-	}
-	typ, name := "", target
-	if strings.Contains(target, "/") {
-		typ, name, err = parseCapabilityTarget(target)
-		if err != nil {
-			return err
-		}
-	} else {
-		seen := map[string]bool{}
-		for _, e := range events {
-			if t, n := declName(e); n == name {
-				seen[t] = true
-			}
-		}
-		if len(seen) > 1 {
-			return fmt.Errorf("capability %q is both a command and projector; use command/%s or projector/%s", name, name, name)
-		}
-		for t := range seen {
-			typ = t
-		}
-	}
-	var seed []Event
-	hasDecl := false
-	for _, e := range events {
-		if t, n := declName(e); t == typ && n == name {
-			seed, hasDecl = append(seed, e), true
-		} else if e.Name == "script.compiled" {
-			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Type == typ && r.Name == name {
-				seed = append(seed, e)
-			}
-		}
-	}
-	if !hasDecl {
-		return fmt.Errorf("no declaration for %q in this log — nothing to share (code never crosses; the declaration is what does)", name)
-	}
-	enc := json.NewEncoder(os.Stdout)
-	for i := range seed {
-		enc.Encode(seed[i])
-	}
-	// The sender remembers giving: if it is not an event, it did not happen.
-	payload, _ := json.Marshal(map[string]any{"type": typ, "name": name, "events": len(seed)})
-	e := newEvent("capability.shared", payload)
-	if err := appendEvent(home, &e); err != nil {
-		return err
-	}
-	refreshSite(home)
-	fmt.Fprintf(os.Stderr, "self: shared %q — %d event(s) of intent and evidence\n", name, len(seed))
-	return nil
 }
 
 func cmdRevise(home, target string, words []string) error {

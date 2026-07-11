@@ -1,7 +1,7 @@
 # self
 
 `self` is a small, local-first runtime. It keeps one append-only event log as
-its authoritative structured state, and rebuilds every view — and every capability — from that log.
+its authoritative state, and rebuilds every view — and every capability — from that log.
 Capabilities are not shipped as code. You describe what you want, and a brain of
 your choosing — a tool-capable coding agent like `opencode run` or `claude -p` —
 writes the script for it, on your machine, after inspecting the instance's
@@ -18,7 +18,8 @@ This runtime is the reference implementation of a larger idea:
 - **[knowledge-seed-protocol](https://github.com/wouterbeets/knowledge-seed-protocol)**
   — the protocol: how local, verifiable knowledge moves between minds as
   replayable reasoning rather than bare assertions.
-- **self** (this repo) — the runtime that makes the protocol executable.
+- **self** (this repo) — the kernel that idea stands on: the log, the signed
+  installation, the deterministic replay.
 
 It is experimental. See [Limits](#limits-and-threat-model) before you rely on it.
 
@@ -41,10 +42,10 @@ git clone https://github.com/wouterbeets/self && cd self
 
 `demo.sh` runs the whole loop offline using `examples/brain-stub` (no API key,
 no model — a deterministic brain plugged through the same seam as any real
-one): a declaration compiles into a script, running a command appends an
-event, a projection renders it, and the instance rebuilds from
-`events.jsonl` + `.secret` alone — byte for byte. The stub writes trivial
-scripts; this shows the machinery, not the intelligence.
+one): a seed's intent grows into declarations, a declaration compiles into a
+script, running a command appends an event, a projection renders it, and the
+instance rebuilds from `events.jsonl` + `.secret` alone — byte for byte. The
+stub writes trivial scripts; this shows the machinery, not the intelligence.
 
 ### 2. Real capabilities (plug a brain)
 
@@ -56,9 +57,9 @@ make run                            # or: self
 Open <http://127.0.0.1:7777>. By default the current working directory is the
 instance home, so a clone is immediately inspectable: `events.jsonl`, `.secret`,
 `capabilities/`, and `site/` appear right beside the code. A new home starts
-empty on purpose: name a brain with `SELF_BRAIN`, then grow chat or notes from
-their visible `intent.md` prompts. Every capability grows through the brain and
-leaves a signed receipt in the log — there is no other install path.
+empty on purpose: name a brain with `SELF_BRAIN`, then grow chat or a journal
+from their visible `intent.md` prompts. Every capability grows through the
+brain and leaves a signed receipt in the log — there is no other install path.
 
 If you want one shared instance regardless of where you run `self`, pin it in
 your shell rc:
@@ -87,12 +88,11 @@ agent instructions. To write your own capability sets, see [`SEEDS.md`](SEEDS.md
 ## How it works
 
 An instance is a directory (`SELF_HOME`, defaulting to the current working
-directory) with one authoritative log, one local key, and an optional content store:
+directory) with one authoritative log and one local key:
 
 ```
 events.jsonl    the append-only log — the only structured state
 .secret         a per-instance signing key (32 random bytes, hex; mode 0600)
-files/          stored files, content-addressed by sha256 — user content
 ```
 
 Everything else (`capabilities/`, `site/`) is derived and can be rebuilt.
@@ -113,40 +113,6 @@ CSS, JavaScript, inline styles, or external assets. A projector must be a pure
 function of its events: rendering twice from the same log yields the same
 bytes. The kernel re-runs a projection only when the log grows events it
 consumes; a page whose events did not change is served as already materialized.
-
-**Files.** Bytes never ride in events. A file enters the store through a
-browser form's file input, an `@<path>` arg to `self run`, a seed's
-`files/` dir — or a command's own output: a command that produces a file (an
-export, an invoice, a generated booklet) writes the bytes to a scratch path
-and emits `file.stored {name, path}`, and the kernel copies them in,
-completes the payload, and verifies before appending. Every deposit writes
-the blob to `files/<sha256>` and appends one small `file.stored` event
-`{name, mime, size, sha256}`. Commands receive file args as hashes and read
-`SELF_HOME/files/<sha256>` themselves; projections link
-`/files/<sha256>/<name>` and the server serves the blob (immutable, so
-browsers cache it forever; served inert — `nosniff`, and document types that
-could script render sandboxed). Same hash, same file — dedup is free. Blobs
-are user content: `rehydrate` rebuilds scripts and pages from the log alone,
-and `files/` must be backed up alongside `events.jsonl` and `.secret`.
-
-**Effects.** Commands may act on the world; projections never do. A command
-is free to spawn the OS's own tools — `lp` to print, `curl` to poke a device
-on the LAN or a service the user configured, `sendmail` for the follow-up —
-because the discipline lives in the log, not in a sandbox: every effect
-leaves a receipt event (what was attempted, what came back), and an
-effectful command reads the log on stdin first so it never repeats what the
-log already says happened. Secrets and endpoints come from the environment
-or a config file outside the log — never from event payloads. This is the
-kernel as glue: the same append-only log, now with hands.
-
-**Timers.** A `timer.declared` event `{name, every, command, args}` binds an
-installed command to a cadence; the serving kernel ticks it. `every` is a Go
-duration ("24h", "168h"), `"off"` disables, the latest declaration per name
-wins, and every firing appends `timer.fired` before the command runs — so
-the log shows everything the instance did on its own, and a crashed command
-leaves a `timer.failed` receipt instead of silence. A timer plus a
-log-reading command is a follow-up machine: the timer supplies the moment,
-the log says what is actually due.
 
 **Runtime code generation.** A `command.declared` or `projector.declared` event
 triggers a compile: the kernel hands the declaration to the brain process, which
@@ -173,15 +139,6 @@ self think "..."     query the brain; returns {response, declarations} JSON
 self heartbeat       one improvement cycle: the brain inspects the log and may declare
 self show <name>     render a projection to stdout
 self rehydrate       rebuild capabilities/ + site/ from the log (offline)
-self share <t>/<name>
-                     print one command/projector's declarations + receipts as JSONL
-self adopt <seed>    re-generate a shared capability locally ("-" reads stdin)
-self export <prefix> <dir>
-                     write a content seed: every <prefix>* event, the files
-                     they reference, and an editable intent — another
-                     instance grows the directory, dates preserved
-self export <prefix> <dir> <new-prefix>
-                     export while remapping the event-name prefix
 self revise <t>/<name> <request>
                      recompile a local capability with its current source as context
 self protocol        print the brain and capability wire contracts
@@ -190,37 +147,16 @@ self retire <t>/<n>  retire a capability: script + page leave the surface, the
 ```
 
 Server routes: `/` (instance self-description), `/<projection>`,
-`/run/<command>` (plain HTML forms; `multipart/form-data` file inputs are
-stored and passed as hashes), `/files/<sha256>[/<name>]` (stored files),
-`/events` (raw log). The server binds
+`/run/<command>` (plain HTML forms), `/events` (raw log). The server binds
 `127.0.0.1:7777` by default; `SELF_BIND` is the whole bind address, host or
 `host:port` — set `SELF_BIND=0.0.0.0` to expose it (see
 [Limits](#limits-and-threat-model)).
 
-**The shell.** When serving, the kernel adds one shared stylesheet and a small
-script to every page; projections on disk stay plain HTML, and the shell knows
-only the CSS class names, never the events. The script is progressive
-enhancement: it intercepts form posts, shows the request in flight, re-fetches
-so what you see is the log's replay, and re-renders when `/events` grows. Strip
-it (`self show`, curl, a no-JS browser) and every page still works, because
-every action underneath is a plain HTML form.
-
-**Swappable designs.** The class vocabulary and the layout rules are fixed —
-that stable contract is what the projections and the script are written
-against. A *theme* changes none of it: it is only a skin, a set of CSS
-variables (palette, fonts, radii, border weight, shadow) the rules read through
-`var()`. So switching designs never renames a class or touches a projection.
-Four ship in the kernel — `grove` (the warm default), `micro` (a hard-edged
-monospace micrographics look), `paper` (clean and low-chrome), and `spec` (a
-monochrome technical-label / spec-sheet look — letter-spaced uppercase labels,
-hairline frames, registration marks and a barcode strip) — and adding one is a
-single map entry. A theme is a skin (CSS variables); a design whose feel is
-more than a palette may also carry a small block of extra rules, which still
-styles only the shared classes and never the events. Pick a design with the
-on-page switcher (plain links, so it works with no JS), a `?theme=<name>` link,
-or `SELF_THEME` for the instance default. The choice is presentation only, chosen at serve time like
-`prefers-color-scheme`; nothing is written to the log, so `self show` and
-`rehydrate` stay theme-agnostic.
+**The shell.** When serving, the kernel adds one shared stylesheet and a nav
+to every page; projections on disk stay plain HTML, and the shell knows only
+the CSS class names, never the events. Strip it (`self show`, curl, a no-JS
+browser) and every page still works, because every action underneath is a
+plain HTML form.
 
 ## The brain
 
@@ -231,7 +167,6 @@ fake one; the brain is always a **process** you supply:
 ```sh
 SELF_BRAIN="claude -p"                      # any executable (agent CLI, script, human shim)
 SELF_BRAIN="$PWD/examples/brain-stub"       # or the deterministic offline stub (testing, demos)
-SELF_BRAIN="$PWD/examples/brain-grok"       # or the Grok Build CLI adapter (recommended for Grok users)
 ```
 
 A tool-capable agent CLI needs no adapter: `SELF_BRAIN="claude -p"` is a
@@ -240,21 +175,10 @@ orients from the brief and the rendered state; the instance's memory is the
 log, its projections, and nothing else. Do not reach for the harness's own
 session store (`claude -p --continue` and its kin) as the brain's memory: it
 chains asks into a conversation that lives outside the log — not replayed by
-`rehydrate`, not in any seed, invisible to audit — and whatever "sense of the
-place" accumulates there is state the system depends on but never captured.
+`rehydrate`, invisible to audit — and whatever "sense of the place"
+accumulates there is state the system depends on but never captured.
 If a cold brain orients slowly, that is design pressure aimed at the right
 target: improve the projections, don't bolt on a hidden memory tier.
-
-To drive an OpenAI-compatible endpoint, point `SELF_BRAIN` at the
-[`examples/brain-openai`](examples/brain-openai) adapter — a stdlib-only process
-that illustrates the contract's wire shape. It is intentionally incomplete: it
-makes a single completion against the brief without inspecting `SELF_HOME`
-itself, so it cannot do the exploration a real brain needs. Use it to understand
-the seam, then plug a tool-capable agent (`examples/brain-opencode`, or
-`claude -p`) for real capabilities. It used to live inside the kernel; it is a
-reference file now, so the core stays model-free.
-
-The new `examples/brain-grok` adapter wires in Grok Build (the official xAI CLI coding agent). Install Grok Build with `curl -fsSL https://x.ai/cli/install.sh | bash`, then use `SELF_BRAIN="$PWD/examples/brain-grok"` (or simply `grok` if in PATH with proper setup). It leverages Grok 4.5's strengths for exploration and script generation while staying fully compatible with the self contract.
 
 The stub brain is deliberately dumb but complete: `think` returns a fixed
 reply, `grow` declares a minimal command + projection from names in
@@ -302,40 +226,6 @@ wake-up card, not a context dump. A tool-capable coding agent (`opencode run`,
 tool loop of its own is incomplete by spec. Receipts are signed with
 `SELF_BRAIN_ID` as the recorded author.
 
-## Capability exchange
-
-Instances exchange **declarations and evidence, never runnable code.**
-Capabilities travel by `share`/`adopt`; lived content travels by
-`export`/`grow` — two flavors of the same seed idea.
-
-`self share command/<name>` or `self share projector/<name>` prints a slice of
-the local log: every declaration and locally-signed receipt for that exact
-capability, as JSONL. A bare name is accepted only when it names one type. `self adopt`
-records the whole slice inside a single `capability.adopted` event (the foreign
-receipts sit there as data, which the installer never reads), then re-declares
-the capability locally. The local brain re-generates the script — the sender's
-script is passed only as a reference to check against and adapt — and the result
-is installed under a receipt signed with the local key.
-
-So: a hostile slice cannot install anything (there is a test for this);
-provenance survives adaptation (the sender's records stay in the receiver's log);
-and cross-instance authorship is recorded but not cryptographically verifiable,
-because the keys are symmetric and never leave an instance.
-
-**Content exchange** is the other direction: not "teach me your tool" but
-"here is a piece of my record." `self export <prefix> <dir>` writes a seed
-directory from the live log — every `<prefix>*` event with its original
-`occurred_at`, the blobs those events reference, and an `intent.md` stub the
-sender edits (who I am, what this means, what I hope grows from it). The
-receiver runs `self grow <dir>`: the events land with their own moments and
-this instance's ids, the files land in the store hash-verified, and the
-receiver's brain reads the intent against what already lives here to decide
-how two records merge — rendered side by side, overlaps surfaced,
-contradictions visible. Two friends' seasons become a head-to-head; two
-researchers' field notes become the correlation neither could see alone.
-The sender's log keeps a `seed.exported` event; the receiver's keeps
-`seed.provenance`. Both sides remember.
-
 ## Where the brain runs
 
 The kernel spawns the brain as a plain subprocess and reads its stdout; it does
@@ -359,49 +249,39 @@ SELF_BIND         bind address, host or host:port (default 127.0.0.1:7777;
                   set 0.0.0.0 to expose)
 SELF_BRAIN_ID     author string signed into receipts
                   (default: the brain executable)
-SELF_THEME        default page design: grove | micro | paper | spec
-                  (default grove); ?theme= or the on-page picker overrides it
 ```
 
 ## Repository layout
 
 - The top-level Go files divide the small kernel by concern: CLI dispatch,
-  event log, signed installation, orchestration, projections, files, timers,
-  brain seam, HTTP server, and reconstruction.
+  event log, signed installation, orchestration, projections, brain seam,
+  HTTP server, and reconstruction.
 - `main_test.go` — the pinned invariants: log semantics, offline runtime
-  generation, the forged-receipt gate, receipt provenance, share/adopt
-  independence, the pluggable brain, and byte-stable reconstruction.
+  generation, the forged-receipt gate, receipt provenance, the pluggable
+  brain, and byte-stable reconstruction.
 - `examples/` — brains that plug in through `SELF_BRAIN`. `brain-stub` is the
   deterministic offline brain the tests and `demo.sh` use (no LLM, no
   network); `brain-opencode` is a working tool-capable brain (it delegates to
-  `opencode run`, which can inspect `SELF_HOME`); `brain-openai` is a reference
-  adapter that illustrates the contract's wire shape but is incomplete by spec
-  (no tool loop of its own). Not part of the kernel.
+  `opencode run`, which can inspect `SELF_HOME`). Not part of the kernel.
 - `demo.sh` — the offline, no-brain walkthrough of the loop.
-- `seeds/notes` / `seeds/journal` — small examples: one command, one projection.
+- `seeds/journal` — the smallest example: one command, one projection.
 - `seeds/memory` — durable memory for a stateless brain: `remember` writes
   facts to the log; a cold brain orients from `/memory`. The in-log answer to
   session stores.
 - `seeds/chat` — a conversational surface; asking for a missing capability
   generates it mid-conversation.
-- `seeds/renga` — linked verse written by many authors across sessions; a seed
-  whose first entry can't be pre-written, so each instance starts blank.
-- `seeds/palace` — the method of loci, made literal: every event in the log
-  becomes a room, derived from nothing but the hash of its own id. `walk`
-  your instance's history; every new event, from any capability, builds
-  another chamber, and `rehydrate` rebuilds the identical labyrinth.
 
 ## Limits and threat model
 
 These are current properties, stated plainly, not goals to aspire to.
 
 - **The brain is driven by the log, and the log can contain untrusted input.**
-  Chat messages, adopted seeds, and other events all become context for the brain
-  that writes your scripts. A crafted event can try to steer what gets written
-  (prompt injection). There is **no human review step between authoring and
+  Chat messages and other events all become context for the brain that writes
+  your scripts. A crafted event can try to steer what gets written (prompt
+  injection). There is **no human review step between authoring and
   signing** — the signature is applied to whatever the brain produced. Generated
   scripts are plain text in `capabilities/`; read them, use a brain you trust, and
-  treat adopting a seed as running code. Keeping a human in the loop before
+  treat growing a seed as running code. Keeping a human in the loop before
   trusting a new capability is the intended posture. The advantage over the usual
   software supply chain is that what you inspect is readable intent and readable
   output, not an opaque binary — but it is still yours to inspect.
@@ -409,13 +289,6 @@ These are current properties, stated plainly, not goals to aspire to.
   without a sandbox.** The kernel runs the brain as a plain subprocess (isolating
   its exploration is the brain's own concern) and runs the scripts it installs
   directly. The kernel's guarantee is the signed-receipt gate, not containment.
-- **Effectful commands raise the stakes of both points above.** A command that
-  prints, emails, or messages turns a prompt-injected script from a local
-  nuisance into an outward action, and a timer runs it with nobody watching.
-  The posture is unchanged but matters more: read the scripts that touch the
-  world before trusting them, keep credentials out of the log and out of
-  scripts, and let every effect leave a receipt event so the log can always
-  answer "what did this instance do on my behalf."
 - **The log is unbounded.** Every compile stores its script bytes, and every
   projection replays the whole log (O(history)). Snapshotting is not built in; a
   snapshot can itself be modeled as a seed and left to the user.
@@ -426,8 +299,6 @@ These are current properties, stated plainly, not goals to aspire to.
   serving process when operation-level ordering matters.
 - **The server has no authentication** on `/run`. It binds loopback by default
   for this reason; only expose it with `SELF_BIND` on a network you trust.
-- **Cross-instance identity is asserted, not proven,** because HMAC keys are
-  symmetric and never leave an instance.
 
 Not goals in this core: multi-user access control, log compaction in the kernel,
 or shipping code between instances.
