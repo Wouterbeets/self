@@ -390,6 +390,9 @@ SELF_THEME        default page design: grove | micro | paper | spec
   becomes a room, derived from nothing but the hash of its own id. `walk`
   your instance's history; every new event, from any capability, builds
   another chamber, and `rehydrate` rebuilds the identical labyrinth.
+- `seeds/snapshot` — the log folded by a capability: the whole history is
+  archived content-addressed, the working set stays live, and the kernel
+  never learns compaction happened. The Limits claim, made a worked example.
 
 ## Limits and threat model
 
@@ -417,8 +420,11 @@ These are current properties, stated plainly, not goals to aspire to.
   scripts, and let every effect leave a receipt event so the log can always
   answer "what did this instance do on my behalf."
 - **The log is unbounded.** Every compile stores its script bytes, and every
-  projection replays the whole log (O(history)). Snapshotting is not built in; a
-  snapshot can itself be modeled as a seed and left to the user.
+  projection replays the whole log (O(history)). Snapshotting is not built into
+  the kernel — and does not need to be: [`seeds/snapshot`](seeds/snapshot/intent.md)
+  folds the log from a plain command (the whole history archived
+  content-addressed first, the working set kept), with the mechanics pinned in
+  the test suite.
 - **Individual appends are locked; operations are not transactions.** Sequence
   assignment is serialized with an advisory file lock, but a command or grow
   may append several events and perform derived-state work between them. Two

@@ -168,6 +168,34 @@ conventions may not match the receiver's ("2-1" is ours-first on *both*
 sides of a derby). Translate in the projection; never rewrite the planted
 events.
 
+## Folding the log: snapshots without kernel help
+
+The log is unbounded and the kernel refuses to own compaction — but it also
+holds no state the log file does not: the next sequence number is parsed
+from the last line, page freshness is an mtime, every read is fresh from
+disk, and a receipt proves itself with a signature. A command that respects
+those facts can fold the file the kernel reads, and the kernel never
+notices. [`seeds/snapshot`](seeds/snapshot/intent.md) is the worked example,
+its mechanics pinned in the kernel's own test suite. The disciplines, which
+apply to any seed that touches the log directly:
+
+- **Archive first, fold second.** The whole history enters the store
+  content-addressed (the fourth ingress, hash pinned so the kernel verifies
+  the claim) before a single byte of the live log is rewritten. Compaction
+  moves events to cold storage; it never deletes them.
+- **Hold the kernel's own lock** — an exclusive flock on `events.jsonl`,
+  rewritten in place so the locked inode is the written inode — and end the
+  fold with a marker whose seq is the old maximum plus one, so later appends
+  clear the archived range.
+- **Keep what the machinery folds over:** the latest verified receipt per
+  live capability (rehydrate), declarations and tombstones in order (page
+  order), the latest `timer.fired` per timer (the epoch — drop it and the
+  timer re-fires), every `file.stored` (the store stays discoverable).
+- **Never fold what a live projector consumes.** Pages must stay pure
+  functions of the kept events, because the kernel trusts an unconsumed
+  page's mtime. Curation happens by retiring the projector first, or not at
+  all.
+
 ## Writing a good `intent.md`
 
 The top-level directories in `seeds/` are worked examples. Read them. `journal` is

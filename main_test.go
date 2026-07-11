@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -2171,5 +2173,481 @@ func TestExportPlantsElsewhere(t *testing.T) {
 	}
 	if data, err := os.ReadFile(blobPath(receiver, hash)); err != nil || string(data) != "ticket stub bytes" {
 		t.Fatalf("receiver blob = %q, %v", data, err)
+	}
+}
+
+// snapshotReferenceScript is the reference implementation of seeds/snapshot —
+// the script a brain should arrive at from that intent. It lives here so the
+// claim in Limits ("a snapshot can itself be modeled as a seed") is pinned
+// against the kernel invariants it leans on: seq is parsed from the last
+// line, freshness is an mtime, every read is fresh from disk, receipts prove
+// themselves. The kernel is not modified; the fold is just a command.
+const snapshotReferenceScript = `#!/usr/bin/env python3
+# snapshot - fold the log: archive the whole history, keep the working set.
+import sys, os, json, hmac, hashlib, fcntl, datetime
+
+home = os.environ["SELF_HOME"]
+prefixes = [a for a in sys.argv[1:] if a]
+
+def fail(msg):
+    sys.stderr.write("snapshot: " + msg + "\n")
+    sys.exit(1)
+
+# Kernel lifecycle names may never be curated away; refuse before touching anything.
+KERNEL = ("kernel.initialized", "command.declared", "projector.declared",
+          "timer.declared", "capability.retired", "script.compiled",
+          "file.stored", "snapshot.folded")
+for p in prefixes:
+    if any(k.startswith(p) for k in KERNEL):
+        fail("refusing prefix %r - it matches kernel lifecycle events" % p)
+
+# The pipe contract: drain the log offered on stdin. The fold operates on the
+# locked file itself (racing appends included), never on this copy.
+for _ in iter(lambda: sys.stdin.buffer.read(1 << 20), b""):
+    pass
+
+secret = bytes.fromhex(open(os.path.join(home, ".secret")).read().strip())
+def verified(r):
+    m = hmac.new(secret, b"self.receipt.v2\x00", hashlib.sha256)
+    for field in (r.get("type", ""), r.get("name", ""), r.get("script", ""), r.get("by", "")):
+        field = field.encode()
+        m.update(str(len(field)).encode() + b":" + field)
+    return hmac.compare_digest(m.hexdigest(), r.get("sig", ""))
+
+def pay(e):
+    p = e.get("payload")
+    return p if isinstance(p, dict) else {}
+
+# Read -> archive -> rewrite under the kernel's own flock, in place: the inode
+# the kernel locks for appends is always the inode being written.
+f = open(os.path.join(home, "events.jsonl"), "r+b")
+fcntl.flock(f, fcntl.LOCK_EX)
+raw = f.read()
+lines = [l for l in raw.split(b"\n") if l.strip()]
+events = [json.loads(l) for l in lines]
+
+# Final declared state, folded exactly as the kernel folds it.
+state = {}
+for e in events:
+    n, p = e["name"], pay(e)
+    if n in ("command.declared", "projector.declared") and p.get("name"):
+        state[(n.split(".")[0], p["name"])] = True
+    elif n == "capability.retired" and p.get("type") in ("command", "projector"):
+        state[(p["type"], p.get("name"))] = False
+live = {k for k, v in state.items() if v}
+
+# The latest verified receipt per live capability is the one rehydrate installs.
+latest_receipt = {}
+for i, e in enumerate(events):
+    if e["name"] == "script.compiled":
+        r = pay(e)
+        if (r.get("type"), r.get("name")) in live and verified(r):
+            latest_receipt[(r["type"], r["name"])] = i
+keep_receipts = set(latest_receipt.values())
+
+# The latest firing per timer is its epoch - drop it and the timer re-fires.
+latest_fired = {}
+for i, e in enumerate(events):
+    if e["name"] == "timer.fired" and pay(e).get("name"):
+        latest_fired[pay(e)["name"]] = i
+
+# Never fold what a live projector consumes: pages must stay pure functions
+# of the kept events, because the kernel trusts unconsumed pages' mtimes.
+consumed = set()
+for e in events:
+    if e["name"] == "projector.declared":
+        p = pay(e)
+        if ("projector", p.get("name")) in live:
+            consumed.update(c for c in (p.get("consumes") or []) if c != "*")
+
+def foldable(i, e):
+    n, p = e["name"], pay(e)
+    if any(n.startswith(x) for x in prefixes):
+        return True
+    if n == "self.heartbeat":
+        return True
+    if n in ("timer.fired", "timer.failed"):
+        return not (n == "timer.fired" and latest_fired.get(p.get("name")) == i)
+    if n == "script.compiled":
+        return i not in keep_receipts
+    if n in ("command.declared", "projector.declared"):
+        return (n.split(".")[0], p.get("name")) not in live
+    if n == "capability.retired":
+        if p.get("type") in ("command", "projector"):
+            return (p["type"], p.get("name")) not in live
+        return False
+    return False
+
+kept, dropped, shielded = [], 0, 0
+for i, e in enumerate(events):
+    if foldable(i, e):
+        if e["name"] in consumed:
+            shielded += 1
+            kept.append(lines[i])
+        else:
+            dropped += 1
+    else:
+        kept.append(lines[i])
+if shielded:
+    sys.stderr.write("snapshot: kept %d event(s) a live projector consumes\n" % shielded)
+if dropped == 0:
+    sys.stderr.write("snapshot: nothing to fold\n")
+    sys.exit(0)
+
+upto = max(e["seq"] for e in events)
+digest = hashlib.sha256(raw).hexdigest()
+
+# Archive first, fold second: the history is safe on disk before the truncate.
+scratch_dir = os.path.join(home, ".snapshot")
+os.makedirs(scratch_dir, exist_ok=True)
+for old in os.listdir(scratch_dir):  # clear scratch only once its bytes are in the store
+    op = os.path.join(scratch_dir, old)
+    try:
+        h = hashlib.sha256(open(op, "rb").read()).hexdigest()
+        if os.path.exists(os.path.join(home, "files", h)):
+            os.unlink(op)
+    except OSError:
+        pass
+archive_name = "events-upto-%d.jsonl" % upto
+with open(os.path.join(scratch_dir, archive_name), "wb") as a:
+    a.write(raw)
+    a.flush()
+    os.fsync(a.fileno())
+
+# The last-line rule: the marker carries old-max+1 so the kernel's next append
+# lands above the archived range - live and archived seqs never collide.
+marker = json.dumps({
+    "id": os.urandom(16).hex(), "seq": upto + 1, "name": "snapshot.folded",
+    "occurred_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+    "payload": {"upto_seq": upto, "kept": len(kept), "dropped": dropped, "archive_sha256": digest},
+}).encode()
+
+f.seek(0)
+f.truncate()
+f.write(b"\n".join(kept) + b"\n" + marker + b"\n")
+f.flush()
+os.fsync(f.fileno())
+f.close()
+
+# The fourth ingress: the kernel copies the archive in content-addressed and
+# verifies the pinned hash before the file.stored event appends.
+print(json.dumps({"name": "file.stored", "payload": {
+    "name": archive_name, "path": os.path.join(".snapshot", archive_name), "sha256": digest}}))
+`
+
+func countEvents(events []Event, name string) int {
+	n := 0
+	for _, e := range events {
+		if e.Name == name {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSnapshotSeedFoldsTheLogWithoutKernelHelp pins the Limits claim: log
+// compaction needs no kernel change, because a command can fold the file the
+// kernel reads. An instance accumulates the real kinds of bulk — superseded
+// receipts, heartbeats, timer firings, a retired capability's whole trail —
+// then one command run archives everything content-addressed and rewrites
+// the live log to its working set. Afterward the pages render the same, the
+// timer keeps its epoch, sequence numbers keep climbing above the archived
+// range, and rehydrate rebuilds every script from the folded log alone.
+func TestSnapshotSeedFoldsTheLogWithoutKernelHelp(t *testing.T) {
+	home := t.TempDir()
+	if err := ensureHome(home); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend := func(name, payload string) Event {
+		t.Helper()
+		e := newEvent(name, json.RawMessage(payload))
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+
+	// A live command with a receipt trail: two superseded compiles, then the
+	// one that counts. Superseded receipts carry full script bytes — the bulk.
+	mustAppend("command.declared", `{"name":"note","description":"take a note","params":{"text":"string"},"event":{"name":"note.added","fields":{"text":"string"}}}`)
+	for _, old := range []string{"#!/bin/sh\necho v1\n", "#!/bin/sh\necho v2\n"} {
+		if err := appendReceipt(home, "command", "note", old, "test brain"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	noteFinal := "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"note.added\",\"payload\":{\"text\":\"%s\"}}\\n' \"$*\"\n"
+	if err := installTrustedScript(home, "command", "note", noteFinal, "test brain"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A live projector over the domain events.
+	mustAppend("projector.declared", `{"name":"notes","description":"all notes","consumes":["note.added"]}`)
+	notesScript := "#!/usr/bin/env python3\nimport sys, json, html\nprint('<ul>')\nfor l in sys.stdin:\n    if l.strip():\n        print('<li>%s</li>' % html.escape(str(json.loads(l)['payload'].get('text',''))))\nprint('</ul>')\n"
+	if err := installTrustedScript(home, "projector", "notes", notesScript, "test brain"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A capability retired and never revived: its whole trail should fold away.
+	mustAppend("command.declared", `{"name":"old","description":"gone","params":{},"event":{"name":"old.done","fields":{}}}`)
+	if err := appendReceipt(home, "command", "old", "#!/bin/sh\necho old\n", "test brain"); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend("capability.retired", `{"type":"command","name":"old"}`)
+
+	// Lived history: domain events, heartbeats, a timer that fired and failed.
+	for _, text := range []string{"first", "second", "third"} {
+		mustAppend("note.added", `{"text":"`+text+`"}`)
+	}
+	mustAppend("timer.declared", `{"name":"weekly","every":"168h","command":"note","args":[]}`)
+	mustAppend("timer.fired", `{"name":"weekly","command":"note"}`)
+	mustAppend("timer.failed", `{"name":"weekly","command":"note","error":"boom"}`)
+	mustAppend("self.heartbeat", `{}`)
+	mustAppend("self.heartbeat", `{}`)
+	lastFired := mustAppend("timer.fired", `{"name":"weekly","command":"note"}`)
+	mustAppend("self.heartbeat", `{}`)
+
+	// The snapshot capability itself, installed the only way anything is.
+	mustAppend("command.declared", `{"name":"snapshot","description":"fold the log; archive first","params":{},"event":{"name":"snapshot.folded","fields":{}}}`)
+	if err := installTrustedScript(home, "command", "snapshot", snapshotReferenceScript, "test brain"); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldMax := before[len(before)-1].Seq
+	archive, err := os.ReadFile(logPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Curation that would touch kernel lifecycle events refuses before any rewrite.
+	if _, err := runCommand(home, "snapshot", []string{"script."}); err == nil {
+		t.Fatal("a prefix matching kernel lifecycle events must refuse")
+	}
+	if b, _ := os.ReadFile(logPath(home)); !bytes.Equal(b, archive) {
+		t.Fatal("a refused snapshot must leave the log untouched")
+	}
+
+	evs, err := runCommand(home, "snapshot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := readEvents(home)
+	if err != nil {
+		t.Fatalf("the folded log must still parse: %s", err)
+	}
+	if len(after) >= len(before) {
+		t.Fatalf("the fold did not shrink the log: %d -> %d events", len(before), len(after))
+	}
+
+	// The marker sits at old-max+1 and names the archive by hash.
+	var fold *Event
+	for i, e := range after {
+		if e.Name == "snapshot.folded" {
+			fold = &after[i]
+		}
+	}
+	if fold == nil {
+		t.Fatal("no snapshot.folded marker in the folded log")
+	}
+	if fold.Seq != oldMax+1 {
+		t.Fatalf("marker seq = %d, want %d (old max + 1, the last-line rule)", fold.Seq, oldMax+1)
+	}
+	var fp struct {
+		UptoSeq int    `json:"upto_seq"`
+		Kept    int    `json:"kept"`
+		Dropped int    `json:"dropped"`
+		Archive string `json:"archive_sha256"`
+	}
+	if err := json.Unmarshal(fold.Payload, &fp); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(archive)
+	digest := hex.EncodeToString(sum[:])
+	if fp.UptoSeq != oldMax || fp.Archive != digest || fp.Dropped == 0 {
+		t.Fatalf("marker payload %s, want upto_seq %d, archive %s", fold.Payload, oldMax, digest)
+	}
+
+	// The archive entered the store through the fourth ingress: bytes verified,
+	// event appended above the marker.
+	if len(evs) != 1 || evs[0].Name != "file.stored" || evs[0].Seq != oldMax+2 {
+		t.Fatalf("want one file.stored at seq %d, got %v", oldMax+2, evs)
+	}
+	if got := jsonField(evs[0].Payload, "sha256"); got != digest {
+		t.Fatalf("archive stored under %s, want %s", got, digest)
+	}
+	blob, err := os.ReadFile(blobPath(home, digest))
+	if err != nil || !bytes.Equal(blob, archive) {
+		t.Fatalf("the archive blob must be the old log byte for byte (%v)", err)
+	}
+
+	// What folded: heartbeats, failures, superseded firings and receipts, and
+	// the retired capability's whole trail.
+	if n := countEvents(after, "self.heartbeat"); n != 0 {
+		t.Fatalf("%d heartbeat(s) survived the fold", n)
+	}
+	if n := countEvents(after, "timer.failed"); n != 0 {
+		t.Fatal("timer.failed receipts should fold away")
+	}
+	var fired []Event
+	for _, e := range after {
+		if e.Name == "timer.fired" {
+			fired = append(fired, e)
+		}
+	}
+	if len(fired) != 1 || fired[0].ID != lastFired.ID {
+		t.Fatalf("want exactly the latest timer.fired kept (the epoch), got %d", len(fired))
+	}
+	for _, e := range after {
+		if strings.Contains(string(e.Payload), `"old"`) {
+			t.Fatalf("the retired capability's trail must fold away: %s %s", e.Name, e.Payload)
+		}
+	}
+	secret, err := loadSecret(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteReceipts := 0
+	for _, e := range after {
+		if e.Name != "script.compiled" {
+			continue
+		}
+		r, ok := verifiedReceipt(secret, e.Payload)
+		if ok && r.Type == "command" && r.Name == "note" {
+			noteReceipts++
+			if r.Script != noteFinal {
+				t.Fatal("the kept receipt must be the latest one")
+			}
+		}
+	}
+	if noteReceipts != 1 {
+		t.Fatalf("want exactly one receipt for note after the fold, got %d", noteReceipts)
+	}
+
+	// What stayed: kept events travel byte for byte — same ids, same moments.
+	if n := countEvents(after, "note.added"); n != 3 {
+		t.Fatalf("domain events must survive: got %d note.added, want 3", n)
+	}
+	if countEvents(after, "timer.declared") != 1 || countEvents(after, "kernel.initialized") != 1 {
+		t.Fatal("declarations and the kernel's first event must survive")
+	}
+	epochs := timerEpochs(after)
+	if !epochs["weekly"].Equal(lastFired.OccurredAt) {
+		t.Fatalf("the timer epoch drifted: %s, want %s", epochs["weekly"], lastFired.OccurredAt)
+	}
+
+	// The instance still works: scripts verify, pages render the same content,
+	// and the next append lands above the archived range.
+	for _, target := range [][2]string{{"command", "note"}, {"command", "snapshot"}, {"projector", "notes"}} {
+		if _, err := verifyInstalledScript(home, target[0], target[1]); err != nil {
+			t.Fatalf("%s/%s no longer verifies after the fold: %s", target[0], target[1], err)
+		}
+	}
+	page, err := runProjection(home, "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"first", "second", "third"} {
+		if !strings.Contains(string(page), text) {
+			t.Fatalf("the notes page lost %q to the fold", text)
+		}
+	}
+	next := newEvent("post.fold", json.RawMessage(`{}`))
+	if err := appendEvent(home, &next); err != nil {
+		t.Fatal(err)
+	}
+	if next.Seq != oldMax+3 {
+		t.Fatalf("next append got seq %d, want %d — it must clear the archived range", next.Seq, oldMax+3)
+	}
+
+	// Rehydrate from the folded log alone: the latest receipts survived, so
+	// every script rebuilds byte for byte.
+	if err := rehydrate(home); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := os.ReadFile(filepath.Join(home, "capabilities", "commands", "note", "run"))
+	if err != nil || string(rebuilt) != noteFinal {
+		t.Fatalf("rehydrate from the folded log must rebuild the latest script (%v)", err)
+	}
+
+	// A second fold finds nothing to do and leaves the log byte for byte.
+	settled, err := os.ReadFile(logPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evs, err := runCommand(home, "snapshot", nil); err != nil || len(evs) != 0 {
+		t.Fatalf("an idle snapshot must append nothing: %v, %s", evs, err)
+	}
+	if b, _ := os.ReadFile(logPath(home)); !bytes.Equal(b, settled) {
+		t.Fatal("an idle snapshot must leave the log untouched")
+	}
+}
+
+// TestSnapshotKeepsWhatLiveProjectorsConsume pins the shield that makes
+// folding sound: the kernel trusts an unconsumed page's mtime, so a page must
+// stay a pure function of the kept events. An event a live projector consumes
+// survives every fold — even one the curator asked for by prefix — and folds
+// only once that projector is retired.
+func TestSnapshotKeepsWhatLiveProjectorsConsume(t *testing.T) {
+	home := t.TempDir()
+	if err := ensureHome(home); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend := func(name, payload string) {
+		t.Helper()
+		e := newEvent(name, json.RawMessage(payload))
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mustAppend("projector.declared", `{"name":"pulse","description":"heartbeat history","consumes":["self.heartbeat"]}`)
+	if err := installTrustedScript(home, "projector", "pulse", "#!/bin/sh\nwc -l\n", "test brain"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		mustAppend("self.heartbeat", `{}`)
+	}
+	mustAppend("command.declared", `{"name":"snapshot","description":"fold the log","params":{},"event":{"name":"snapshot.folded","fields":{}}}`)
+	if err := installTrustedScript(home, "command", "snapshot", snapshotReferenceScript, "test brain"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Even asked for by prefix, consumed events stay: the page depends on them.
+	if _, err := runCommand(home, "snapshot", []string{"self."}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countEvents(after, "self.heartbeat"); n != 3 {
+		t.Fatalf("a live projector consumes self.heartbeat; %d of 3 survived the fold", n)
+	}
+
+	// Retire the projector and the shield lifts: the same fold now takes them.
+	if err := ingest(home, []Event{newEvent("capability.retired", json.RawMessage(`{"type":"projector","name":"pulse"}`))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(home, "snapshot", []string{"self."}); err != nil {
+		t.Fatal(err)
+	}
+	after, err = readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countEvents(after, "self.heartbeat"); n != 0 {
+		t.Fatalf("with the projector retired the heartbeats should fold; %d survived", n)
+	}
+	if countEvents(after, "snapshot.folded") != 1 {
+		t.Fatal("the fold should leave its marker")
+	}
+	for _, e := range after {
+		if strings.Contains(string(e.Payload), `"pulse"`) {
+			t.Fatalf("the retired projector's trail must fold away: %s %s", e.Name, e.Payload)
+		}
 	}
 }
