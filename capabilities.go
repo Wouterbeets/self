@@ -120,7 +120,7 @@ func stateBrief(home string) string {
 	fmt.Fprintf(&b, "# self — orientation brief\n\n")
 	fmt.Fprintf(&b, "Instance: `%s`\n\n", home)
 	if len(events) == 0 {
-		b.WriteString("Empty log. Grow a seed: `self grow <seed>` (try `seeds/journal`).\n")
+		b.WriteString("Empty log. Learn a lesson: `self learn <account>` (try `lessons/journal`).\n")
 		return b.String()
 	}
 
@@ -294,7 +294,7 @@ type commandDecl struct {
 		Fields map[string]string `json:"fields"`
 	} `json:"event"`
 	// Implementation is an optional reference the compiler verifies and adapts —
-	// never installed as-is, so precision from the seed author and receiver
+	// never installed as-is, so precision from the giver and receiver
 	// adaptation both survive.
 	Implementation string `json:"implementation,omitempty"`
 	Revision       struct {

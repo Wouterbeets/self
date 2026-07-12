@@ -45,7 +45,7 @@ func renderKernelHTML(home string) {
 
 	b.WriteString("<h2>commands</h2>\n")
 	if len(cmdOrder) == 0 {
-		b.WriteString("<p class=\"muted\">None yet — grow a seed: <code>self grow seeds/chat</code>.</p>\n")
+		b.WriteString("<p class=\"muted\">None yet — learn a lesson: <code>self learn lessons/chat</code>.</p>\n")
 	}
 	for _, n := range cmdOrder {
 		d := commands[n]
@@ -87,7 +87,7 @@ func renderKernelHTML(home string) {
 	b.WriteString("</table>\n")
 
 	b.WriteString("<h2>the pipe contract</h2>\n<pre>" + esc(pipeContract) + "</pre>\n")
-	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time alike). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it.</p>\n")
+	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at learn time and run time alike). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it.</p>\n")
 	b.WriteString("</body></html>\n")
 
 	siteDir := filepath.Join(home, "site")

@@ -46,11 +46,17 @@ func main() {
 	}
 
 	switch cmd {
-	case "grow":
+	case "learn":
 		if len(args) < 1 {
-			err = fmt.Errorf("usage: self grow <seed-dir>")
+			err = fmt.Errorf("usage: self learn <account-dir>")
 		} else {
-			err = cmdGrow(home, args[0])
+			err = cmdLearn(home, args[0])
+		}
+	case "give":
+		if len(args) != 2 {
+			err = fmt.Errorf("usage: self give <event-prefix | command/<name> | projector/<name>> <dir>")
+		} else {
+			err = cmdGive(home, args[0], args[1])
 		}
 	case "run":
 		if len(args) < 1 {
@@ -60,8 +66,8 @@ func main() {
 		}
 	case "think":
 		err = cmdThink(home, strings.Join(args, " "))
-	case "heartbeat":
-		err = cmdHeartbeat(home)
+	case "reflect":
+		err = cmdReflect(home)
 	case "show":
 		if len(args) < 1 {
 			err = fmt.Errorf("usage: self show <projection>")

@@ -89,14 +89,15 @@ func receiptCount(home, typ, name string) int {
 	return n
 }
 
-// cmdGrow grows a seed: a directory with intent.md (the genotype — prose
-// intent, not a parts-list) and optionally seed.jsonl (initial content events,
-// the initial deposit). The orchestrator reads the intent, explores the
-// instance, and declares the decomposition that realizes it here; each piece is
-// then compiled with the whole intent woven in. Same intent, different instance,
-// different decomposition.
-func cmdGrow(home, ref string) error {
-	name, intent, deposit, err := readSeedSource(ref)
+// cmdLearn learns an account: a directory with intent.md (the telling — prose
+// intent, not a parts-list), and optionally record.jsonl (events to plant,
+// verbatim) and manifest.json (the giver's attestation). The brain reads the
+// intent — and the record, with its own tools — against this instance's
+// state and declares the decomposition that realizes it here; each piece is
+// then compiled with the whole intent woven in. Same account, different
+// instance, different expression: learning, not copying.
+func cmdLearn(home, ref string) error {
+	name, intent, deposit, m, recordHash, err := readAccount(ref)
 	if err != nil {
 		return err
 	}
@@ -107,25 +108,22 @@ func cmdGrow(home, ref string) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "self: orchestrating %q from intent…\n", name)
-	res, err := pipeBrain(home, "grow", growPrompt(intent))
+	fmt.Fprintf(os.Stderr, "self: learning %q from its intent…\n", name)
+	res, err := pipeBrain(home, "learn", learnPrompt(ref, intent, deposit))
 	if err != nil {
-		return fmt.Errorf("orchestrate %q: %w (growing needs a brain — %s)", name, err, brainHint)
+		return fmt.Errorf("learn %q: %w (learning needs a brain — %s)", name, err, brainHint)
 	}
 	c := newLLM(home)
 	c.intent = intent
-	if len(res.Events) == 0 {
-		return fmt.Errorf("the orchestrator declared nothing for %q", name)
-	}
 
 	// The orchestrator's stated reasoning is provenance: log it, so the chain
-	// from intent to script survives in the log (and in any seed sharing it),
-	// and weave it into each compile of this grow so every piece is authored
-	// with the plan in view — in-band continuity, never a session store.
+	// from intent to script survives in the log, and weave it into each
+	// compile of this learn so every piece is authored with the plan in
+	// view — in-band continuity, never a session store.
 	if r := strings.TrimSpace(res.Response); r != "" {
 		c.reasoning = r
-		rp, _ := json.Marshal(map[string]any{"seed": name, "reasoning": r})
-		re := newEvent("grow.orchestrated", rp)
+		rp, _ := json.Marshal(map[string]any{"lesson": name, "reasoning": r})
+		re := newEvent("learn.orchestrated", rp)
 		if err := appendEvent(home, &re); err != nil {
 			return err
 		}
@@ -144,36 +142,61 @@ func cmdGrow(home, ref string) error {
 		}
 		declEvents = append(declEvents, e)
 	}
+	if len(declEvents) == 0 && len(deposit) == 0 {
+		return fmt.Errorf("nothing to learn from %q: the brain declared no capability and the account carries no record", name)
+	}
 	grown := compileDeclarations(c, home, declEvents)
 	if grown != len(declEvents) {
 		refreshSite(home)
-		return fmt.Errorf("grew %q into the log, but %d of %d declared capabilities compiled; no seed.planted receipt was written", name, grown, len(declEvents))
+		return fmt.Errorf("recorded %q in the log, but %d of %d declared capabilities compiled; no lesson.learned receipt was written", name, grown, len(declEvents))
 	}
 
-	// The initial deposit: content laid once, so the surface has
-	// something to render from the first moment.
+	// The record lands verbatim: this instance's id and seq, the event's own
+	// moment. Planted events never route through the brain — the model only
+	// ever writes the disposable part, never the part that accumulates.
 	for _, e := range deposit {
 		fresh := newEvent(e.Name, e.Payload)
+		if !e.OccurredAt.IsZero() {
+			fresh.OccurredAt = e.OccurredAt
+		}
 		if err := appendEvent(home, &fresh); err != nil {
 			return err
 		}
 	}
 
-	rp, _ := json.Marshal(map[string]any{"seed": name, "capabilities": grown})
-	se := newEvent("seed.planted", rp)
+	// The receipt attests to what was actually planted, beside what the
+	// manifest claimed: a mismatch means the account was edited between
+	// giving and learning — an intervention, visible forever in both logs.
+	receipt := map[string]any{"lesson": name, "capabilities": grown, "events": len(deposit)}
+	if recordHash != "" {
+		receipt["record_sha256"] = recordHash
+	}
+	if m.RecordSha256 != "" {
+		receipt["manifest_sha256"] = m.RecordSha256
+	}
+	rp, _ := json.Marshal(receipt)
+	se := newEvent("lesson.learned", rp)
 	if err := appendEvent(home, &se); err != nil {
 		return err
 	}
 	refreshSite(home)
-	fmt.Printf("grew %q: %d capabilit(ies) from intent — %s\n", name, grown, res.Response)
+	fmt.Printf("learned %q: %d capabilit(ies), %d event(s) planted — %s\n", name, grown, len(deposit), res.Response)
 	return nil
 }
 
-// growPrompt frames the orchestration ask: decompose the intent into declared
-// capabilities, and hand them back the one way the kernel accepts them.
-func growPrompt(intent string) string {
-	return "Grow the capabilities that realize this product: declare each one by emitting a command.declared / projector.declared event, then summarize in one line.\n\n" +
-		brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
+// learnPrompt frames the orchestration ask: decompose the intent into declared
+// capabilities, and hand them back the one way the kernel accepts them. When
+// the account carries a record, the brain is pointed at it — evidence is for
+// reading, and the file is right there for its tools.
+func learnPrompt(ref, intent string, deposit []Event) string {
+	prompt := "Learn this account: declare the capabilities that realize its intent here by emitting command.declared / projector.declared events, then summarize in one line."
+	if len(deposit) > 0 {
+		if abs, err := filepath.Abs(ref); err == nil {
+			ref = abs
+		}
+		prompt += fmt.Sprintf("\n\nThe account carries a record of %d event(s) that will be planted in the log, verbatim, right after you answer: read %s to ground your declarations in the evidence (lineage.* events are another instance's history — reference material, never yours to re-emit).", len(deposit), filepath.Join(ref, "record.jsonl"))
+	}
+	return prompt + "\n\n" + brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
 }
 
 func cmdThink(home, prompt string) error {
@@ -203,15 +226,15 @@ func thinkPrompt(prompt string) string {
 	return prompt + "\n\n" + brainAnswerContract
 }
 
-func cmdHeartbeat(home string) error {
+func cmdReflect(home string) error {
 	prior, _ := readEvents(home)
-	hb := newEvent("self.heartbeat", json.RawMessage(`{}`))
+	hb := newEvent("self.reflected", json.RawMessage(`{}`))
 	if err := appendEvent(home, &hb); err != nil {
 		return err
 	}
-	prompt := `This is a self-improvement heartbeat. Explore your instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (emit command.declared / projector.declared); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` +
-		"\n\n" + brainAnswerContract + heartbeatContext(prior)
-	res, err := pipeBrain(home, "heartbeat", prompt)
+	prompt := `This is a self-improvement reflection. Explore your instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (emit command.declared / projector.declared); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` +
+		"\n\n" + brainAnswerContract + reflectionContext(prior)
+	res, err := pipeBrain(home, "reflect", prompt)
 	if err != nil {
 		return err
 	}
@@ -220,19 +243,19 @@ func cmdHeartbeat(home string) error {
 	return nil
 }
 
-// heartbeatContext hands the brain the events since its last beat — capped,
-// minus kernel bookkeeping receipts — so a beat reacts to what changed instead
-// of exploring from scratch.
-func heartbeatContext(events []Event) string {
+// reflectionContext hands the brain the events since its last reflection —
+// capped, minus kernel bookkeeping receipts — so a reflection reacts to what
+// changed instead of exploring from scratch.
+func reflectionContext(events []Event) string {
 	last := -1
 	for i, e := range events {
-		if e.Name == "self.heartbeat" {
+		if e.Name == "self.reflected" {
 			last = i
 		}
 	}
 	var acts []Event
 	for _, e := range events[last+1:] {
-		if e.Name == "script.compiled" || e.Name == "script.verified" {
+		if e.Name == "script.compiled" {
 			continue
 		}
 		acts = append(acts, e)
@@ -244,7 +267,7 @@ func heartbeatContext(events []Event) string {
 		acts = acts[len(acts)-40:]
 	}
 	var b strings.Builder
-	b.WriteString("\n\nSince your last heartbeat, these things happened in this instance:\n")
+	b.WriteString("\n\nSince your last reflection, these things happened in this instance:\n")
 	for _, e := range acts {
 		payload := strings.TrimSpace(string(e.Payload))
 		if len(payload) > 140 {
@@ -258,7 +281,7 @@ func heartbeatContext(events []Event) string {
 
 func cmdRun(home, command string, args []string) error {
 	if p, _ := scriptPath(home, "command", command); !fileExists(p) {
-		return fmt.Errorf("command %q not found (grow a seed that declares it)", command)
+		return fmt.Errorf("command %q not found (learn a lesson that declares it)", command)
 	}
 	evs, err := runCommand(home, command, args)
 	if err != nil {

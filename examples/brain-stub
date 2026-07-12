@@ -10,7 +10,7 @@ kernel holds no brain, not even a fake one.
 
     export SELF_BRAIN="$PWD/examples/brain-stub"
 
-think/heartbeat answer with fixed prose. grow reads the latest intent.declared
+think/reflect answer with fixed prose. learn reads the latest intent.declared
 from the instance's own log and declares one command and one projection named
 in the intent's backticks. compile answers with a trivial script that honors
 the pipe contract.
@@ -155,7 +155,7 @@ def compile_ask(prompt):
     print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
 
 
-def grow_ask(home, prompt):
+def learn_ask(home, prompt):
     name, intent = latest_intent(home)
     if not intent:
         intent = prompt
@@ -164,12 +164,12 @@ def grow_ask(home, prompt):
     event = first_event(intent) or command + ".recorded"
     print(json.dumps({"name": "command.declared", "payload": {
         "name": command,
-        "description": "offline stub command grown from " + name,
+        "description": "offline stub command learned from " + name,
         "params": {"text": "string"},
         "event": {"name": event, "fields": {"text": "string"}}}}))
     print(json.dumps({"name": "projector.declared", "payload": {
         "name": projector,
-        "description": "offline stub projection grown from " + name,
+        "description": "offline stub projection learned from " + name,
         "consumes": [event]}}))
     print('stub declared "%s" and "%s"' % (command, projector))
 
@@ -181,10 +181,10 @@ def main():
     home = os.environ.get("SELF_HOME", ".")
     if ask == "compile":
         compile_ask(prompt)
-    elif ask == "grow":
-        grow_ask(home, prompt)
-    elif ask == "heartbeat":
-        print("stub heartbeat: no changes")
+    elif ask == "learn":
+        learn_ask(home, prompt)
+    elif ask == "reflect":
+        print("stub reflection: no changes")
     else:
         print("stub thought about: " + prompt)
 

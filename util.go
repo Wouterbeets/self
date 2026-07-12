@@ -52,10 +52,16 @@ a signed receipt.
 usage: self [command] [args]
 
   self                 rehydrate the instance from the log, then serve it (the default)
-  self grow <seed>     grow a seed's intent into capabilities (needs a brain)
+  self learn <account> learn an account's intent into capabilities and plant its
+                       record, moments preserved (needs a brain)
+  self give <sel> <dir>
+                       write an account from the log — <sel> is an event-name
+                       prefix ("note.") or command/<name> | projector/<name>;
+                       intent + record + manifest land in <dir> for you to
+                       curate before passing on
   self run <cmd> ...   run a capability — append events, refresh projections
   self think "..."     ask the brain; returns {response, events} JSON
-  self heartbeat       one self-improvement cycle (the brain reflects & grows)
+  self reflect         one self-improvement cycle (the brain reflects & grows)
   self show <name>     render a projection to stdout
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
   self revise <target> <request>
@@ -69,7 +75,7 @@ environment:
                     (default: current working directory; set it in your shell rc
                     to pin a shared instance, e.g. export SELF_HOME=~/.self)
 
-  plug a brain (one seam; think, heartbeat, grow, and compile all pass through it):
+  plug a brain (one seam; think, reflect, learn, and compile all pass through it):
   SELF_BRAIN        a tool-capable executable, e.g. "claude -p" or
                     examples/brain-opencode — it gets the ask's kind in
                     $SELF_ASK, the prompt as its last argument, and an
@@ -88,14 +94,14 @@ func protocolText() string {
 
 Brain process contract
 
-  The same seam handles think, heartbeat, grow, and compile.
+  The same seam handles think, reflect, learn, and compile.
 
   SELF_BRAIN   executable to spawn, optionally with args. A brain MUST be able to
               inspect files under SELF_HOME (site/*.html, events.jsonl,
               capabilities/) with its own tools — a plain stdin/stdout adapter
               with no file access cannot do the job. Coding-agent brains
               (opencode run, claude -p) already have such tools.
-  SELF_ASK     request kind: think | heartbeat | grow | compile
+  SELF_ASK     request kind: think | reflect | learn | compile
   argv         the prompt is passed as the last argument
   stdin        an orientation brief (plain text): where the brain is, what
                capabilities exist, and where to look for the rest. The brain is
@@ -136,6 +142,28 @@ Compiled capability contract
 
   environment         SELF_HOME is set for every compiled script.
 
+Accounts (give / learn)
+
+  An account is a directory — the one wire format between instances:
+
+    intent.md      the telling: who this is from, what it means (required)
+    record.jsonl   the evidence: events verbatim, moments preserved (optional)
+    manifest.json  the attestation: event count + sha256 of the record (optional)
+
+  self give writes one from the log (an event-name prefix selects a record;
+  command/<name> selects a capability's declarations and receipts). self learn
+  reads one: the receiver's brain reads the intent — and the record, with its
+  own tools — against local state and declares its own capabilities; the
+  record then lands verbatim with its own occurred_at, never routed through
+  the brain. The kernel's own vocabulary (command.declared, script.compiled,
+  capability.retired, …) never travels raw: give renames such events to
+  lineage.<name> and learn refuses them otherwise — a foreign account carries
+  history as evidence but cannot speak in the receiving kernel's voice, so a
+  hostile account cannot install anything. lesson.learned records the sha256
+  of what was actually planted beside the manifest's claim: editing an
+  account before learning it (the receiver's intervention) is visible in
+  both logs. Curation is file editing — the account is plain text.
+
 Declarations — not code — are what cross every boundary. A generated script
 installs only after the local kernel signs a script.compiled receipt with
 SELF_HOME/.secret and the current SELF_BRAIN_ID.
@@ -144,14 +172,16 @@ SELF_HOME/.secret and the current SELF_BRAIN_ID.
 
 func commandHelp(cmd string) (string, bool) {
 	switch cmd {
-	case "grow":
-		return "usage: self grow <seed-dir>\n\nRead <seed-dir>/intent.md, ask the brain to declare capabilities, compile them, and install signed receipts.\n", true
+	case "learn":
+		return "usage: self learn <account-dir>\n\nRead <account-dir>/intent.md, ask the brain to declare capabilities fitted to this instance, compile them under signed receipts, then plant the account's record.jsonl verbatim (moments preserved). The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
+	case "give":
+		return "usage: self give <event-prefix> <dir>\n       self give command/<name> <dir>\n       self give projector/<name> <dir>\n\nWrite an account from this log: the selected events verbatim in record.jsonl, a manifest with their count and sha256, and an intent.md stub to edit — who you are, what this means, what you hope it becomes. Kernel-vocabulary events are renamed lineage.* so they arrive as evidence, never as installables. The giving is remembered as an account.given event.\n", true
 	case "run":
 		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then the projections consuming them re-render.\n", true
 	case "think":
 		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, events} JSON and appends nothing.\n", true
-	case "heartbeat":
-		return "usage: self heartbeat\n\nAppend a heartbeat event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
+	case "reflect":
+		return "usage: self reflect\n\nAppend a self.reflected event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
 	case "show":
 		return "usage: self show <projection>\n\nRender a projection to stdout by replaying the current log. Use 'kernel' for the instance index.\n", true
 	case "rehydrate":

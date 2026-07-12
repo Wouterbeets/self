@@ -1,4 +1,4 @@
-# journal — minimal example seed
+# journal — minimal example lesson
 
 ## purpose
 

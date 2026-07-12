@@ -11,12 +11,12 @@ import (
 )
 
 // The kernel holds no model — not even a fake one. Every ask — think,
-// heartbeat, grow, and each compile — is handed to a brain PROCESS
+// reflect, learn, and each compile — is handed to a brain PROCESS
 // (SELF_BRAIN, e.g. "claude -p"; examples/brain-stub is a deterministic
 // offline one for demos and tests), which explores and writes scripts with
 // its own tools; the kernel only installs and signs what comes back. The llm
 // value carries just enough to route a compile: the home it runs against,
-// and — during a grow — the whole intent plus the orchestrator's stated
+// and — during a learn — the whole intent plus the orchestrator's stated
 // reasoning, woven into each compile so no piece is authored in a dark room.
 // The reasoning travels in-band, through the prompt and the log, never
 // through a session store outside the log.
@@ -56,7 +56,7 @@ The kernel sets SELF_HOME on every script. Any language with a shebang works; us
 // wasted and denied: the kernel reads ONLY stdout and appends what it finds
 // there, under its own signature. It also emits Markdown by habit; the pipe
 // tolerates fences, but one clean JSON object per line is what actually wants
-// ingesting. Woven into every ask that expects events (grow, heartbeat, compile).
+// ingesting. Woven into every ask that expects events (learn, reflect, compile).
 const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To persist ordinary state, print the domain event that records it. To add capabilities, print command.declared / projector.declared events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing; ordinary domain events are not capability growth.
 
 THIS REPLY IS FINAL — you run once per ask and are never re-invoked. Explore first, THEN answer completely: never end on a plan or a promise ("I'll explore and then respond") — whatever you have not said when you exit was never said.
@@ -77,7 +77,7 @@ func (c *llm) compileProjector(d projectorDecl) (string, error) {
 // seam as every other ask. The declaration (its optional implementation
 // reference included) rides in the prompt; an orientation brief rides on stdin
 // (the brain inspects SELF_HOME itself for depth — site/*.html, events.jsonl,
-// capabilities/); the answer is one script.authored event. During a grow the
+// capabilities/); the answer is one script.authored event. During a learn the
 // whole intent rides along too, so each piece is compiled toward the same
 // product. The kernel still installs and signs — a brain authors bytes, only
 // the kernel makes them real.
@@ -100,7 +100,7 @@ Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 		prompt = "Here is a recently compiled " + typ + " as an idiom/reference for this instance. Learn its style and pipe-contract shape, but do not copy it blindly.\n\n--- EXEMPLAR " + exemplarName + " ---\n" + exemplarScript + "\n--- END EXEMPLAR ---\n\n" + prompt
 	}
 	if strings.TrimSpace(reasoning) != "" {
-		prompt = "The ORCHESTRATOR that declared this capability explored the instance and explained its plan below (it is also in the log as grow.orchestrated). Compile in line with it.\n\n--- ORCHESTRATOR'S REASONING ---\n" + reasoning + "\n--- END REASONING ---\n\n" + prompt
+		prompt = "The ORCHESTRATOR that declared this capability explored the instance and explained its plan below (it is also in the log as learn.orchestrated). Compile in line with it.\n\n--- ORCHESTRATOR'S REASONING ---\n" + reasoning + "\n--- END REASONING ---\n\n" + prompt
 	}
 	if strings.TrimSpace(intent) != "" {
 		prompt = "This capability is one part of a product with the following INTENT. Compile it so the whole intent is served.\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---\n\n" + prompt
@@ -162,7 +162,7 @@ func brainEnv(home, kind string) []string {
 }
 
 // pipeBrain is the ONE seam through which the kernel asks for intelligence —
-// think, heartbeat, grow, and compile all pass here. It spawns $SELF_BRAIN with
+// think, reflect, learn, and compile all pass here. It spawns $SELF_BRAIN with
 // the ask's kind in $SELF_ASK, the prompt as the last argument, and a freshly
 // written orientation brief from SELF_HOME/site/brief.md on stdin: where the
 // brain is, what capabilities exist, and where to look for the rest — nothing

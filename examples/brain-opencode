@@ -10,7 +10,7 @@ Usage:
 
     export SELF_BRAIN="$PWD/examples/brain-opencode"
     export SELF_OPENCODE_MODEL=github-copilot/gpt-5.5  # optional
-    self grow seeds/chat
+    self learn lessons/chat
 """
 
 import json

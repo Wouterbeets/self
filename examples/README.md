@@ -18,21 +18,21 @@ stdout plugs straight into the pipe; there is nothing here to install for it:
 
 ```sh
 export SELF_BRAIN="claude -p"
-self grow seeds/chat
+self learn lessons/chat
 ```
 
 Stateless on purpose: each ask starts cold and orients from the brief and the
 rendered state. Resist wiring the harness's session store in as memory
 (`--continue`): it accumulates brain state outside the log — unreplayable,
-unauditable, absent from every seed. An instance's memory is its events and
+unauditable, absent from every account. An instance's memory is its events and
 projections; a brain that needs to remember something should write it to the
 log through a capability, where `rehydrate` can reach it.
 
 ## `brain-stub`
 
 The deterministic offline brain — no LLM, no network, Python standard library
-only. This is what the tests and `demo.sh` plug in: `think`/`heartbeat` answer
-with fixed prose, `grow` reads the latest `intent.declared` from the
+only. This is what the tests and `demo.sh` plug in: `think`/`reflect` answer
+with fixed prose, `learn` reads the latest `intent.declared` from the
 instance's log and declares one command and one projection named in the
 intent's backticks, and `compile` answers with a trivial script honoring the
 pipe contract. It proves the machinery, not the intelligence — and it goes
@@ -55,5 +55,5 @@ correct — point `SELF_BRAIN` at this for real capabilities.
 ```sh
 export SELF_BRAIN="$PWD/examples/brain-opencode"
 export SELF_OPENCODE_MODEL=github-copilot/gpt-5.5  # optional
-self grow seeds/chat
+self learn lessons/chat
 ```

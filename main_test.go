@@ -255,7 +255,7 @@ func TestRehydrateFailurePreservesWorkingDerivedState(t *testing.T) {
 
 // TestRehydrateTypeCollision pins that a command and a projector sharing a
 // name both reconstruct: receipts are keyed by (type, name), not name. The
-// chat seed (a chat command and a chat projector) is the natural collision.
+// chat lesson (a chat command and a chat projector) is the natural collision.
 func TestRehydrateTypeCollision(t *testing.T) {
 	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
@@ -445,7 +445,7 @@ print(json.dumps({"name":"script.authored","payload":{"script":script}}))
 // TestPluggableBrain pins the README's oldest promise, now true everywhere:
 // the brain is just a process behind one contract, and the kernel can't tell
 // the difference. A fake external brain — a few lines of python, no HTTP, no
-// stub — answers a heartbeat with prose plus a declaration, then answers the
+// stub — answers a reflection with prose plus a declaration, then answers the
 // compile ask the strange loop fires, and the capability it authored installs with
 // a receipt signed by this home carrying the external brain's name.
 func TestPluggableBrain(t *testing.T) {
@@ -457,8 +457,8 @@ ask = os.environ.get("SELF_ASK", "")
 if ask == "compile":
     script = "#!/usr/bin/env python3\nimport sys, json\nprint(json.dumps({\"name\": \"pinged\", \"payload\": {\"title\": \" \".join(sys.argv[1:]) or \"pong\"}}))\n"
     print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
-elif ask == "heartbeat":
-    print("I looked around; this instance cannot ping. Growing that.")  # prose — tolerated
+elif ask == "reflect":
+    print("I looked around; this instance cannot ping. Declaring that.")  # prose — tolerated
     print(json.dumps({"name": "command.declared", "payload": {
         "name": "ping", "description": "answer with a pong",
         "event": {"name": "pinged", "fields": {"title": "string"}}}}))
@@ -471,7 +471,7 @@ else:
 	t.Setenv("SELF_BRAIN_ID", "an external brain, plugged in whole")
 
 	home := t.TempDir()
-	if err := cmdHeartbeat(home); err != nil {
+	if err := cmdReflect(home); err != nil {
 		t.Fatal(err)
 	}
 
@@ -573,7 +573,7 @@ else:
 	t.Setenv("SELF_BRAIN_ID", "a markdown-speaking brain")
 
 	home := t.TempDir()
-	res, err := pipeBrain(home, "grow", "grow a note capability")
+	res, err := pipeBrain(home, "learn", "learn a note capability")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,8 +642,8 @@ func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
 			}
 		}
 	}
-	// grow and heartbeat expect declarations: answer on stdout, plain JSON.
-	must("grow", growPrompt("some intent"), "stdout", "events.jsonl", "no markdown", "one line")
+	// learn and reflect expect declarations: answer on stdout, plain JSON.
+	must("learn", learnPrompt(".", "some intent", nil), "stdout", "events.jsonl", "no markdown", "one line")
 	// think is report-only, but the brain must still be told stdout is the
 	// only channel — a tool-capable brain otherwise tries to persist its work.
 	must("think", thinkPrompt("what is missing here?"), "stdout", "cannot write the log", "no code fences")
@@ -654,16 +654,16 @@ func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
 	// the intent-woven variant keeps the same guidance.
 	must("compile+intent", compilePrompt("a product", "", "", "", "command", "note", `{"name":"note"}`),
 		"do not install", "no code fence")
-	// during a grow the orchestrator's reasoning rides in-band in the prompt.
+	// during a learn the orchestrator's reasoning rides in-band in the prompt.
 	must("compile+reasoning", compilePrompt("a product", "declared note because the intent asks for one", "", "", "command", "note", `{"name":"note"}`),
 		"orchestrator", "declared note because the intent asks for one", "do not install")
 }
 
-// The orchestrator's stated reasoning is provenance. cmdGrow appends it to the
-// log as grow.orchestrated and weaves it into every compile of that grow — the
+// The orchestrator's stated reasoning is provenance. cmdLearn appends it to the
+// log as learn.orchestrated and weaves it into every compile of that learn — the
 // in-band alternative to remembering through a session store outside the log:
 // rehydrate replays it, audit can read it.
-func TestGrowLogsOrchestratorReasoning(t *testing.T) {
+func TestLearnLogsOrchestratorReasoning(t *testing.T) {
 	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
 
@@ -675,7 +675,7 @@ func TestGrowLogsOrchestratorReasoning(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(seed, "intent.md"), []byte(intent), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := cmdGrow(home, seed); err != nil {
+	if err := cmdLearn(home, seed); err != nil {
 		t.Fatal(err)
 	}
 
@@ -684,12 +684,12 @@ func TestGrowLogsOrchestratorReasoning(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got struct {
-		Seed      string `json:"seed"`
+		Lesson    string `json:"lesson"`
 		Reasoning string `json:"reasoning"`
 	}
 	found := false
 	for _, e := range events {
-		if e.Name == "grow.orchestrated" {
+		if e.Name == "learn.orchestrated" {
 			if err := json.Unmarshal(e.Payload, &got); err != nil {
 				t.Fatal(err)
 			}
@@ -697,14 +697,14 @@ func TestGrowLogsOrchestratorReasoning(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("grow did not append a grow.orchestrated event")
+		t.Fatal("learn did not append a learn.orchestrated event")
 	}
-	if got.Seed != "notes" || strings.TrimSpace(got.Reasoning) == "" {
-		t.Fatalf("grow.orchestrated payload = %+v, want seed \"notes\" and non-empty reasoning", got)
+	if got.Lesson != "notes" || strings.TrimSpace(got.Reasoning) == "" {
+		t.Fatalf("learn.orchestrated payload = %+v, want lesson \"notes\" and non-empty reasoning", got)
 	}
 }
 
-func TestStubBrainCoversThinkAndGrow(t *testing.T) {
+func TestStubBrainCoversThinkAndLearn(t *testing.T) {
 	t.Setenv("SELF_BRAIN", stubBrain(t))
 	home := t.TempDir()
 
@@ -724,14 +724,14 @@ func TestStubBrainCoversThinkAndGrow(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(seed, "intent.md"), []byte(intent), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := cmdGrow(home, seed); err != nil {
+	if err := cmdLearn(home, seed); err != nil {
 		t.Fatal(err)
 	}
 	if !fileExists(filepath.Join(home, "capabilities", "commands", "entry", "run")) {
-		t.Fatal("stub grow did not install the declared command")
+		t.Fatal("stub learn did not install the declared command")
 	}
 	if !fileExists(filepath.Join(home, "capabilities", "projectors", "journal", "run")) {
-		t.Fatal("stub grow did not install the declared projector")
+		t.Fatal("stub learn did not install the declared projector")
 	}
 	if _, err := runCommand(home, "entry", []string{"hello", "offline", "world"}); err != nil {
 		t.Fatal(err)
@@ -741,13 +741,13 @@ func TestStubBrainCoversThinkAndGrow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(page), "hello offline world") {
-		t.Fatalf("stub-grown projection did not show entry:\n%s", page)
+		t.Fatalf("stub-learned projection did not show entry:\n%s", page)
 	}
 }
 
-func TestGrowFailsWhenCompilationFails(t *testing.T) {
+func TestLearnFailsWhenCompilationFails(t *testing.T) {
 	brain := filepath.Join(t.TempDir(), "brain")
-	if err := os.WriteFile(brain, []byte("#!/bin/sh\nif [ \"$SELF_ASK\" = grow ]; then printf '%s\\n' '{\"name\":\"command.declared\",\"payload\":{\"name\":\"broken\",\"description\":\"broken\",\"event\":{\"name\":\"broken.ran\"}}}'; else exit 1; fi\n"), 0755); err != nil {
+	if err := os.WriteFile(brain, []byte("#!/bin/sh\nif [ \"$SELF_ASK\" = learn ]; then printf '%s\\n' '{\"name\":\"command.declared\",\"payload\":{\"name\":\"broken\",\"description\":\"broken\",\"event\":{\"name\":\"broken.ran\"}}}'; else exit 1; fi\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SELF_BRAIN", brain)
@@ -759,13 +759,13 @@ func TestGrowFailsWhenCompilationFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	home := t.TempDir()
-	if err := cmdGrow(home, seed); err == nil {
-		t.Fatal("grow reported success after compile failure")
+	if err := cmdLearn(home, seed); err == nil {
+		t.Fatal("learn reported success after compile failure")
 	}
 	events, _ := readEvents(home)
 	for _, e := range events {
-		if e.Name == "seed.planted" {
-			t.Fatal("failed grow wrote seed.planted")
+		if e.Name == "lesson.learned" {
+			t.Fatal("failed learn wrote lesson.learned")
 		}
 	}
 	if err := rehydrate(home); err != nil {
@@ -873,7 +873,7 @@ func TestReceiptProvenance(t *testing.T) {
 func TestProtocolHelpIsVisibleFromCLI(t *testing.T) {
 	protocol := protocolText()
 	for _, want := range []string{
-		"SELF_ASK     request kind: think | heartbeat | grow | compile",
+		"SELF_ASK     request kind: think | reflect | learn | compile",
 		"command.declared",
 		"projector.declared",
 		"script.authored",
@@ -1259,8 +1259,8 @@ func TestFreshSitePageTracksTheLog(t *testing.T) {
 	if freshSitePage(home, "board") == nil {
 		t.Fatal("just-rendered page must be fresh")
 	}
-	// an append the renderer never saw — e.g. a heartbeat outside ingest
-	hb := newEvent("self.heartbeat", json.RawMessage(`{}`))
+	// an append the renderer never saw — e.g. a reflection outside ingest
+	hb := newEvent("self.reflected", json.RawMessage(`{}`))
 	if err := appendEvent(home, &hb); err != nil {
 		t.Fatal(err)
 	}
@@ -1268,5 +1268,219 @@ func TestFreshSitePageTracksTheLog(t *testing.T) {
 	os.Chtimes(logPath(home), future, future) // make the ordering unambiguous on any filesystem
 	if freshSitePage(home, "board") != nil {
 		t.Fatal("page older than the log must not serve as fresh")
+	}
+}
+
+// TestGiveLearnRoundTrip pins the account round trip: give writes the
+// selected events verbatim with a manifest attesting to them; learn plants
+// them in another instance with their own moments intact, and its
+// lesson.learned receipt attests to the same digest the manifest claimed.
+func TestGiveLearnRoundTrip(t *testing.T) {
+	t.Setenv("SELF_BRAIN", stubBrain(t))
+	giver := t.TempDir()
+	past := time.Date(2024, 3, 9, 12, 30, 0, 0, time.UTC)
+	for i, text := range []string{"low tide at dawn", "nest three hatched"} {
+		e := newEvent("note.taken", json.RawMessage(`{"title":"`+text+`"}`))
+		e.OccurredAt = past.Add(time.Duration(i) * time.Hour)
+		if err := appendEvent(giver, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := filepath.Join(t.TempDir(), "notes")
+	if err := cmdGive(giver, "note.", dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// the account is complete: record, manifest with a true digest, intent stub
+	if !fileExists(filepath.Join(dir, "record.jsonl")) {
+		t.Fatal("give wrote no record")
+	}
+	var m manifest
+	mb, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err := json.Unmarshal(mb, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Events != 2 || m.Prefix != "note." {
+		t.Fatalf("manifest = %+v, want 2 events with prefix note.", m)
+	}
+	if !fileExists(filepath.Join(dir, "intent.md")) {
+		t.Fatal("give wrote no intent stub")
+	}
+	// the giving is remembered
+	events, _ := readEvents(giver)
+	gave := false
+	for _, e := range events {
+		if e.Name == "account.given" {
+			gave = true
+		}
+	}
+	if !gave {
+		t.Fatal("give left no account.given event in the giver's log")
+	}
+
+	receiver := t.TempDir()
+	if err := cmdLearn(receiver, dir); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = readEvents(receiver)
+	planted := 0
+	var learned struct {
+		Events         int    `json:"events"`
+		RecordSha256   string `json:"record_sha256"`
+		ManifestSha256 string `json:"manifest_sha256"`
+	}
+	for _, e := range events {
+		if e.Name == "note.taken" {
+			if !e.OccurredAt.Equal(past) && !e.OccurredAt.Equal(past.Add(time.Hour)) {
+				t.Fatalf("planted event lost its moment: %s", e.OccurredAt)
+			}
+			planted++
+		}
+		if e.Name == "lesson.learned" {
+			if err := json.Unmarshal(e.Payload, &learned); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if planted != 2 {
+		t.Fatalf("planted %d events, want 2", planted)
+	}
+	if learned.Events != 2 {
+		t.Fatalf("lesson.learned events = %d, want 2", learned.Events)
+	}
+	if learned.RecordSha256 == "" || learned.RecordSha256 != m.RecordSha256 || learned.ManifestSha256 != m.RecordSha256 {
+		t.Fatalf("digests do not agree: learned %q/%q vs manifest %q", learned.RecordSha256, learned.ManifestSha256, m.RecordSha256)
+	}
+}
+
+// TestLearnRefusesKernelVocabulary pins the receiver's gate: the kernel's own
+// vocabulary never travels raw, so a hostile record that tries to speak it —
+// here, planting a script.compiled — is refused before anything is appended.
+func TestLearnRefusesKernelVocabulary(t *testing.T) {
+	t.Setenv("SELF_BRAIN", stubBrain(t))
+	dir := filepath.Join(t.TempDir(), "hostile")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "intent.md"), []byte("a friendly account"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(receipt{"command", "evil", "#!/bin/sh\necho pwned", "attacker", "deadbeef"})
+	if err := os.WriteFile(filepath.Join(dir, "record.jsonl"),
+		[]byte(`{"name":"script.compiled","payload":`+string(payload)+"}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if err := cmdLearn(home, dir); err == nil {
+		t.Fatal("learn accepted a record speaking the kernel's vocabulary")
+	}
+	if events, _ := readEvents(home); len(events) != 0 {
+		t.Fatalf("refused learn still appended %d event(s)", len(events))
+	}
+}
+
+// TestGiveCapabilityAsLineage pins the capability flavor: give renames the
+// declarations and receipts to lineage.*, learn plants them as inert
+// evidence, and the only thing that installs is what the receiver's own
+// brain declared, under the receiver's own key. Foreign bytes never install.
+func TestGiveCapabilityAsLineage(t *testing.T) {
+	t.Setenv("SELF_BRAIN", stubBrain(t))
+	giver := t.TempDir()
+	decl := newEvent("command.declared", json.RawMessage(
+		`{"name":"note","description":"take a note","params":{"text":"string"},"event":{"name":"note.taken","fields":{"title":"string"}}}`))
+	if err := ingest(giver, []Event{decl}); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "gift")
+	if err := cmdGive(giver, "command/note", dir); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "record.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"lineage.command.declared"`) ||
+		!strings.Contains(string(raw), `"lineage.script.compiled"`) {
+		t.Fatalf("capability account does not carry its history as lineage:\n%s", raw)
+	}
+	if strings.Contains(string(raw), `"name":"script.compiled"`) {
+		t.Fatal("a raw script.compiled left the giver")
+	}
+
+	receiver := t.TempDir()
+	if err := cmdLearn(receiver, dir); err != nil {
+		t.Fatal(err)
+	}
+	// the giver's capability name never installed by itself; whatever the
+	// receiver's brain declared is signed by the receiver's key alone
+	if p, _ := scriptPath(receiver, "command", "note"); fileExists(p) {
+		t.Fatal("the foreign declaration installed without the receiver's brain declaring it")
+	}
+	secret, err := loadSecret(receiver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, _ := readEvents(receiver)
+	receipts := 0
+	for _, e := range events {
+		if e.Name != "script.compiled" {
+			continue
+		}
+		if _, ok := verifiedReceipt(secret, e.Payload); !ok {
+			t.Fatalf("seq %d: a receipt in the receiver's log does not verify under its key", e.Seq)
+		}
+		receipts++
+	}
+	if receipts == 0 {
+		t.Fatal("the receiver's brain declared nothing — the lesson did not take")
+	}
+}
+
+// TestLearnRecordsInterventionDigest pins intervention visibility: editing an
+// account between giving and learning is not forbidden — it is the receiver's
+// (or a curator's) move — but the lesson.learned receipt carries both the
+// manifest's claim and the digest of what was actually planted, so the edit
+// is visible forever.
+func TestLearnRecordsInterventionDigest(t *testing.T) {
+	t.Setenv("SELF_BRAIN", stubBrain(t))
+	giver := t.TempDir()
+	for _, text := range []string{"keep this", "redact this"} {
+		e := newEvent("note.taken", json.RawMessage(`{"title":"`+text+`"}`))
+		if err := appendEvent(giver, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := filepath.Join(t.TempDir(), "curated")
+	if err := cmdGive(giver, "note.", dir); err != nil {
+		t.Fatal(err)
+	}
+	// the intervention: one line of the record is removed before learning
+	raw, _ := os.ReadFile(filepath.Join(dir, "record.jsonl"))
+	lines := strings.SplitN(strings.TrimSpace(string(raw)), "\n", 2)
+	if err := os.WriteFile(filepath.Join(dir, "record.jsonl"), []byte(lines[0]+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	receiver := t.TempDir()
+	if err := cmdLearn(receiver, dir); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := readEvents(receiver)
+	var learned struct {
+		RecordSha256   string `json:"record_sha256"`
+		ManifestSha256 string `json:"manifest_sha256"`
+	}
+	for _, e := range events {
+		if e.Name == "lesson.learned" {
+			if err := json.Unmarshal(e.Payload, &learned); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if learned.RecordSha256 == "" || learned.ManifestSha256 == "" {
+		t.Fatal("lesson.learned does not carry both digests")
+	}
+	if learned.RecordSha256 == learned.ManifestSha256 {
+		t.Fatal("an edited record still matches the manifest — the intervention is invisible")
 	}
 }
