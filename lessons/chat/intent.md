@@ -42,11 +42,11 @@ first; first impressions are its spec.
   when the log grows — none of that is the projector's job, and none of it
   may be assumed.
 - `welcome` — the kernel promotes a projector named `welcome` to the front
-  page `/`. Grow one (it may be the same view as `/chat`) so a served demo
+  page `/`. Declare one (it may be the same view as `/chat`) so a served demo
   lands in the conversation, not in kernel internals.
 - `/identity` shows the current `self.identity` text in full, with a form to
   append a new one via the `identity` command. Identity is data, never
-  kernel: the seed plants the first one; appending replaces it from then on.
+  kernel: the lesson plants the first one; appending replaces it from then on.
 - `compact` folds older turns: it asks the brain for a summary and emits one
   `chat.compacted` event `{summary, through_seq}`. From then on the chat
   script sends the summary (inside the system turn) plus only the turns after
@@ -72,7 +72,7 @@ first; first impressions are its spec.
 
 ## what good looks like (the demo, end to end)
 
-1. `self grow seeds/chat` — the surface exists: chat, identity, compact,
+1. `self learn lessons/chat` — the surface exists: chat, identity, compact,
    and the chat, welcome, and identity views.
 2. Open `:7777` — the conversation IS the front page, already carrying the
    seeded greeting.

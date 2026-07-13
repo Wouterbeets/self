@@ -11,12 +11,12 @@ import (
 )
 
 // The kernel holds no model — not even a fake one. Every ask — think,
-// heartbeat, grow, and each compile — is handed to a brain PROCESS
+// reflect, learn, and each compile — is handed to a brain PROCESS
 // (SELF_BRAIN, e.g. "claude -p"; examples/brain-stub is a deterministic
 // offline one for demos and tests), which explores and writes scripts with
 // its own tools; the kernel only installs and signs what comes back. The llm
 // value carries just enough to route a compile: the home it runs against,
-// and — during a grow — the whole intent plus the orchestrator's stated
+// and — during a learn — the whole intent plus the orchestrator's stated
 // reasoning, woven into each compile so no piece is authored in a dark room.
 // The reasoning travels in-band, through the prompt and the log, never
 // through a session store outside the log.
@@ -48,10 +48,7 @@ func newLLM(home string) *llm {
 
 const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
 projector script: receives the events matching its declared consumes list as JSONL on stdin (an empty list or "*" means every event — declare consumes precisely and the script never needs to filter), writes bare semantic HTML on stdout. Do not emit CSS, JavaScript, inline styles, or external assets: the kernel injects the shared shell at serve time. The kernel persists projector output to SELF_HOME/site/<name>.html.
-files: bytes never ride in events. A stored file lives at SELF_HOME/files/<sha256>, recorded by a small file.stored event {name, mime, size, sha256}. A command takes a file argument as its sha256 (the kernel stores browser uploads and @path CLI args before the command runs, so the file.stored metadata is already on its stdin) and reads SELF_HOME/files/<sha256> itself when it needs the bytes. A command may also PRODUCE a file (an export, a report, a generated document): write the bytes to a scratch path and emit file.stored {"name": "<human-name>", "path": "<that path>"} — the kernel copies the bytes into the store, completes the payload (mime, size, sha256), and verifies before anything is appended. When another event you emit must reference the file, hash the bytes yourself (sha256, standard library), pin it in the file.stored payload, and use the same hash in your domain event — the kernel refuses a pinned hash that does not match the bytes. A projector shows a stored file by linking its hash — <img src="/files/<sha256>/<human-name>"> or <a href=…> — the kernel serves it; never inline file bytes into HTML, never copy blobs.
-effects: a command MAY act on the world — spawn the OS's own tools (lp to print, curl to call a local device or a service the user configured, mail/sendmail to send), talk to hardware on the LAN. Projectors never may: they stay pure replays. Every effect leaves a receipt event recording what was attempted and what came back (…sent / …failed, with enough payload to audit later), and an effectful command reads the log on its stdin FIRST so it never repeats what the log already says happened — the log is the dedup. Secrets and endpoints (tokens, SMTP hosts, printer URLs) come from the environment or a config file outside the log: never in event payloads, never hardcoded in scripts.
-timers: a timer.declared event {name, every, command, args} makes the serving kernel run an installed command on a cadence — every is a Go duration ("24h", "168h"), "off" disables, the latest declaration per name wins, and each firing appends timer.fired before the command runs. Declare a timer when the intent asks for anything scheduled or recurring; the bound command decides what is actually due by reading the log, so a timer plus a log-reading command is a follow-up machine.
-The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries (the OS's installed tools are fair game for effects).`
+The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries.`
 
 // brainAnswerContract tells a capable, tool-using brain how to hand its answer
 // back. A coding-agent brain (claude -p) will otherwise try to persist its work
@@ -59,7 +56,7 @@ The kernel sets SELF_HOME on every script. Any language with a shebang works; us
 // wasted and denied: the kernel reads ONLY stdout and appends what it finds
 // there, under its own signature. It also emits Markdown by habit; the pipe
 // tolerates fences, but one clean JSON object per line is what actually wants
-// ingesting. Woven into every ask that expects events (grow, heartbeat, compile).
+// ingesting. Woven into every ask that expects events (learn, reflect, compile).
 const brainAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To persist ordinary state, print the domain event that records it. To add capabilities, print command.declared / projector.declared events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing; ordinary domain events are not capability growth.
 
 THIS REPLY IS FINAL — you run once per ask and are never re-invoked. Explore first, THEN answer completely: never end on a plan or a promise ("I'll explore and then respond") — whatever you have not said when you exit was never said.
@@ -80,7 +77,7 @@ func (c *llm) compileProjector(d projectorDecl) (string, error) {
 // seam as every other ask. The declaration (its optional implementation
 // reference included) rides in the prompt; an orientation brief rides on stdin
 // (the brain inspects SELF_HOME itself for depth — site/*.html, events.jsonl,
-// capabilities/); the answer is one script.authored event. During a grow the
+// capabilities/); the answer is one script.authored event. During a learn the
 // whole intent rides along too, so each piece is compiled toward the same
 // product. The kernel still installs and signs — a brain authors bytes, only
 // the kernel makes them real.
@@ -103,7 +100,7 @@ Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
 		prompt = "Here is a recently compiled " + typ + " as an idiom/reference for this instance. Learn its style and pipe-contract shape, but do not copy it blindly.\n\n--- EXEMPLAR " + exemplarName + " ---\n" + exemplarScript + "\n--- END EXEMPLAR ---\n\n" + prompt
 	}
 	if strings.TrimSpace(reasoning) != "" {
-		prompt = "The ORCHESTRATOR that declared this capability explored the instance and explained its plan below (it is also in the log as grow.orchestrated). Compile in line with it.\n\n--- ORCHESTRATOR'S REASONING ---\n" + reasoning + "\n--- END REASONING ---\n\n" + prompt
+		prompt = "The ORCHESTRATOR that declared this capability explored the instance and explained its plan below (it is also in the log as learn.orchestrated). Compile in line with it.\n\n--- ORCHESTRATOR'S REASONING ---\n" + reasoning + "\n--- END REASONING ---\n\n" + prompt
 	}
 	if strings.TrimSpace(intent) != "" {
 		prompt = "This capability is one part of a product with the following INTENT. Compile it so the whole intent is served.\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---\n\n" + prompt
@@ -165,7 +162,7 @@ func brainEnv(home, kind string) []string {
 }
 
 // pipeBrain is the ONE seam through which the kernel asks for intelligence —
-// think, heartbeat, grow, and compile all pass here. It spawns $SELF_BRAIN with
+// think, reflect, learn, and compile all pass here. It spawns $SELF_BRAIN with
 // the ask's kind in $SELF_ASK, the prompt as the last argument, and a freshly
 // written orientation brief from SELF_HOME/site/brief.md on stdin: where the
 // brain is, what capabilities exist, and where to look for the rest — nothing

@@ -2,12 +2,11 @@ package main
 
 import (
 	"bytes"
-	"embed"
+	_ "embed"
 	"html"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -41,12 +40,12 @@ func renderKernelHTML(home string) {
 	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>self</title></head><body>\n")
 	b.WriteString("<h1>self</h1>\n")
 	b.WriteString("<p class=\"muted\">a local-first, event-sourced runtime with LLM-generated capabilities</p>\n")
-	b.WriteString("<p>One append-only event log is the authoritative structured state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log; content-addressed user files live beside it. Humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
+	b.WriteString("<p>One append-only event log is the authoritative state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log. Humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
 	b.WriteString(orientationHTML)
 
 	b.WriteString("<h2>commands</h2>\n")
 	if len(cmdOrder) == 0 {
-		b.WriteString("<p class=\"muted\">None yet — grow a seed: <code>self grow seeds/chat</code>.</p>\n")
+		b.WriteString("<p class=\"muted\">None yet — learn a lesson: <code>self learn lessons/chat</code>.</p>\n")
 	}
 	for _, n := range cmdOrder {
 		d := commands[n]
@@ -82,14 +81,13 @@ func renderKernelHTML(home string) {
 		{"compiled commands", filepath.Join(home, "capabilities", "commands")},
 		{"compiled projectors", filepath.Join(home, "capabilities", "projectors")},
 		{"materialized HTML", filepath.Join(home, "site")},
-		{"stored files, content-addressed", filepath.Join(home, "files")},
 	} {
 		b.WriteString("<tr><td>" + esc(row[0]) + "</td><td><code>" + esc(row[1]) + "</code></td></tr>")
 	}
 	b.WriteString("</table>\n")
 
 	b.WriteString("<h2>the pipe contract</h2>\n<pre>" + esc(pipeContract) + "</pre>\n")
-	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at grow time and run time). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it. <code>file.stored</code> records a file entering my content-addressed store (an upload, an <code>@path</code> arg, a seed's <code>files/</code>): the bytes live at <code>files/&lt;sha256&gt;</code> and serve at <code>/files/&lt;sha256&gt;</code>; the log carries only the metadata (a command may also deposit a file it produced: <code>file.stored {name, path}</code>, completed and verified by me before it appends). <code>timer.declared</code> binds an installed command to a cadence while I serve — latest per name wins, <code>every: \"off\"</code> disables — and every firing appends <code>timer.fired</code> before the command runs, <code>timer.failed</code> if it errors: what I do on my own schedule is in the log like everything else.</p>\n")
+	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at learn time and run time alike). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it.</p>\n")
 	b.WriteString("</body></html>\n")
 
 	siteDir := filepath.Join(home, "site")
@@ -99,155 +97,28 @@ func renderKernelHTML(home string) {
 
 // ─────────────────────────────── the surface ────────────────────────────────
 
-// The shell is the one shared enrichment the kernel injects at serve time —
-// theme and feel layered over projections that stay bare semantic HTML on
+// The shell is the one shared enrichment the kernel injects at serve time — a
+// skin and a nav layered over projections that stay bare semantic HTML on
 // disk. The split of responsibilities is the design system: the log is the
 // truth, the projection is the state, the shell is the feel. The shell knows
 // the class vocabulary, never the events; strip it (self show, curl, lynx,
 // rehydrate) and every page still works, because every affordance underneath
 // is a plain HTML form.
-//
-// The feel is swappable. What is fixed is the class vocabulary and the
-// structural rules below — the contract the projections and shellScript are
-// written against. A *theme* changes none of that: it is only a skin, a set of
-// CSS custom properties (palette, fonts, radii, border weight, shadow) that the
-// structural layer reads through var(). So switching designs never renames a
-// class or rewrites a rule; every projection keeps working unchanged and only
-// the feel moves. Themes are picked at serve time and carry no state into the
-// log — presentation, like prefers-color-scheme; the bare HTML on disk stays
-// theme-agnostic, so rehydrate and self show are untouched.
 
 const shellMeta = `<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">`
 
-const defaultTheme = "grove"
-
-// A theme is a skin: CSS custom properties (palette, fonts, radii, borders) the
-// structural layer reads through var(), plus—optionally—a few extra rules for a
-// feel variables alone can't carry. It is injected AFTER the structural CSS, so
-// its variables resolve and its rules layer on top; it never renames a class or
-// changes what a projection emits.
-type theme struct {
-	label string
-	css   string
-}
-
-//go:embed themes/*.css
-var themeFS embed.FS
-
-// themes and themeOrder are built once from the embedded themes/*.css files —
-// the design set ships inside the binary, so serving needs no files on disk and
-// the offline guarantees hold. Each file's base name is the theme id; the
-// default (grove) lists first, the rest alphabetically. Add a design by dropping
-// a .css into themes/ and rebuilding — nothing structural changes.
-var themes, themeOrder = loadThemes()
-
-func loadThemes() (map[string]theme, []string) {
-	m := map[string]theme{}
-	var extra []string
-	entries, _ := themeFS.ReadDir("themes")
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".css") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".css")
-		data, err := themeFS.ReadFile("themes/" + e.Name())
-		if err != nil || name == "" {
-			continue
-		}
-		m[name] = theme{label: themeLabel(name), css: string(data)}
-		if name != defaultTheme {
-			extra = append(extra, name)
-		}
-	}
-	sort.Strings(extra)
-	return m, append([]string{defaultTheme}, extra...)
-}
-
-// themeLabel is the picker's display name for a theme id: its capitalized form.
-func themeLabel(name string) string {
-	if name == "" {
-		return name
-	}
-	return strings.ToUpper(name[:1]) + name[1:]
-}
-
-// structuralCSS is the fixed half of the shell: the class vocabulary and every
-// layout rule, written entirely against var()s a theme supplies. It never
-// mentions a literal color, font, or radius — that is what makes the embedded
-// themes/*.css skins interchangeable.
+// shellCSS is the whole feel: the class vocabulary's layout rules and the one
+// skin, embedded so serving needs no files on disk and the offline guarantees
+// hold.
 //
-//go:embed shell/structural.css
-var structuralCSS string
-
-// validTheme reports whether name is a known design; selection paths accept
-// only known names, so the injected picker links can never smuggle
-// arbitrary CSS in.
-func validTheme(name string) bool { _, ok := themes[name]; return ok }
-
-// themeCSS assembles the full <style> for one design: the shared structural
-// rules, then the theme's CSS (its variables, and any extra rules that layer on
-// top). Unknown names fall back to the default.
-func themeCSS(name string) string {
-	t, ok := themes[name]
-	if !ok {
-		t = themes[defaultTheme]
-	}
-	return shellMeta + "<style>" + structuralCSS + "\n" + t.css + "\n</style>"
-}
-
-// pickTheme resolves the design for one request: an explicit ?theme= wins,
-// then the SELF_THEME instance default, then the built-in default. Two
-// mechanisms, no remembered state — a theme is presentation for one request,
-// like prefers-color-scheme, never something the server holds for you.
-func pickTheme(r *http.Request) string {
-	if t := r.URL.Query().Get("theme"); validTheme(t) {
-		return t
-	}
-	if t := strings.TrimSpace(os.Getenv("SELF_THEME")); validTheme(t) {
-		return t
-	}
-	return defaultTheme
-}
-
-// themePicker is the one bit of DOM the shell adds to the body: a small fixed
-// switcher of plain links. It works with no JS (each link is a GET that the
-// server themes and remembers), and it is styled by the active theme itself, so
-// it always matches the page it sits on.
-func themePicker(current string) string {
-	var b strings.Builder
-	b.WriteString(`<nav class="self-themes" aria-label="page design">`)
-	for _, name := range themeOrder {
-		if name == current {
-			b.WriteString(`<a href="?theme=` + name + `" aria-current="true">` + themes[name].label + `</a>`)
-		} else {
-			b.WriteString(`<a href="?theme=` + name + `">` + themes[name].label + `</a>`)
-		}
-	}
-	b.WriteString(`</nav>`)
-	return b.String()
-}
-
-// shellScript is the reactive half of the shell: progressive enhancement
-// only, injected at serve time and never persisted. The state machine is
-// untouched — every interaction is still form → command → events → replay;
-// the script changes how the round-trip FEELS, not what it is. It may show
-// intent in flight (a pending turn, a thinking brain) but never claims
-// state: when the round-trip lands, the page is re-fetched and the log's
-// replay wins. Liveness is the same idea watched from outside — the byte
-// length of /events is the cursor; when the log grows, re-replay.
-//
-//go:embed shell/shell.js
-var shellScriptBody string
+//go:embed shell/shell.css
+var shellCSS string
 
 // orientationHTML is the kernel index's static "if you are an LLM" briefing —
 // self-description copy, kept as data beside the shell it renders with.
 //
 //go:embed shell/orientation.html
 var orientationHTML string
-
-// shellScript wraps the embedded progressive-enhancement JS as an injectable
-// <script> element.
-var shellScript = "<script>" + shellScriptBody + "</script>"
 
 // siteNav is the human way around an instance: one bar of plain links,
 // injected by the kernel on every served page, listing every declared
@@ -299,9 +170,9 @@ func siteFile(home, name string) (path, ext string) {
 }
 
 // serveSiteFile writes a site file to an HTTP response, dispatching by
-// extension: .html goes through the shell (themed, progressive-enhanced), while
-// .md and .txt are served verbatim as text/plain — plain text is honest about
-// what it is, and the kernel renders no markup it did not itself emit.
+// extension: .html goes through the shell, while .md and .txt are served
+// verbatim as text/plain — plain text is honest about what it is, and the
+// kernel renders no markup it did not itself emit.
 func serveSiteFile(w http.ResponseWriter, r *http.Request, home, current, path, ext string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -316,8 +187,8 @@ func serveSiteFile(w http.ResponseWriter, r *http.Request, home, current, path, 
 	w.Write(data)
 }
 
-func injectShell(page []byte, theme, nav string) []byte {
-	head := themeCSS(theme) + shellScript
+func injectShell(page []byte, nav string) []byte {
+	head := shellMeta + "<style>" + shellCSS + "</style>"
 	if i := bytes.Index(page, []byte("<head>")); i >= 0 {
 		i += len("<head>")
 		page = append(page[:i:i], append([]byte(head), page[i:]...)...)
@@ -332,19 +203,13 @@ func injectShell(page []byte, theme, nav string) []byte {
 			page = append([]byte(nav), page...)
 		}
 	}
-	picker := themePicker(theme)
-	if j := bytes.LastIndex(page, []byte("</body>")); j >= 0 {
-		return append(page[:j:j], append([]byte(picker), page[j:]...)...)
-	}
-	return append(page, []byte(picker)...)
+	return page
 }
 
 // writePage sends an on-disk projection through the shell for one request:
-// resolve the design and inject theme + script + nav + picker. This is the
-// only place a theme touches a response; nothing is written back to the log,
-// to disk, or to the client. current names the page being served so the nav
-// can mark it.
+// inject the skin and the nav. Nothing is written back to the log, to disk, or
+// to the client. current names the page being served so the nav can mark it.
 func writePage(w http.ResponseWriter, r *http.Request, home, current string, page []byte) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(injectShell(page, pickTheme(r), siteNav(home, current)))
+	w.Write(injectShell(page, siteNav(home, current)))
 }

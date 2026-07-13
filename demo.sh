@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # demo.sh — see the machinery with no LLM, in about ten seconds.
 #
-# This shows the kernel loop end to end WITHOUT a model: declarations compile
-# into scripts (here via examples/brain-stub, a deterministic offline brain
-# plugged through the same seam as any real one), running a command appends an
-# event, a projection renders it, and the whole instance rebuilds from
-# events.jsonl + .secret alone — byte for byte.
+# This shows the kernel loop end to end WITHOUT a model: a lesson's intent
+# becomes declarations, declarations compile into scripts (here via
+# examples/brain-stub, a deterministic offline brain plugged through the same
+# seam as any real one), running a command appends an event, a projection
+# renders it, and the whole instance rebuilds from events.jsonl + .secret
+# alone — byte for byte.
 #
 # The stub authors trivial scripts; the point here is the machinery, not the
 # intelligence. For real, LLM-generated capabilities, plug a real brain and
-# use `self grow` (see the README).
+# use `self learn` (see the README).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")" && pwd)"
@@ -25,15 +26,10 @@ go build -o "$work/self" "$root"
 self="$work/self"
 export SELF_HOME="$work/home"
 
-say "declare two capabilities (the stub brain authors, the kernel signs)"
-# A shared capability slice is event JSONL. `adopt` re-declares it, and the
-# kernel compiles it locally under a receipt signed by THIS instance's key.
-printf '{"name":"command.declared","payload":{"name":"entry","description":"record an entry","params":{"text":"string"},"event":{"name":"journal.entry","fields":{"title":"string"}}}}\n' > "$work/cmd.jsonl"
-printf '{"name":"projector.declared","payload":{"name":"journal","description":"all entries","consumes":["journal.entry"]}}\n' > "$work/proj.jsonl"
-"$self" adopt "$work/cmd.jsonl"
-"$self" adopt "$work/proj.jsonl"
+say "learn a lesson (the stub brain declares from its intent; the kernel compiles and signs)"
+"$self" learn "$root/lessons/journal"
 
-say "run the command a couple of times (each appends one event)"
+say "run the learned command a couple of times (each appends one event)"
 "$self" run entry water the plants
 "$self" run entry call mum
 

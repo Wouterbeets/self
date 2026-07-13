@@ -12,12 +12,11 @@ import (
 
 // cmdServe serves the instance: every page provably current against the log,
 // every affordance a plain HTML form. The injected shell layers feel on top —
-// pending turns, live re-replay, theme — but carries no state and grants no
-// power: strip it and every page still works, because the forms do.
+// a skin and a nav — but carries no state and grants no power: strip it and
+// every page still works, because the forms do.
 func cmdServe(home string) error {
 	refreshSite(home)
 	mux := serveMux(home)
-	go serveTimers(home)
 
 	// Loopback by default: the write path (/run/<command>) has no auth, and
 	// local-first means local. SELF_BIND is the whole bind address, host or
@@ -30,10 +29,8 @@ func cmdServe(home string) error {
 	fmt.Fprintf(os.Stderr, "self: serving at http://%s (home %s)\n", addr, home)
 	fmt.Fprintf(os.Stderr, "  /                      my identity — capabilities, paths, contract\n")
 	fmt.Fprintf(os.Stderr, "  /<projection>          a projection, current against the log\n")
-	fmt.Fprintf(os.Stderr, "  /run/<command>         run a capability (plain HTML forms; file inputs upload)\n")
-	fmt.Fprintf(os.Stderr, "  /files/<sha256>        a stored file, content-addressed\n")
+	fmt.Fprintf(os.Stderr, "  /run/<command>         run a capability (plain HTML forms)\n")
 	fmt.Fprintf(os.Stderr, "  /events                the raw event log\n")
-	fmt.Fprintf(os.Stderr, "  /orchestration_core    how self orchestrates itself (for agents)\n")
 	return http.ListenAndServe(addr, mux)
 }
 
@@ -106,82 +103,6 @@ func serveMux(home string) *http.ServeMux {
 		http.ServeFile(w, r, logPath(home))
 	})
 
-	// GET /files/<sha256>            → a stored blob, content-addressed
-	// GET /files/<sha256>/<name>     → the same blob wearing a human name —
-	// the name is presentation (download filename, mime hint, readable URL),
-	// never resolution; the hash alone decides which bytes serve. Content
-	// addressing makes the response immutable, so it caches forever.
-	mux.HandleFunc("/files/", func(w http.ResponseWriter, r *http.Request) {
-		hash, display, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/files/"), "/")
-		if !validFileHash(hash) {
-			http.Error(w, "not found — /files/<sha256>[/<name>]", 404)
-			return
-		}
-		f, err := os.Open(blobPath(home, hash))
-		if err != nil {
-			http.Error(w, "no such file in the store", 404)
-			return
-		}
-		defer f.Close()
-		st, err := f.Stat()
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		head := make([]byte, 512)
-		n, _ := io.ReadFull(f, head)
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		ct := blobMime(display, head[:n])
-		w.Header().Set("Content-Type", ct)
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		// A blob is user content on the instance's own origin — the origin
-		// that also serves the unauthenticated write path. nosniff pins the
-		// declared type, and any type a browser would execute (HTML, SVG,
-		// anything XML-flavored) renders sandboxed: visible, never scripting.
-		// Images, PDFs, and downloads are untouched.
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if strings.Contains(ct, "html") || strings.Contains(ct, "xml") {
-			w.Header().Set("Content-Security-Policy", "sandbox")
-		}
-		if display != "" {
-			safe := strings.Map(func(c rune) rune {
-				if c < 32 || c == '"' || c == '\\' {
-					return '_'
-				}
-				return c
-			}, display)
-			w.Header().Set("Content-Disposition", `inline; filename="`+safe+`"`)
-		}
-		http.ServeContent(w, r, "", st.ModTime(), f)
-	})
-
-	// GET /orchestration_core → the orchestration_core.go source
-	// Allows the brain (or any agent) to understand how the system orchestrates itself
-	mux.HandleFunc("/orchestration_core", func(w http.ResponseWriter, r *http.Request) {
-		source, err := os.ReadFile(filepath.Join(os.Getenv("SELF_GOPATH"), "orchestration_core.go"))
-		if err != nil {
-			// Fallback: try current directory or common locations
-			for _, p := range []string{
-				"orchestration_core.go",
-				filepath.Join(os.Getenv("SELF_HOME"), "orchestration_core.go"),
-			} {
-				if s, err := os.ReadFile(p); err == nil {
-					source = s
-					break
-				}
-			}
-		}
-		if source == nil {
-			http.Error(w, "orchestration_core.go not found", 404)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write(source)
-	})
-
 	// POST /run/<command> → run a capability from the browser. A form's field
 	// values become positional args in document order (names are for humans;
 	// order is the contract); then Post/Redirect/Get back to the page.
@@ -202,46 +123,6 @@ func serveMux(home string) *http.ServeMux {
 		var args []string
 		ct := r.Header.Get("Content-Type")
 		switch {
-		case strings.HasPrefix(ct, "multipart/form-data"):
-			// A form with a file input. Parts stay positional args in document
-			// order; each file part is stored content-addressed and its arg is
-			// the sha256 — the command resolves SELF_HOME/files/<sha256> itself.
-			// The file.stored events ingest BEFORE the command runs, so its
-			// stdin log already names, sizes, and types what it was handed.
-			mr, err := r.MultipartReader()
-			if err != nil {
-				http.Error(w, err.Error(), 400)
-				return
-			}
-			var deposits []Event
-			for {
-				part, err := mr.NextPart()
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					http.Error(w, err.Error(), 400)
-					return
-				}
-				if fn := part.FileName(); fn != "" {
-					hash, e, err := storeFile(home, fn, part)
-					if err != nil {
-						http.Error(w, err.Error(), 500)
-						return
-					}
-					deposits = append(deposits, e)
-					args = append(args, hash)
-				} else {
-					data, _ := io.ReadAll(part)
-					args = append(args, string(data))
-				}
-			}
-			if len(deposits) > 0 {
-				if err := ingest(home, deposits); err != nil {
-					http.Error(w, err.Error(), 500)
-					return
-				}
-			}
 		case strings.HasPrefix(ct, "application/x-www-form-urlencoded"):
 			body, _ := io.ReadAll(r.Body)
 			for _, pair := range strings.Split(string(body), "&") {

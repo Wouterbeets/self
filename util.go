@@ -52,20 +52,18 @@ a signed receipt.
 usage: self [command] [args]
 
   self                 rehydrate the instance from the log, then serve it (the default)
-  self grow <seed>     grow a seed's intent into capabilities (needs a brain)
+  self learn <account> learn an account's intent into capabilities and plant its
+                       record, moments preserved (needs a brain)
+  self give <sel> <dir>
+                       write an account from the log — <sel> is an event-name
+                       prefix ("note.") or command/<name> | projector/<name>;
+                       intent + record + manifest land in <dir> for you to
+                       curate before passing on
   self run <cmd> ...   run a capability — append events, refresh projections
   self think "..."     ask the brain; returns {response, events} JSON
-  self heartbeat       one self-improvement cycle (the brain reflects & grows)
+  self reflect         one self-improvement cycle (the brain reflects & grows)
   self show <name>     render a projection to stdout
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
-  self share <target>  print a seed to stdout — one command/<name> or projector/<name>'s declarations and
-                       receipts, a verbatim slice of this log
-  self adopt <seed>    re-grow a shared capability here ("-" reads stdin) — this
-                       instance's own compiler re-authors it; foreign bytes never install
-  self export <prefix> <dir>
-                       write a content seed: every <prefix>* event, its files,
-                       and an editable intent — a directory another instance
-                       can grow, dates preserved
   self revise <target> <request>
                        edit an installed local capability with its current script as context
   self retire <target> retire a capability — its script and page leave the
@@ -73,11 +71,11 @@ usage: self [command] [args]
   self protocol        print the brain + capability wire protocol
 
 environment:
-  SELF_HOME         the instance — a dir holding events.jsonl, .secret, and files/
+  SELF_HOME         the instance — a dir holding events.jsonl and .secret
                     (default: current working directory; set it in your shell rc
                     to pin a shared instance, e.g. export SELF_HOME=~/.self)
 
-  plug a brain (one seam; think, heartbeat, grow, and compile all pass through it):
+  plug a brain (one seam; think, reflect, learn, and compile all pass through it):
   SELF_BRAIN        a tool-capable executable, e.g. "claude -p" or
                     examples/brain-opencode — it gets the ask's kind in
                     $SELF_ASK, the prompt as its last argument, and an
@@ -85,15 +83,9 @@ environment:
                     prose tolerated. The brain must inspect SELF_HOME itself
                     (site/*.html, events.jsonl, capabilities/) with its own
                     tools. See examples/README.md. examples/brain-stub is a
-                    deterministic offline brain for demos/tests;
-                    examples/brain-openai is a reference adapter that
-                    illustrates the wire shape but is incomplete by spec
-                    (no tool loop).
+                    deterministic offline brain for demos/tests.
   SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
                     (default: the brain executable)
-  SELF_THEME        default page design when serving: grove | micro | paper |
-                    spec (default grove); a ?theme= link or the on-page picker
-                    overrides it per viewer. Presentation only — never logged.
 `
 }
 
@@ -102,14 +94,14 @@ func protocolText() string {
 
 Brain process contract
 
-  The same seam handles think, heartbeat, grow, and compile.
+  The same seam handles think, reflect, learn, and compile.
 
   SELF_BRAIN   executable to spawn, optionally with args. A brain MUST be able to
               inspect files under SELF_HOME (site/*.html, events.jsonl,
               capabilities/) with its own tools — a plain stdin/stdout adapter
               with no file access cannot do the job. Coding-agent brains
               (opencode run, claude -p) already have such tools.
-  SELF_ASK     request kind: think | heartbeat | grow | compile
+  SELF_ASK     request kind: think | reflect | learn | compile
   argv         the prompt is passed as the last argument
   stdin        an orientation brief (plain text): where the brain is, what
                capabilities exist, and where to look for the rest. The brain is
@@ -150,68 +142,50 @@ Compiled capability contract
 
   environment         SELF_HOME is set for every compiled script.
 
-Files
+Accounts (give / learn)
 
-  Bytes never ride in events. A file enters the store four ways — a browser
-  form's file input (multipart POST /run/<command>), an @<path> arg to
-  self run, a seed's files/ dir at grow time, or a command's own output (the
-  command writes bytes to a scratch path and emits file.stored {name, path};
-  the kernel copies them in, completes the payload, and verifies before
-  appending) — and each deposit writes the
-  blob to SELF_HOME/files/<sha256> and appends one file.stored event
-  {name, mime, size, sha256}. The command behind the form or run receives the
-  sha256 as the arg's value and resolves SELF_HOME/files/<sha256> itself when
-  it needs the bytes. The server serves any blob at /files/<sha256> (or
-  /files/<sha256>/<name> — the name is presentation, the hash is resolution),
-  so a projector shows a file by linking its hash. Blobs are user content:
-  rehydrate rebuilds scripts and pages from the log, but files/ must be backed
-  up alongside events.jsonl and .secret.
+  An account is a directory — the one wire format between instances:
 
-Timers
+    intent.md      the telling: who this is from, what it means (required)
+    record.jsonl   the evidence: events verbatim, moments preserved (optional)
+    manifest.json  the attestation: event count + sha256 of the record (optional)
 
-  A timer.declared event {name, every, command, args} binds an installed
-  command to a cadence; the serving kernel ticks it. every is a Go duration
-  ("24h", "168h"); "off" disables; the latest declaration per name wins;
-  capability.retired {type: "timer", name} retires. Each firing appends
-  timer.fired before the command runs, and a command that errors leaves a
-  timer.failed receipt. The bound command reads the log on stdin like any
-  command run, so it decides what is actually due — the timer is the
-  metronome, the log is the memory.
+  self give writes one from the log (an event-name prefix selects a record;
+  command/<name> selects a capability's declarations and receipts). self learn
+  reads one: the receiver's brain reads the intent — and the record, with its
+  own tools — against local state and declares its own capabilities; the
+  record then lands verbatim with its own occurred_at, never routed through
+  the brain. The kernel's own vocabulary (command.declared, script.compiled,
+  capability.retired, …) never travels raw: give renames such events to
+  lineage.<name> and learn refuses them otherwise — a foreign account carries
+  history as evidence but cannot speak in the receiving kernel's voice, so a
+  hostile account cannot install anything. lesson.learned records the sha256
+  of what was actually planted beside the manifest's claim: editing an
+  account before learning it (the receiver's intervention) is visible in
+  both logs. Curation is file editing — the account is plain text.
 
-Effects
-
-  Commands may act on the world (print, mail, call a local device);
-  projectors never may. Every effect leaves a receipt event recording the
-  attempt and the outcome, an effectful command consults the log first so
-  it never repeats what already happened, and secrets stay in the
-  environment or a config file — never in events or scripts.
-
-Declarations cross instance boundaries; runnable code does not. A generated
-script installs only after the local kernel signs a script.compiled receipt with
+Declarations — not code — are what cross every boundary. A generated script
+installs only after the local kernel signs a script.compiled receipt with
 SELF_HOME/.secret and the current SELF_BRAIN_ID.
 `
 }
 
 func commandHelp(cmd string) (string, bool) {
 	switch cmd {
-	case "grow":
-		return "usage: self grow <seed-dir>\n\nRead <seed-dir>/intent.md, ask the brain to declare capabilities, compile them, and install signed receipts.\n", true
+	case "learn":
+		return "usage: self learn <account-dir>\n\nRead <account-dir>/intent.md, ask the brain to declare capabilities fitted to this instance, compile them under signed receipts, then plant the account's record.jsonl verbatim (moments preserved). The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
+	case "give":
+		return "usage: self give <event-prefix> <dir>\n       self give command/<name> <dir>\n       self give projector/<name> <dir>\n\nWrite an account from this log: the selected events verbatim in record.jsonl, a manifest with their count and sha256, and an intent.md stub to edit — who you are, what this means, what you hope it becomes. Kernel-vocabulary events are renamed lineage.* so they arrive as evidence, never as installables. The giving is remembered as an account.given event.\n", true
 	case "run":
-		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then the projections consuming them re-render. An arg spelled @<path> deposits that file into the store first (files/<sha256> + a file.stored event) and the command receives its sha256.\n", true
+		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then the projections consuming them re-render.\n", true
 	case "think":
 		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, events} JSON and appends nothing.\n", true
-	case "heartbeat":
-		return "usage: self heartbeat\n\nAppend a heartbeat event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
+	case "reflect":
+		return "usage: self reflect\n\nAppend a self.reflected event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
 	case "show":
 		return "usage: self show <projection>\n\nRender a projection to stdout by replaying the current log. Use 'kernel' for the instance index.\n", true
 	case "rehydrate":
 		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a brain.\n", true
-	case "share":
-		return "usage: self share command/<name>\n       self share projector/<name>\n\nPrint one exact capability's declarations and receipts as a JSONL seed. A bare name is accepted only when it is unambiguous.\n", true
-	case "export":
-		return "usage: self export <event-prefix> <dir> [<new-prefix>]\n\nWrite a content seed from this log: every event whose name starts with <event-prefix>, the file.stored metadata and blobs those events reference, and an intent.md stub to edit. Dates are preserved; an optional <new-prefix> renames the events on the way out (the sender-side remap for when two instances share a vocabulary), recorded in the seed's provenance. The receiver grows the directory and their brain decides how the records merge. The export is remembered as a seed.exported event.\n", true
-	case "adopt":
-		return "usage: self adopt <seed.jsonl>\n       self adopt - < seed.jsonl\n\nRecord a shared seed and re-generate its capability locally; foreign code never installs.\n", true
 	case "revise":
 		return "usage: self revise command/<name> <change request>\n       self revise projector/<name> <change request>\n\nRecord a local revision request, then recompile the installed capability with its latest declaration and verified script as context.\n", true
 	case "retire":
@@ -246,12 +220,4 @@ func fileExists(p string) bool {
 func jsonRepr(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
-}
-
-// jsonField pulls one top-level string field out of a raw JSON payload.
-func jsonField(payload json.RawMessage, key string) string {
-	var m map[string]any
-	json.Unmarshal(payload, &m)
-	s, _ := m[key].(string)
-	return s
 }

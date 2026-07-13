@@ -32,7 +32,7 @@ func ingest(home string, evs []Event) error {
 // compileDeclarations is the strange-loop hook: every command.declared /
 // projector.declared among evs is compiled by the LLM into a script authored
 // for this receiver, installed, and logged as a signed receipt. Declaring IS
-// creating — this runs at grow time and at run time alike, so a capability (or
+// creating — this runs at learn time and at run time alike, so a capability (or
 // the brain) grows new capabilities just by emitting declarations.
 func compileDeclarations(c *llm, home string, evs []Event) int {
 	n := 0

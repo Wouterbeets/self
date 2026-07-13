@@ -136,7 +136,7 @@ func freshSitePage(home, name string) []byte {
 // of just-appended events driving this refresh: a projector consuming none of
 // them is skipped — its page cannot have changed — and its mtime is bumped so
 // freshSitePage keeps trusting the file. fresh == nil replays everything
-// (serve start, rehydrate, grow, adopt). One log read serves every projector.
+// (serve start, rehydrate, learn). One log read serves every projector.
 func refreshProjections(home string, fresh []Event) {
 	events, err := readEvents(home)
 	if err != nil {
