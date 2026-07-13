@@ -317,6 +317,13 @@ SELF_BRAIN_ID     author string signed into receipts
   session stores.
 - `lessons/chat` — a conversational surface; asking for a missing capability
   generates it mid-conversation.
+- `lessons/files` — small files carried in the log as events: content in the
+  payload, digest as identity, served back as data: URIs from a pure
+  projection. What the kernel's file store used to do, regrown as a lesson.
+- `lessons/timers` — scheduled intentions with the clock kept outside: an
+  external tick (cron, a session, a human) fires due timers as events, so
+  replay sees history and never a trigger. What the kernel's ticker used to
+  do, regrown as a lesson.
 
 ## Limits and threat model
 
