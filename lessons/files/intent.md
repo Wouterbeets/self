@@ -52,7 +52,8 @@ file is in the log.
 - Not for large or churning files. A file bigger than a few hundred
   kilobytes, or one that changes often, does not belong in an append-only
   log that every projection replays — keep such files outside and record
-  *about* them (a path, a digest, a note) instead of carrying them.
+  *about* them (a path, a digest, a note) instead of carrying them. That
+  is the blobs lesson (`lessons/blobs`), the other pocket of this pair.
 - No serving bytes outside the projection. The data: URI on `/files` is the
   one egress; nothing writes loose files into `site/`.
 

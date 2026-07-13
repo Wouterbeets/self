@@ -320,6 +320,11 @@ SELF_BRAIN_ID     author string signed into receipts
 - `lessons/files` — small files carried in the log as events: content in the
   payload, digest as identity, served back as data: URIs from a pure
   projection. What the kernel's file store used to do, regrown as a lesson.
+- `lessons/blobs` — the other pocket: large files (videos, archives) live in
+  a content-addressed store beside the log, and the log keeps only the
+  reference — name, digest, note. Move the store and you break it, and
+  `blob/verify` records exactly what broke. Choose per file: files for
+  content the log can resurrect, blobs for matter it can only recognize.
 - `lessons/timers` — scheduled intentions with the clock kept outside: an
   external tick (cron, a session, a human) fires due timers as events, so
   replay sees history and never a trigger. What the kernel's ticker used to
