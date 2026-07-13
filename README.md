@@ -1,22 +1,31 @@
 # self
 
-`self` is a small, local-first runtime. It keeps one append-only event log as
-its authoritative state, and rebuilds every view — and every capability — from that log.
-Capabilities are not shipped as code. You describe what you want, and a brain of
-your choosing — a tool-capable coding agent like `opencode run` or `claude -p` —
-writes the script for it, on your machine, after inspecting the instance's
-rendered state. The kernel itself holds no model: it only installs each generated
-script under a signature made with a key that never leaves the instance, so the
-whole system can be rebuilt from the log alone, with no model and no network.
+**Software that grows to fit the person using it — on one record that
+person owns.**
 
-The point is durable, inspectable state for an LLM agent: one log, replayed into
-every view, with a record of who generated each script and the ability to
-reconstruct it offline. What is not in the log did not happen.
+Every app you have ever used was mass-produced: one shape for a million
+people, with a settings menu as the apology. `self` is the other thing. An
+instance starts nearly empty — one append-only event log, one signing key —
+and grows around your use of it. You say what you need; a brain of your
+choosing (a tool-capable coding agent like `claude -p` or `opencode run`)
+writes the capability for it, on your machine, fitted to what your instance
+already is. Its nouns are your nouns, its pages render your record, and the
+app you open tomorrow is shaped by what you did today.
+
+What makes that safe to want is the mechanism underneath. The log is the
+only truth: every view, and every capability, is a deterministic replay of
+it. Capabilities are never shipped as code — the kernel holds no model, and
+it installs a generated script only under a signature made with a key that
+never leaves the instance, so the whole system rebuilds from the log alone,
+with no model and no network. The brain is rented and replaceable; the
+record is owned and permanent. Fire the model tomorrow, plug in another,
+lose nothing. What is not in the log did not happen.
 
 This runtime is the reference implementation of a larger idea:
 
 - **[the Account Protocol](https://github.com/wouterbeets/knowledge-seed-protocol)**
-  — how records and capabilities move between sovereign minds: as accounts a
+  — when software grows to fit its person, what it learns is worth something
+  to others. The protocol moves it between sovereign minds: as accounts a
   receiver reads and learns from, never as code that runs. You can't
   transplant a skill; you can only show your work.
 - **self** (this repo) — the runtime that speaks it: the log, the signed

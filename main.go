@@ -1,4 +1,5 @@
-// self — a local-first, event-sourced runtime with LLM-generated capabilities.
+// self — software that grows to fit the person using it, on one record that
+// person owns.
 //
 // One append-only event log (events.jsonl) is the only truth. Every view is a
 // pure replay of it, rendered as HTML that you and your agent read identically.

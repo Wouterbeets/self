@@ -43,7 +43,8 @@ func usage() {
 }
 
 func usageText() string {
-	return `self — a local-first, event-sourced runtime with LLM-generated capabilities
+	return `self — software that grows to fit the person using it, on one record
+that person owns
 
 One append-only event log + projections as deterministic replays. A minimal
 kernel; every capability is generated from a declaration and installed under
