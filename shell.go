@@ -14,7 +14,7 @@ import (
 
 // renderKernelHTML writes the kernel's self-description — capabilities, paths,
 // the pipe contract — to site/kernel.html: the page a human lands on and the
-// first context a brain reads. Like everything in site/, it is a replay of the log.
+// first context a mind reads. Like everything in site/, it is a replay of the log.
 func renderKernelHTML(home string) {
 	events, err := readEvents(home)
 	if err != nil {
@@ -157,7 +157,7 @@ func siteNav(home, current string) string {
 // siteFile resolves a path under SELF_HOME/site/ to a file by name, looking for
 // <name>.html, <name>.md, and <name>.txt in order. It returns the file path and
 // the matched extension, or "" if no such file. Used by the server and by
-// `self show` so a brain (or human, or external agent) can reach any on-disk
+// `self show` so a mind (or human, or external agent) can reach any on-disk
 // artifact by bare name.
 func siteFile(home, name string) (path, ext string) {
 	for _, e := range []string{".html", ".md", ".txt"} {

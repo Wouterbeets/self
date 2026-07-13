@@ -85,7 +85,7 @@ func TestConcurrentAppendsDoNotCollide(t *testing.T) {
 // signed receipt, running the command appends its event, and the projection
 // re-renders to site/ showing it. This is the core loop in one test.
 func TestStrangeLoop(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	home := t.TempDir()
 
 	decls := []Event{
@@ -164,7 +164,7 @@ func TestForgedReceiptIsInert(t *testing.T) {
 // rebuilt from events.jsonl + .secret alone reproduces its installed scripts
 // and rendered projections byte-for-byte.
 func TestRehydrateRoundTrip(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	src := t.TempDir()
 	decls := []Event{
 		newEvent("command.declared", json.RawMessage(
@@ -257,7 +257,7 @@ func TestRehydrateFailurePreservesWorkingDerivedState(t *testing.T) {
 // name both reconstruct: receipts are keyed by (type, name), not name. The
 // chat lesson (a chat command and a chat projector) is the natural collision.
 func TestRehydrateTypeCollision(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	home := t.TempDir()
 	decls := []Event{
 		newEvent("command.declared", json.RawMessage(
@@ -288,7 +288,7 @@ func TestRehydrateTypeCollision(t *testing.T) {
 // (the tombstone outranks earlier receipts), and a later re-declaration
 // revives it — deletion is a fold rule, not an erasure.
 func TestRetireRemovesDerivedStateAndSurvivesRehydrate(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	home := t.TempDir()
 	decls := []Event{
 		newEvent("command.declared", json.RawMessage(
@@ -372,8 +372,8 @@ func TestRetireRefusesUnknownTargets(t *testing.T) {
 }
 
 func TestReviseCompilesWithCurrentScriptAndRequest(t *testing.T) {
-	brain := filepath.Join(t.TempDir(), "brain")
-	if err := os.WriteFile(brain, []byte(`#!/usr/bin/env python3
+	mind := filepath.Join(t.TempDir(), "mind")
+	if err := os.WriteFile(mind, []byte(`#!/usr/bin/env python3
 import os, sys, json
 prompt = sys.argv[-1]
 sys.stdin.read()
@@ -388,8 +388,8 @@ print(json.dumps({"name":"script.authored","payload":{"script":script}}))
 `), 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SELF_BRAIN", brain)
-	t.Setenv("SELF_BRAIN_ID", "revision brain")
+	t.Setenv("SELF_MIND", mind)
+	t.Setenv("SELF_MIND_ID", "revision mind")
 
 	home := t.TempDir()
 	decl := newEvent("command.declared", json.RawMessage(`{"name":"note","description":"take a note","event":{"name":"note.added","fields":{"text":"string"}}}`))
@@ -397,7 +397,7 @@ print(json.dumps({"name":"script.authored","payload":{"script":script}}))
 		t.Fatal(err)
 	}
 	oldScript := "#!/bin/sh\n# old sentinel\necho '{\"name\":\"note.added\",\"payload\":{\"text\":\"old\"}}'\n"
-	if err := installTrustedScript(home, "command", "note", oldScript, "old brain"); err != nil {
+	if err := installTrustedScript(home, "command", "note", oldScript, "old mind"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -442,17 +442,17 @@ print(json.dumps({"name":"script.authored","payload":{"script":script}}))
 	}
 }
 
-// TestPluggableBrain pins the README's oldest promise, now true everywhere:
-// the brain is just a process behind one contract, and the kernel can't tell
-// the difference. A fake external brain — a few lines of python, no HTTP, no
+// TestPluggableMind pins the README's oldest promise, now true everywhere:
+// the mind is just a process behind one contract, and the kernel can't tell
+// the difference. A fake external mind — a few lines of python, no HTTP, no
 // stub — answers a reflection with prose plus a declaration, then answers the
 // compile ask the strange loop fires, and the capability it authored installs with
-// a receipt signed by this home carrying the external brain's name.
-func TestPluggableBrain(t *testing.T) {
-	brain := filepath.Join(t.TempDir(), "brain")
-	if err := os.WriteFile(brain, []byte(`#!/usr/bin/env python3
+// a receipt signed by this home carrying the external mind's name.
+func TestPluggableMind(t *testing.T) {
+	mind := filepath.Join(t.TempDir(), "mind")
+	if err := os.WriteFile(mind, []byte(`#!/usr/bin/env python3
 import os, sys, json
-sys.stdin.read()  # the log — an external brain may read it or not
+sys.stdin.read()  # the log — an external mind may read it or not
 ask = os.environ.get("SELF_ASK", "")
 if ask == "compile":
     script = "#!/usr/bin/env python3\nimport sys, json\nprint(json.dumps({\"name\": \"pinged\", \"payload\": {\"title\": \" \".join(sys.argv[1:]) or \"pong\"}}))\n"
@@ -467,25 +467,25 @@ else:
 `), 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SELF_BRAIN", brain)
-	t.Setenv("SELF_BRAIN_ID", "an external brain, plugged in whole")
+	t.Setenv("SELF_MIND", mind)
+	t.Setenv("SELF_MIND_ID", "an external mind, plugged in whole")
 
 	home := t.TempDir()
 	if err := cmdReflect(home); err != nil {
 		t.Fatal(err)
 	}
 
-	// the declaration compiled through the external brain, not HTTP, not stubs
+	// the declaration compiled through the external mind, not HTTP, not stubs
 	installed := filepath.Join(home, "capabilities", "commands", "ping", "run")
 	data, err := os.ReadFile(installed)
 	if err != nil {
-		t.Fatalf("the external brain's capability did not install: %s", err)
+		t.Fatalf("the external mind's capability did not install: %s", err)
 	}
 	if !strings.Contains(string(data), "pinged") {
-		t.Fatalf("installed script is not the brain's: %s", data)
+		t.Fatalf("installed script is not the mind's: %s", data)
 	}
 
-	// the receipt is home-signed and carries the external brain's name
+	// the receipt is home-signed and carries the external mind's name
 	secret, _ := loadSecret(home)
 	events, _ := readEvents(home)
 	found := false
@@ -497,13 +497,13 @@ else:
 		if !ok {
 			t.Fatalf("seq %d: receipt does not verify", e.Seq)
 		}
-		if r.By != "an external brain, plugged in whole" {
+		if r.By != "an external mind, plugged in whole" {
 			t.Fatalf("receipt authored by %q", r.By)
 		}
 		found = true
 	}
 	if !found {
-		t.Fatal("no receipt for the external brain's compile")
+		t.Fatal("no receipt for the external mind's compile")
 	}
 
 	// and the capability runs
@@ -516,7 +516,7 @@ else:
 	}
 
 	// think flows through the same seam, prose and all
-	res, err := pipeBrain(home, "think", "are you there?")
+	res, err := pipeMind(home, "think", "are you there?")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,11 +525,11 @@ else:
 	}
 }
 
-// A chat-shaped brain (claude -p and its kin) answers in Markdown: it wraps the
+// A chat-shaped mind (claude -p and its kin) answers in Markdown: it wraps the
 // event JSON in backticks or a ```json fence and narrates around it. The pipe
-// must still find the events, or the headline SELF_BRAIN="claude -p" is a broken
-// promise. This pins that a Markdown-speaking brain plugs in unchanged.
-func TestBrainMarkdownFencedJSON(t *testing.T) {
+// must still find the events, or the headline SELF_MIND="claude -p" is a broken
+// promise. This pins that a Markdown-speaking mind plugs in unchanged.
+func TestMindMarkdownFencedJSON(t *testing.T) {
 	if _, fence := unfence("```json"); !fence {
 		t.Fatal("```json should be a fence marker")
 	}
@@ -546,10 +546,10 @@ func TestBrainMarkdownFencedJSON(t *testing.T) {
 		t.Fatalf("prose with inline code must not be stripped: %q", c)
 	}
 
-	brain := filepath.Join(t.TempDir(), "brain")
+	mind := filepath.Join(t.TempDir(), "mind")
 	// Mimics claude -p: prose, then a backtick-wrapped declaration, then a
 	// fenced compile answer.
-	if err := os.WriteFile(brain, []byte("#!/usr/bin/env python3\n"+
+	if err := os.WriteFile(mind, []byte("#!/usr/bin/env python3\n"+
 		`import os, sys, json
 sys.stdin.read()
 ask = os.environ.get("SELF_ASK", "")
@@ -569,11 +569,11 @@ else:
 `), 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SELF_BRAIN", brain)
-	t.Setenv("SELF_BRAIN_ID", "a markdown-speaking brain")
+	t.Setenv("SELF_MIND", mind)
+	t.Setenv("SELF_MIND_ID", "a markdown-speaking mind")
 
 	home := t.TempDir()
-	res, err := pipeBrain(home, "learn", "learn a note capability")
+	res, err := pipeMind(home, "learn", "learn a note capability")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +592,7 @@ else:
 		t.Fatal(err)
 	}
 	if p := filepath.Join(home, "capabilities", "commands", "note", "run"); !fileExists(p) {
-		t.Fatal("the note capability compiled via the fenced brain did not install")
+		t.Fatal("the note capability compiled via the fenced mind did not install")
 	}
 }
 
@@ -607,16 +607,16 @@ func mustEvents(t *testing.T, decls []map[string]any) []Event {
 	return evs
 }
 
-// stubBrain returns the absolute path of examples/brain-stub — the
-// deterministic offline brain the tests plug in through the one seam every
-// real brain uses. There is no in-kernel stub: a brain is a process.
-func stubBrain(t *testing.T) string {
+// stubMind returns the absolute path of examples/mind-stub — the
+// deterministic offline mind the tests plug in through the one seam every
+// real mind uses. There is no in-kernel stub: a mind is a process.
+func stubMind(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(wd, "examples", "brain-stub")
+	return filepath.Join(wd, "examples", "mind-stub")
 }
 
 // installTrustedScript simulates an earlier legitimate install: a script on
@@ -629,11 +629,11 @@ func installTrustedScript(home, typ, name, script, by string) error {
 	return appendReceipt(home, typ, name, script, by)
 }
 
-// A capable brain (claude -p) will otherwise try to persist its own work —
+// A capable mind (claude -p) will otherwise try to persist its own work —
 // write events.jsonl, run the CLI, install a script — and emit Markdown. Every
 // event-expecting ask must tell it the answer channel is stdout only, plain
-// JSON, one line each. This pins that guidance into the prompts the brain sees.
-func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
+// JSON, one line each. This pins that guidance into the prompts the mind sees.
+func TestEventAsksGuideTheMindToStdout(t *testing.T) {
 	must := func(where, prompt string, needles ...string) {
 		low := strings.ToLower(prompt)
 		for _, n := range needles {
@@ -644,11 +644,11 @@ func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
 	}
 	// learn and reflect expect declarations: answer on stdout, plain JSON.
 	must("learn", learnPrompt(".", "some intent", nil), "stdout", "events.jsonl", "no markdown", "one line")
-	// think is report-only, but the brain must still be told stdout is the
-	// only channel — a tool-capable brain otherwise tries to persist its work.
+	// think is report-only, but the mind must still be told stdout is the
+	// only channel — a tool-capable mind otherwise tries to persist its work.
 	must("think", thinkPrompt("what is missing here?"), "stdout", "cannot write the log", "no code fences")
-	must("answer contract", brainAnswerContract, "stdout", "cannot write the log", "no code fences", "reply is final", "never re-invoked")
-	// compile: the brain may test with its tools, but must not install or persist.
+	must("answer contract", mindAnswerContract, "stdout", "cannot write the log", "no code fences", "reply is final", "never re-invoked")
+	// compile: the mind may test with its tools, but must not install or persist.
 	must("compile", compilePrompt("", "", "", "", "command", "note", `{"name":"note"}`),
 		"do not install", "events.jsonl", "no code fence")
 	// the intent-woven variant keeps the same guidance.
@@ -664,7 +664,7 @@ func TestEventAsksGuideTheBrainToStdout(t *testing.T) {
 // in-band alternative to remembering through a session store outside the log:
 // rehydrate replays it, audit can read it.
 func TestLearnLogsOrchestratorReasoning(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	home := t.TempDir()
 
 	seed := filepath.Join(t.TempDir(), "notes")
@@ -704,11 +704,11 @@ func TestLearnLogsOrchestratorReasoning(t *testing.T) {
 	}
 }
 
-func TestStubBrainCoversThinkAndLearn(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+func TestStubMindCoversThinkAndLearn(t *testing.T) {
+	t.Setenv("SELF_MIND", stubMind(t))
 	home := t.TempDir()
 
-	res, err := pipeBrain(home, "think", "are you there?")
+	res, err := pipeMind(home, "think", "are you there?")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -746,11 +746,11 @@ func TestStubBrainCoversThinkAndLearn(t *testing.T) {
 }
 
 func TestLearnFailsWhenCompilationFails(t *testing.T) {
-	brain := filepath.Join(t.TempDir(), "brain")
-	if err := os.WriteFile(brain, []byte("#!/bin/sh\nif [ \"$SELF_ASK\" = learn ]; then printf '%s\\n' '{\"name\":\"command.declared\",\"payload\":{\"name\":\"broken\",\"description\":\"broken\",\"event\":{\"name\":\"broken.ran\"}}}'; else exit 1; fi\n"), 0755); err != nil {
+	mind := filepath.Join(t.TempDir(), "mind")
+	if err := os.WriteFile(mind, []byte("#!/bin/sh\nif [ \"$SELF_ASK\" = learn ]; then printf '%s\\n' '{\"name\":\"command.declared\",\"payload\":{\"name\":\"broken\",\"description\":\"broken\",\"event\":{\"name\":\"broken.ran\"}}}'; else exit 1; fi\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SELF_BRAIN", brain)
+	t.Setenv("SELF_MIND", mind)
 	seed := filepath.Join(t.TempDir(), "broken")
 	if err := os.Mkdir(seed, 0755); err != nil {
 		t.Fatal(err)
@@ -774,7 +774,7 @@ func TestLearnFailsWhenCompilationFails(t *testing.T) {
 }
 
 func TestLiveExecutionRejectsTamperedScripts(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	home := t.TempDir()
 	if err := ingest(home, []Event{
 		newEvent("command.declared", json.RawMessage(`{"name":"note","description":"note","event":{"name":"note.added","fields":{"text":"string"}}}`)),
@@ -799,7 +799,7 @@ func TestLiveExecutionRejectsTamperedScripts(t *testing.T) {
 }
 
 func TestStubCommandHonorsDeclaredField(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	home := t.TempDir()
 	decl := newEvent("command.declared", json.RawMessage(
 		`{"name":"memo","description":"record a memo","event":{"name":"memo.added","fields":{"text":"string"}}}`))
@@ -857,16 +857,16 @@ func TestReceiptProvenance(t *testing.T) {
 		t.Fatal("by-line folded into script verified — field boundaries are ambiguous")
 	}
 
-	// and a receipt the kernel mints carries the brain's identity
+	// and a receipt the kernel mints carries the mind's identity
 	c := newLLM(home)
-	t.Setenv("SELF_BRAIN_ID", "")
-	t.Setenv("SELF_BRAIN", "some-brain")
-	if got := c.identity(); got != "some-brain" {
-		t.Fatalf("brain identity = %q, want the executable", got)
+	t.Setenv("SELF_MIND_ID", "")
+	t.Setenv("SELF_MIND", "some-mind")
+	if got := c.identity(); got != "some-mind" {
+		t.Fatalf("mind identity = %q, want the executable", got)
 	}
-	t.Setenv("SELF_BRAIN_ID", "an agent-chosen identity")
+	t.Setenv("SELF_MIND_ID", "an agent-chosen identity")
 	if got := c.identity(); got != "an agent-chosen identity" {
-		t.Fatalf("SELF_BRAIN_ID override = %q", got)
+		t.Fatalf("SELF_MIND_ID override = %q", got)
 	}
 }
 
@@ -949,7 +949,7 @@ func TestInjectShellShape(t *testing.T) {
 // page under site/, survives rehydrate, and stays OFF the top nav — depth is
 // reached from the parent page, so the surface unfolds instead of flooding.
 func TestNestedProjectionsUnfold(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	home := t.TempDir()
 
 	for _, n := range []string{"finances", "finances/bills"} {
@@ -1012,19 +1012,19 @@ func TestSiteNavListsProjections(t *testing.T) {
 	}
 }
 
-// TestBrainReceivesStateBriefNotRawLog pins the renovation: the brain no longer
+// TestMindReceivesStateBriefNotRawLog pins the renovation: the mind no longer
 // gets the whole event log dumped on stdin. It gets an orientation brief —
 // the same current-state unfolding the projections draw — and is pointed at
-// SELF_HOME for depth (the raw log and rendered pages live on disk). A brain
-// reads state, not a firehose; an instance's brain prompt stays O(state), not
+// SELF_HOME for depth (the raw log and rendered pages live on disk). A mind
+// reads state, not a firehose; an instance's mind prompt stays O(state), not
 // O(history), so a long-lived instance doesn't grow an unbounded ask. The stub
-// brain (examples/brain-stub) ignores stdin too, so this pins the seam itself.
-func TestBrainReceivesStateBriefNotRawLog(t *testing.T) {
-	// A brain that records its stdin to a file so we can inspect what the kernel
+// mind (examples/mind-stub) ignores stdin too, so this pins the seam itself.
+func TestMindReceivesStateBriefNotRawLog(t *testing.T) {
+	// A mind that records its stdin to a file so we can inspect what the kernel
 	// actually fed it. It answers a think ask with one prose line.
 	seen := filepath.Join(t.TempDir(), "stdin.txt")
-	brain := filepath.Join(t.TempDir(), "brain")
-	if err := os.WriteFile(brain, []byte(`#!/usr/bin/env python3
+	mind := filepath.Join(t.TempDir(), "mind")
+	if err := os.WriteFile(mind, []byte(`#!/usr/bin/env python3
 import os, sys
 data = sys.stdin.read()
 with open(os.environ["SEEN"], "w") as f:
@@ -1033,8 +1033,8 @@ print("read " + str(len(data)) + " bytes on stdin")
 `), 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SELF_BRAIN", brain)
-	t.Setenv("SELF_BRAIN_ID", "the recorder brain")
+	t.Setenv("SELF_MIND", mind)
+	t.Setenv("SELF_MIND_ID", "the recorder mind")
 	home := t.TempDir()
 	// lay down a small, recognizable log: a declaration + a couple of events
 	decl := newEvent("command.declared", json.RawMessage(`{"name":"note","description":"take a note","event":{"name":"note.taken","fields":{"title":"string"}}}`))
@@ -1047,12 +1047,12 @@ print("read " + str(len(data)) + " bytes on stdin")
 	}
 
 	t.Setenv("SEEN", seen)
-	res, err := pipeBrain(home, "think", "what do you see?")
+	res, err := pipeMind(home, "think", "what do you see?")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(res.Response, "bytes on stdin") {
-		t.Fatalf("brain did not run / record: %q", res.Response)
+		t.Fatalf("mind did not run / record: %q", res.Response)
 	}
 
 	fed, err := os.ReadFile(seen)
@@ -1061,23 +1061,23 @@ print("read " + str(len(data)) + " bytes on stdin")
 	}
 	brief := string(fed)
 
-	// the brief names the instance and points the brain at where to look
+	// the brief names the instance and points the mind at where to look
 	if !strings.Contains(brief, "# self — orientation brief") {
 		t.Fatalf("brief missing instance header:\n%s", brief)
 	}
 	if !strings.Contains(brief, "site/kernel.html") {
-		t.Fatalf("brief does not point the brain at kernel.html:\n%s", brief)
+		t.Fatalf("brief does not point the mind at kernel.html:\n%s", brief)
 	}
 	if !strings.Contains(brief, "note.taken") {
 		t.Fatalf("brief missing the note command's event:\n%s", brief)
 	}
 	if !strings.Contains(brief, "events.jsonl") {
-		t.Fatalf("brief does not point the brain at the raw log:\n%s", brief)
+		t.Fatalf("brief does not point the mind at the raw log:\n%s", brief)
 	}
 
 	// and it is NOT the raw JSONL log: no event-object line with a `"seq":` key
 	if strings.Contains(brief, `"seq":`) {
-		t.Fatalf("brain was fed the raw log, not a brief:\n%s", brief)
+		t.Fatalf("mind was fed the raw log, not a brief:\n%s", brief)
 	}
 	// bounded: the brief is small relative to a grown log
 	if len(brief) > 4096 {
@@ -1089,7 +1089,7 @@ print("read " + str(len(data)) + " bytes on stdin")
 // an empty home yields an "empty log" line, and a home with many events still
 // produces a brief far smaller than the raw log — O(state), not O(history),
 // and crucially contains NO event-log digest, because the brief is pure
-// orientation: where the brain is, what exists, where to look for the rest.
+// orientation: where the mind is, what exists, where to look for the rest.
 func TestStateBriefIsEmptyAndBounded(t *testing.T) {
 	empty := t.TempDir()
 	if b := stateBrief(empty); !strings.Contains(b, "Empty log") {
@@ -1113,7 +1113,7 @@ func TestStateBriefIsEmptyAndBounded(t *testing.T) {
 		t.Fatalf("brief (%d) not smaller than the raw log (%d) — not O(state)", len(brief), len(raw))
 	}
 	// the orientation brief has NO event-log digest — no `seq` lines at all.
-	// the brain is pointed at events.jsonl if it needs the raw material.
+	// the mind is pointed at events.jsonl if it needs the raw material.
 	if strings.Contains(brief, "seq ") {
 		t.Fatalf("brief contains a seq digest — not pure orientation:\n%s", brief)
 	}
@@ -1276,7 +1276,7 @@ func TestFreshSitePageTracksTheLog(t *testing.T) {
 // them in another instance with their own moments intact, and its
 // lesson.learned receipt attests to the same digest the manifest claimed.
 func TestGiveLearnRoundTrip(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	giver := t.TempDir()
 	past := time.Date(2024, 3, 9, 12, 30, 0, 0, time.UTC)
 	for i, text := range []string{"low tide at dawn", "nest three hatched"} {
@@ -1357,7 +1357,7 @@ func TestGiveLearnRoundTrip(t *testing.T) {
 // vocabulary never travels raw, so a hostile record that tries to speak it —
 // here, planting a script.compiled — is refused before anything is appended.
 func TestLearnRefusesKernelVocabulary(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	dir := filepath.Join(t.TempDir(), "hostile")
 	if err := os.Mkdir(dir, 0755); err != nil {
 		t.Fatal(err)
@@ -1382,9 +1382,9 @@ func TestLearnRefusesKernelVocabulary(t *testing.T) {
 // TestGiveCapabilityAsLineage pins the capability flavor: give renames the
 // declarations and receipts to lineage.*, learn plants them as inert
 // evidence, and the only thing that installs is what the receiver's own
-// brain declared, under the receiver's own key. Foreign bytes never install.
+// mind declared, under the receiver's own key. Foreign bytes never install.
 func TestGiveCapabilityAsLineage(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	giver := t.TempDir()
 	decl := newEvent("command.declared", json.RawMessage(
 		`{"name":"note","description":"take a note","params":{"text":"string"},"event":{"name":"note.taken","fields":{"title":"string"}}}`))
@@ -1412,9 +1412,9 @@ func TestGiveCapabilityAsLineage(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the giver's capability name never installed by itself; whatever the
-	// receiver's brain declared is signed by the receiver's key alone
+	// receiver's mind declared is signed by the receiver's key alone
 	if p, _ := scriptPath(receiver, "command", "note"); fileExists(p) {
-		t.Fatal("the foreign declaration installed without the receiver's brain declaring it")
+		t.Fatal("the foreign declaration installed without the receiver's mind declaring it")
 	}
 	secret, err := loadSecret(receiver)
 	if err != nil {
@@ -1432,7 +1432,7 @@ func TestGiveCapabilityAsLineage(t *testing.T) {
 		receipts++
 	}
 	if receipts == 0 {
-		t.Fatal("the receiver's brain declared nothing — the lesson did not take")
+		t.Fatal("the receiver's mind declared nothing — the lesson did not take")
 	}
 }
 
@@ -1442,7 +1442,7 @@ func TestGiveCapabilityAsLineage(t *testing.T) {
 // manifest's claim and the digest of what was actually planted, so the edit
 // is visible forever.
 func TestLearnRecordsInterventionDigest(t *testing.T) {
-	t.Setenv("SELF_BRAIN", stubBrain(t))
+	t.Setenv("SELF_MIND", stubMind(t))
 	giver := t.TempDir()
 	for _, text := range []string{"keep this", "redact this"} {
 		e := newEvent("note.taken", json.RawMessage(`{"title":"`+text+`"}`))

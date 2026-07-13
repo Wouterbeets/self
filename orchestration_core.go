@@ -33,7 +33,7 @@ func ingest(home string, evs []Event) error {
 // projector.declared among evs is compiled by the LLM into a script authored
 // for this receiver, installed, and logged as a signed receipt. Declaring IS
 // creating — this runs at learn time and at run time alike, so a capability (or
-// the brain) grows new capabilities just by emitting declarations.
+// the mind) grows new capabilities just by emitting declarations.
 func compileDeclarations(c *llm, home string, evs []Event) int {
 	n := 0
 	for _, e := range evs {
@@ -102,17 +102,17 @@ func applyRetirements(home string, evs []Event) int {
 	return n
 }
 
-// brainResult carries the brain's response: the text it wrote, any events it
+// mindResult carries the mind's response: the text it wrote, any events it
 // declared, and (for compile asks) the script it authored.
-type brainResult struct {
+type mindResult struct {
 	Response string
 	Events   []map[string]any
 	Script   string // a compile ask's answer, from a script.authored event
 }
 
-// applyEvents appends events the brain returned and runs any capability
+// applyEvents appends events the mind returned and runs any capability
 // declarations among them through the strange loop.
-func applyEvents(home string, res *brainResult) {
+func applyEvents(home string, res *mindResult) {
 	var evs []Event
 	for _, d := range res.Events {
 		name, _ := d["name"].(string)
@@ -122,7 +122,7 @@ func applyEvents(home string, res *brainResult) {
 		}
 		e := newEvent(name, payload)
 		if err := appendEvent(home, &e); err != nil {
-			fmt.Fprintf(os.Stderr, "self: append brain event: %s\n", err)
+			fmt.Fprintf(os.Stderr, "self: append mind event: %s\n", err)
 			return
 		}
 		evs = append(evs, e)

@@ -1,15 +1,15 @@
-# memory — durable memory for a stateless brain
+# memory — durable memory for a stateless mind
 
 ## purpose
 
-The brain is a stateless process: every ask starts cold and orients from the
+The mind is a stateless process: every ask starts cold and orients from the
 rendered state. This surface is where it remembers. A memory is one durable
 fact worth carrying across sessions — a lesson learned, a preference the human
-stated, an invariant of this instance — written for a future brain that knows
+stated, an invariant of this instance — written for a future mind that knows
 nothing except what these pages say.
 
 This is the middle tier of the instance's memory. The newest events ride
-inside each ask; the rendered memory page is what a cold brain reads to
+inside each ask; the rendered memory page is what a cold mind reads to
 orient; and the raw event log on disk is the deep archive it searches with
 its own tools. Nothing about memory lives outside the log — no session
 store, no harness state — so `rehydrate` replays it.
@@ -17,7 +17,7 @@ store, no harness state — so `rehydrate` replays it.
 ## surface
 
 - `self run remember <text…>` appends one `memory.noted` event carrying the
-  memory text and, when the caller's environment provides `SELF_BRAIN_ID`,
+  memory text and, when the caller's environment provides `SELF_MIND_ID`,
   that identity as `by` — a memory records who laid it down.
 - `/memory` renders every memory newest first, with timestamp and author.
   It is an orientation page for a cold reader, not a diary: compact,

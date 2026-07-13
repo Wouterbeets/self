@@ -91,7 +91,7 @@ func receiptCount(home, typ, name string) int {
 
 // cmdLearn learns an account: a directory with intent.md (the telling — prose
 // intent, not a parts-list), and optionally record.jsonl (events to plant,
-// verbatim) and manifest.json (the giver's attestation). The brain reads the
+// verbatim) and manifest.json (the giver's attestation). The mind reads the
 // intent — and the record, with its own tools — against this instance's
 // state and declares the decomposition that realizes it here; each piece is
 // then compiled with the whole intent woven in. Same account, different
@@ -109,9 +109,9 @@ func cmdLearn(home, ref string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "self: learning %q from its intent…\n", name)
-	res, err := pipeBrain(home, "learn", learnPrompt(ref, intent, deposit))
+	res, err := pipeMind(home, "learn", learnPrompt(ref, intent, deposit))
 	if err != nil {
-		return fmt.Errorf("learn %q: %w (learning needs a brain — %s)", name, err, brainHint)
+		return fmt.Errorf("learn %q: %w (learning needs a mind — %s)", name, err, mindHint)
 	}
 	c := newLLM(home)
 	c.intent = intent
@@ -143,7 +143,7 @@ func cmdLearn(home, ref string) error {
 		declEvents = append(declEvents, e)
 	}
 	if len(declEvents) == 0 && len(deposit) == 0 {
-		return fmt.Errorf("nothing to learn from %q: the brain declared no capability and the account carries no record", name)
+		return fmt.Errorf("nothing to learn from %q: the mind declared no capability and the account carries no record", name)
 	}
 	grown := compileDeclarations(c, home, declEvents)
 	if grown != len(declEvents) {
@@ -152,7 +152,7 @@ func cmdLearn(home, ref string) error {
 	}
 
 	// The record lands verbatim: this instance's id and seq, the event's own
-	// moment. Planted events never route through the brain — the model only
+	// moment. Planted events never route through the mind — the model only
 	// ever writes the disposable part, never the part that accumulates.
 	for _, e := range deposit {
 		fresh := newEvent(e.Name, e.Payload)
@@ -186,7 +186,7 @@ func cmdLearn(home, ref string) error {
 
 // learnPrompt frames the orchestration ask: decompose the intent into declared
 // capabilities, and hand them back the one way the kernel accepts them. When
-// the account carries a record, the brain is pointed at it — evidence is for
+// the account carries a record, the mind is pointed at it — evidence is for
 // reading, and the file is right there for its tools.
 func learnPrompt(ref, intent string, deposit []Event) string {
 	prompt := "Learn this account: declare the capabilities that realize its intent here by emitting command.declared / projector.declared events, then summarize in one line."
@@ -196,7 +196,7 @@ func learnPrompt(ref, intent string, deposit []Event) string {
 		}
 		prompt += fmt.Sprintf("\n\nThe account carries a record of %d event(s) that will be planted in the log, verbatim, right after you answer: read %s to ground your declarations in the evidence (lineage.* events are another instance's history — reference material, never yours to re-emit).", len(deposit), filepath.Join(ref, "record.jsonl"))
 	}
-	return prompt + "\n\n" + brainAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
+	return prompt + "\n\n" + mindAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
 }
 
 func cmdThink(home, prompt string) error {
@@ -207,9 +207,9 @@ func cmdThink(home, prompt string) error {
 	if prompt == "" {
 		return fmt.Errorf("usage: self think <prompt> (or pipe it on stdin)")
 	}
-	res, err := pipeBrain(home, "think", thinkPrompt(prompt))
+	res, err := pipeMind(home, "think", thinkPrompt(prompt))
 	if err != nil {
-		return fmt.Errorf("brain: %w", err)
+		return fmt.Errorf("mind: %w", err)
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -217,13 +217,13 @@ func cmdThink(home, prompt string) error {
 }
 
 // thinkPrompt wraps a think ask with the answer contract. A think is
-// report-only — the kernel returns brain-authored events to the caller instead
-// of ingesting them — but the brain still needs to know its stdout is the only
-// channel: without the contract, a tool-capable brain wastes its session trying
+// report-only — the kernel returns mind-authored events to the caller instead
+// of ingesting them — but the mind still needs to know its stdout is the only
+// channel: without the contract, a tool-capable mind wastes its session trying
 // to persist its work itself (edit the log, run the CLI) and gets denied. Every
 // event-expecting ask carries the same guidance; this was the one naked ask left.
 func thinkPrompt(prompt string) string {
-	return prompt + "\n\n" + brainAnswerContract
+	return prompt + "\n\n" + mindAnswerContract
 }
 
 func cmdReflect(home string) error {
@@ -233,8 +233,8 @@ func cmdReflect(home string) error {
 		return err
 	}
 	prompt := `This is a self-improvement reflection. Explore your instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (emit command.declared / projector.declared); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` +
-		"\n\n" + brainAnswerContract + reflectionContext(prior)
-	res, err := pipeBrain(home, "reflect", prompt)
+		"\n\n" + mindAnswerContract + reflectionContext(prior)
+	res, err := pipeMind(home, "reflect", prompt)
 	if err != nil {
 		return err
 	}
@@ -243,7 +243,7 @@ func cmdReflect(home string) error {
 	return nil
 }
 
-// reflectionContext hands the brain the events since its last reflection —
+// reflectionContext hands the mind the events since its last reflection —
 // capped, minus kernel bookkeeping receipts — so a reflection reacts to what
 // changed instead of exploring from scratch.
 func reflectionContext(events []Event) string {
