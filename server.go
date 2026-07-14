@@ -85,7 +85,7 @@ func serveMux(home string) *http.ServeMux {
 		}
 		// Any on-disk site artifact by bare name: brief, kernel, etc.
 		// .html goes through the shell; .md and .txt are served verbatim as
-		// text/plain. A brain (or human, or external agent) can reach any
+		// text/plain. A mind (or human, or external agent) can reach any
 		// kernel-resident surface by name.
 		if p, ext := siteFile(home, name); p != "" {
 			if name == "brief" {

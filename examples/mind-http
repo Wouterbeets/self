@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""brain-http — the thin half of a two-piece brain. self spawns this once per
-ask; it forwards the ask to a long-running brain server over HTTP and prints
+"""mind-http — the thin half of a two-piece mind. self spawns this once per
+ask; it forwards the ask to a long-running mind server over HTTP and prints
 the body straight back onto the kernel's pipe. The intelligence — the model
-and its tool loop — lives in examples/brain-http-server, which stays warm
+and its tool loop — lives in examples/mind-http-server, which stays warm
 next to the GPU.
 
-    export SELF_BRAIN="$PWD/examples/brain-http"
-    export SELF_BRAIN_URL=http://127.0.0.1:8484/run   # the default
+    export SELF_MIND="$PWD/examples/mind-http"
+    export SELF_MIND_URL=http://127.0.0.1:8484/run   # the default
 
 The wire is one POST per ask: {ask, prompt, brief, home} in, the exact text
 the kernel should read on stdout out. The shim adds nothing else on purpose:
@@ -30,19 +30,19 @@ def main():
         "brief": sys.stdin.read(),
         "home": os.environ.get("SELF_HOME") or os.getcwd(),
     }).encode()
-    url = os.environ.get("SELF_BRAIN_URL", "http://127.0.0.1:8484/run")
+    url = os.environ.get("SELF_MIND_URL", "http://127.0.0.1:8484/run")
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     # A local model exploring an instance is slow on purpose; the budget lives
-    # server-side (BRAIN_MAX_TURNS), so the shim just waits.
-    timeout = float(os.environ.get("SELF_BRAIN_TIMEOUT", "3600"))
+    # server-side (MIND_MAX_TURNS), so the shim just waits.
+    timeout = float(os.environ.get("SELF_MIND_TIMEOUT", "3600"))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             sys.stdout.write(resp.read().decode())
     except urllib.error.HTTPError as e:
-        sys.stderr.write("brain server error %d: %s\n" % (e.code, e.read().decode(errors="replace")))
+        sys.stderr.write("mind server error %d: %s\n" % (e.code, e.read().decode(errors="replace")))
         raise SystemExit(1)
     except OSError as e:
-        sys.stderr.write("brain server unreachable at %s: %s\nstart it: examples/brain-http-server\n" % (url, e))
+        sys.stderr.write("mind server unreachable at %s: %s\nstart it: examples/mind-http-server\n" % (url, e))
         raise SystemExit(1)
 
 

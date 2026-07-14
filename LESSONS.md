@@ -1,7 +1,7 @@
 # Writing a lesson
 
 A lesson is how you teach an instance a new set of capabilities. It is not
-code. It is a description of intent that the instance's own brain reads and
+code. It is a description of intent that the instance's own mind reads and
 compiles into scripts locally. The same lesson learned by two instances can
 produce two different implementations — each adapted to what that instance
 already has. Learning, not copying.
@@ -25,9 +25,9 @@ mylesson/
 `self learn mylesson/` does the rest:
 
 1. It records an `intent.declared` event.
-2. It hands `intent.md` to the brain (a real brain writes real capabilities;
-   `examples/brain-stub` is a deterministic offline one that declares a
-   minimal command + projection, enough to exercise the loop). The brain reads
+2. It hands `intent.md` to the mind (a real mind writes real capabilities;
+   `examples/mind-stub` is a deterministic offline one that declares a
+   minimal command + projection, enough to exercise the loop). The mind reads
    the intent, looks at what the instance already has, and decides how to
    decompose it into **commands** (verbs that emit events) and **projections**
    (HTML views over events).
@@ -40,7 +40,7 @@ mylesson/
 
 ## The contract your capabilities must honor
 
-The brain writes the scripts, but they must fit the kernel's pipe contract, so
+The mind writes the scripts, but they must fit the kernel's pipe contract, so
 describe capabilities that can be built this way:
 
 - **A command** receives its arguments as `argv` and the current log as JSONL on
@@ -70,12 +70,12 @@ cover:
 - **Purpose** — what this is for, in a sentence or two.
 - **Surface** — the exact public names: which commands, which projections, which
   event names, and what arguments each command takes. Fix the names you care
-  about; leave the brain free on everything else.
+  about; leave the mind free on everything else.
 - **Constraints / mechanics** — anything the implementation must get right for
   the idea to work (field names, ordering, how views consume which events).
 - **Anti-goals** — what it must *not* do. These are as useful as the goals.
 - **What good looks like** — a short end-to-end walkthrough. If you can describe
-  the demo, the brain can build toward it.
+  the demo, the mind can build toward it.
 
 Two rules of thumb:
 

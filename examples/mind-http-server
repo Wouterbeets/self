@@ -1,57 +1,57 @@
 #!/usr/bin/env python3
-"""brain-http-server — a dedicated, minimal brain for self: one HTTP endpoint
+"""mind-http-server — a dedicated, minimal mind for self: one HTTP endpoint
 (POST /run) in front of a local OpenAI-compatible model, with a small tool
 loop so the model can explore SELF_HOME itself. Python standard library only.
 The weights live behind whatever OpenAI-compatible server you already run —
 llama.cpp's llama-server, Ollama, vLLM — e.g. Qwen3 30B/32B on one RTX 4090.
 
-    self ── SELF_BRAIN=examples/brain-http ──▶ POST /run ──▶ this server
+    self ── SELF_MIND=examples/mind-http ──▶ POST /run ──▶ this server
                                                   │  tool loop: bash, run
                                                   ▼
                                 /v1/chat/completions on your GPU
 
-Point the model server at the GPU, this brain at the model, self at the shim:
+Point the model server at the GPU, this mind at the model, self at the shim:
 
     # 1. the model (pick one)
     llama-server -m Qwen3-30B-A3B-Q4_K_M.gguf --jinja -ngl 99 -c 32768 --port 8080
     #   (--jinja is required for tool calls with Qwen templates)
     # or: ollama pull qwen3:32b
-    #   → BRAIN_MODEL_URL=http://127.0.0.1:11434/v1 BRAIN_MODEL=qwen3:32b
+    #   → MIND_MODEL_URL=http://127.0.0.1:11434/v1 MIND_MODEL=qwen3:32b
     # or: vllm serve Qwen/Qwen3-32B-AWQ --enable-auto-tool-choice --tool-call-parser hermes
-    #   → BRAIN_MODEL_URL=http://127.0.0.1:8000/v1 BRAIN_MODEL=Qwen/Qwen3-32B-AWQ
+    #   → MIND_MODEL_URL=http://127.0.0.1:8000/v1 MIND_MODEL=Qwen/Qwen3-32B-AWQ
 
-    # 2. this brain
-    ./examples/brain-http-server &
+    # 2. this mind
+    ./examples/mind-http-server &
 
     # 3. self
-    export SELF_BRAIN="$PWD/examples/brain-http"
+    export SELF_MIND="$PWD/examples/mind-http"
     self learn lessons/journal
 
 Environment:
-    BRAIN_BIND          bind address           (default 127.0.0.1:8484)
-    BRAIN_MODEL_URL     OpenAI-compatible base (default http://127.0.0.1:8080/v1)
-    BRAIN_MODEL         model name to request  (default "qwen3"; llama-server
+    MIND_BIND          bind address           (default 127.0.0.1:8484)
+    MIND_MODEL_URL     OpenAI-compatible base (default http://127.0.0.1:8080/v1)
+    MIND_MODEL         model name to request  (default "qwen3"; llama-server
                         serves one model and ignores the name)
-    BRAIN_API_KEY       bearer token, if the model server wants one
-    BRAIN_MAX_TURNS     tool-loop budget per ask        (default 32)
-    BRAIN_BASH_TIMEOUT  seconds per bash call           (default 120)
-    BRAIN_SELF_URL      the serving self instance, for the run tool
+    MIND_API_KEY       bearer token, if the model server wants one
+    MIND_MAX_TURNS     tool-loop budget per ask        (default 32)
+    MIND_BASH_TIMEOUT  seconds per bash call           (default 120)
+    MIND_SELF_URL      the serving self instance, for the run tool
                         (default http://127.0.0.1:7777; empty disables run)
 
 Why a server rather than an adapter that dials the model per ask: the loop,
 the budget, and the log of every tool call live in one warm process you can
 watch (one line per ask and per tool call on stderr), while the seam self
 sees stays a dumb pipe — this is the smallest thing that satisfies the
-contract's real demand, a brain that inspects SELF_HOME with its own tools,
+contract's real demand, a mind that inspects SELF_HOME with its own tools,
 without adopting a whole coding agent.
 
 Contract note: the one blessed way to persist state is PRINTING events — the
-kernel signs and appends what the brain's final answer carries. bash here is
+kernel signs and appends what the mind's final answer carries. bash here is
 for exploring and testing (read site/*.html, events.jsonl, capabilities/;
 execute a draft script before answering a compile). run fires an installed
 capability through the instance's /run/<command> route — a real write,
 appended by the serving process — for asks that are actions to perform now
-rather than text to author. A brain should never do both for the same fact,
+rather than text to author. A mind should never do both for the same fact,
 or the log records it twice.
 """
 
@@ -70,13 +70,13 @@ def env(name, default):
     return os.environ.get(name, "").strip() or default
 
 
-BIND = env("BRAIN_BIND", "127.0.0.1:8484")
-MODEL_URL = env("BRAIN_MODEL_URL", "http://127.0.0.1:8080/v1").rstrip("/")
-MODEL = env("BRAIN_MODEL", "qwen3")
-API_KEY = env("BRAIN_API_KEY", "")
-MAX_TURNS = int(env("BRAIN_MAX_TURNS", "32"))
-BASH_TIMEOUT = int(env("BRAIN_BASH_TIMEOUT", "120"))
-SELF_URL = os.environ.get("BRAIN_SELF_URL", "http://127.0.0.1:7777").strip().rstrip("/")
+BIND = env("MIND_BIND", "127.0.0.1:8484")
+MODEL_URL = env("MIND_MODEL_URL", "http://127.0.0.1:8080/v1").rstrip("/")
+MODEL = env("MIND_MODEL", "qwen3")
+API_KEY = env("MIND_API_KEY", "")
+MAX_TURNS = int(env("MIND_MAX_TURNS", "32"))
+BASH_TIMEOUT = int(env("MIND_BASH_TIMEOUT", "120"))
+SELF_URL = os.environ.get("MIND_SELF_URL", "http://127.0.0.1:7777").strip().rstrip("/")
 OUTPUT_CAP = 12000  # chars of tool output fed back per call
 
 
@@ -197,7 +197,7 @@ def strip_thinking(text):
     return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
 
 
-SYSTEM = """You are the brain of a `self` instance — a local runtime whose only \
+SYSTEM = """You are the mind of a `self` instance — a local runtime whose only \
 authoritative state is an append-only event log. SELF_HOME is %s; the ask kind \
 is %s. The ask and its protocol arrive in the user message; honor its \
 instructions exactly.
@@ -244,7 +244,7 @@ def answer(ask, prompt, brief, home):
                 result = "error: unknown tool %r" % name
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                              "content": result})
-    return "brain: tool budget exhausted (%d turns) without a final answer" % MAX_TURNS
+    return "mind: tool budget exhausted (%d turns) without a final answer" % MAX_TURNS
 
 
 # ─────────────────────────────── the server ─────────────────────────────────
@@ -259,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        self.reply(200, "brain-http-server: POST /run with {ask, prompt, brief, home}\n"
+        self.reply(200, "mind-http-server: POST /run with {ask, prompt, brief, home}\n"
                         "model %s at %s\n" % (MODEL, MODEL_URL))
 
     def do_POST(self):
@@ -276,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
         home = req.get("home") or ""
         if not os.path.isdir(home):
             return self.reply(400, "home %r is not a directory this server can see — "
-                                   "run the brain server beside the instance" % home)
+                                   "run the mind server beside the instance" % home)
         log("ask %s (home %s, prompt %d chars)" % (ask, home, len(prompt)))
         try:
             text = answer(ask, prompt, brief, home)
@@ -293,7 +293,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     host, _, port = BIND.partition(":")
     srv = ThreadingHTTPServer((host, int(port or "8484")), Handler)
-    log("brain-http-server: POST /run at http://%s (model %s at %s, self at %s)"
+    log("mind-http-server: POST /run at http://%s (model %s at %s, self at %s)"
         % (BIND, MODEL, MODEL_URL, SELF_URL or "(run tool disabled)"))
     srv.serve_forever()
 
