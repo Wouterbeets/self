@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""brain-http-server — a dedicated, minimal brain for self: one HTTP endpoint
+(POST /run) in front of a local OpenAI-compatible model, with a small tool
+loop so the model can explore SELF_HOME itself. Python standard library only.
+The weights live behind whatever OpenAI-compatible server you already run —
+llama.cpp's llama-server, Ollama, vLLM — e.g. Qwen3 30B/32B on one RTX 4090.
+
+    self ── SELF_BRAIN=examples/brain-http ──▶ POST /run ──▶ this server
+                                                  │  tool loop: bash, run
+                                                  ▼
+                                /v1/chat/completions on your GPU
+
+Point the model server at the GPU, this brain at the model, self at the shim:
+
+    # 1. the model (pick one)
+    llama-server -m Qwen3-30B-A3B-Q4_K_M.gguf --jinja -ngl 99 -c 32768 --port 8080
+    #   (--jinja is required for tool calls with Qwen templates)
+    # or: ollama pull qwen3:32b
+    #   → BRAIN_MODEL_URL=http://127.0.0.1:11434/v1 BRAIN_MODEL=qwen3:32b
+    # or: vllm serve Qwen/Qwen3-32B-AWQ --enable-auto-tool-choice --tool-call-parser hermes
+    #   → BRAIN_MODEL_URL=http://127.0.0.1:8000/v1 BRAIN_MODEL=Qwen/Qwen3-32B-AWQ
+
+    # 2. this brain
+    ./examples/brain-http-server &
+
+    # 3. self
+    export SELF_BRAIN="$PWD/examples/brain-http"
+    self learn lessons/journal
+
+Environment:
+    BRAIN_BIND          bind address           (default 127.0.0.1:8484)
+    BRAIN_MODEL_URL     OpenAI-compatible base (default http://127.0.0.1:8080/v1)
+    BRAIN_MODEL         model name to request  (default "qwen3"; llama-server
+                        serves one model and ignores the name)
+    BRAIN_API_KEY       bearer token, if the model server wants one
+    BRAIN_MAX_TURNS     tool-loop budget per ask        (default 32)
+    BRAIN_BASH_TIMEOUT  seconds per bash call           (default 120)
+    BRAIN_SELF_URL      the serving self instance, for the run tool
+                        (default http://127.0.0.1:7777; empty disables run)
+
+Why a server rather than an adapter that dials the model per ask: the loop,
+the budget, and the log of every tool call live in one warm process you can
+watch (one line per ask and per tool call on stderr), while the seam self
+sees stays a dumb pipe — this is the smallest thing that satisfies the
+contract's real demand, a brain that inspects SELF_HOME with its own tools,
+without adopting a whole coding agent.
+
+Contract note: the one blessed way to persist state is PRINTING events — the
+kernel signs and appends what the brain's final answer carries. bash here is
+for exploring and testing (read site/*.html, events.jsonl, capabilities/;
+execute a draft script before answering a compile). run fires an installed
+capability through the instance's /run/<command> route — a real write,
+appended by the serving process — for asks that are actions to perform now
+rather than text to author. A brain should never do both for the same fact,
+or the log records it twice.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def env(name, default):
+    return os.environ.get(name, "").strip() or default
+
+
+BIND = env("BRAIN_BIND", "127.0.0.1:8484")
+MODEL_URL = env("BRAIN_MODEL_URL", "http://127.0.0.1:8080/v1").rstrip("/")
+MODEL = env("BRAIN_MODEL", "qwen3")
+API_KEY = env("BRAIN_API_KEY", "")
+MAX_TURNS = int(env("BRAIN_MAX_TURNS", "32"))
+BASH_TIMEOUT = int(env("BRAIN_BASH_TIMEOUT", "120"))
+SELF_URL = os.environ.get("BRAIN_SELF_URL", "http://127.0.0.1:7777").strip().rstrip("/")
+OUTPUT_CAP = 12000  # chars of tool output fed back per call
+
+
+def log(msg):
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
+
+
+# ─────────────────────────────── the tools ──────────────────────────────────
+
+def tool_specs():
+    specs = [{
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": (
+                "Run a bash command with SELF_HOME as the working directory. "
+                "Use it to explore the instance (site/*.html, events.jsonl, "
+                "capabilities/) and to test scripts you author by executing "
+                "them. stdout and stderr come back as text."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string", "description": "the command to run"}},
+                "required": ["command"],
+            },
+        },
+    }]
+    if SELF_URL:
+        specs.append({
+            "type": "function",
+            "function": {
+                "name": "run",
+                "description": (
+                    "Run an installed capability through the serving self "
+                    "instance's /run/<command> route. This appends real events "
+                    "to the log. Use it only when the ask is an action to "
+                    "perform now — never to persist what your final answer "
+                    "should print as an event line."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "the capability name"},
+                        "args": {"type": "array", "items": {"type": "string"},
+                                 "description": "positional arguments, in order"},
+                    },
+                    "required": ["command"],
+                },
+            },
+        })
+    return specs
+
+
+def clip(s):
+    if len(s) <= OUTPUT_CAP:
+        return s
+    half = OUTPUT_CAP // 2
+    return s[:half] + "\n… (%d chars clipped) …\n" % (len(s) - OUTPUT_CAP) + s[-half:]
+
+
+def tool_bash(home, args):
+    cmd = args.get("command", "")
+    if not cmd.strip():
+        return "error: bash needs a command"
+    try:
+        p = subprocess.run(["bash", "-c", cmd], cwd=home, timeout=BASH_TIMEOUT,
+                           capture_output=True, text=True,
+                           env=dict(os.environ, SELF_HOME=home))
+    except subprocess.TimeoutExpired:
+        return "error: command timed out after %ds" % BASH_TIMEOUT
+    out = p.stdout
+    if p.stderr:
+        out += ("\n" if out else "") + "[stderr]\n" + p.stderr
+    if not out:
+        out = "(no output)"
+    if p.returncode != 0:
+        out = "exit %d\n%s" % (p.returncode, out)
+    return clip(out)
+
+
+def tool_run(home, args):
+    name = (args.get("command") or "").strip()
+    if not name:
+        return "error: run needs a capability name"
+    # /run/<command> turns form values into positional args in document
+    # order; the field names are for humans, so a0..aN keeps the order honest.
+    argv = [str(a) for a in (args.get("args") or [])]
+    body = urllib.parse.urlencode([("a%d" % i, a) for i, a in enumerate(argv)]).encode()
+    req = urllib.request.Request(SELF_URL + "/run/" + urllib.parse.quote(name), data=body,
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return "HTTP %d: %s" % (resp.status, clip(resp.read().decode(errors="replace")))
+    except urllib.error.HTTPError as e:
+        return "HTTP %d: %s" % (e.code, clip(e.read().decode(errors="replace")))
+    except OSError as e:
+        return "error: self unreachable at %s (%s) — is `self` serving?" % (SELF_URL, e)
+
+
+# ─────────────────────────────── the model ──────────────────────────────────
+
+def complete(messages):
+    body = {"model": MODEL, "messages": messages, "tools": tool_specs()}
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["Authorization"] = "Bearer " + API_KEY
+    req = urllib.request.Request(MODEL_URL + "/chat/completions",
+                                 data=json.dumps(body).encode(), headers=headers)
+    with urllib.request.urlopen(req, timeout=600) as resp:
+        data = json.load(resp)
+    return data["choices"][0]["message"]
+
+
+def strip_thinking(text):
+    # Qwen in thinking mode may inline <think>…</think>; that is scratchpad,
+    # not answer, and must never reach the kernel's pipe.
+    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
+
+
+SYSTEM = """You are the brain of a `self` instance — a local runtime whose only \
+authoritative state is an append-only event log. SELF_HOME is %s; the ask kind \
+is %s. The ask and its protocol arrive in the user message; honor its \
+instructions exactly.
+
+Explore BEFORE answering: with bash, read site/*.html for the rendered state, \
+events.jsonl for the raw log, capabilities/ for the installed scripts. Test any \
+script you author by executing it. Never edit events.jsonl, install anything, \
+or invoke the self CLI: the kernel appends and signs only what your final \
+answer carries.
+
+Your FINAL message — the first with no tool calls — is your entire answer and \
+goes verbatim onto the kernel's pipe: each JSON line becomes an event, prose \
+lines become the reply text. No markdown fences around event lines. You are \
+never re-asked; do not end on a plan or a promise."""
+
+
+def answer(ask, prompt, brief, home):
+    user = prompt
+    if brief.strip():
+        user += "\n\n--- ORIENTATION BRIEF (your stdin) ---\n" + brief
+    messages = [{"role": "system", "content": SYSTEM % (home, ask)},
+                {"role": "user", "content": user}]
+    for _ in range(MAX_TURNS):
+        msg = complete(messages)
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            return strip_thinking(msg.get("content") or "")
+        messages.append({"role": "assistant",
+                         "content": strip_thinking(msg.get("content") or ""),
+                         "tool_calls": calls})
+        for call in calls:
+            fn = call.get("function") or {}
+            name = fn.get("name", "")
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except ValueError:
+                args = {}
+            log("  tool %s: %s" % (name, json.dumps(args)[:200]))
+            if name == "bash":
+                result = tool_bash(home, args)
+            elif name == "run" and SELF_URL:
+                result = tool_run(home, args)
+            else:
+                result = "error: unknown tool %r" % name
+            messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
+                             "content": result})
+    return "brain: tool budget exhausted (%d turns) without a final answer" % MAX_TURNS
+
+
+# ─────────────────────────────── the server ─────────────────────────────────
+
+class Handler(BaseHTTPRequestHandler):
+    def reply(self, code, text):
+        body = text.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        self.reply(200, "brain-http-server: POST /run with {ask, prompt, brief, home}\n"
+                        "model %s at %s\n" % (MODEL, MODEL_URL))
+
+    def do_POST(self):
+        if self.path.rstrip("/") != "/run":
+            return self.reply(404, "not found — the one endpoint is POST /run")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            req = json.loads(self.rfile.read(length))
+        except ValueError:
+            return self.reply(400, "body must be JSON: {ask, prompt, brief, home}")
+        ask = req.get("ask") or "think"
+        prompt = req.get("prompt") or ""
+        brief = req.get("brief") or ""
+        home = req.get("home") or ""
+        if not os.path.isdir(home):
+            return self.reply(400, "home %r is not a directory this server can see — "
+                                   "run the brain server beside the instance" % home)
+        log("ask %s (home %s, prompt %d chars)" % (ask, home, len(prompt)))
+        try:
+            text = answer(ask, prompt, brief, home)
+        except urllib.error.HTTPError as e:
+            return self.reply(502, "model server error %d: %s" % (e.code, e.read().decode(errors="replace")))
+        except OSError as e:
+            return self.reply(502, "model server unreachable at %s: %s" % (MODEL_URL, e))
+        self.reply(200, text)
+
+    def log_message(self, *args):  # our own stderr lines carry the story
+        pass
+
+
+def main():
+    host, _, port = BIND.partition(":")
+    srv = ThreadingHTTPServer((host, int(port or "8484")), Handler)
+    log("brain-http-server: POST /run at http://%s (model %s at %s, self at %s)"
+        % (BIND, MODEL, MODEL_URL, SELF_URL or "(run tool disabled)"))
+    srv.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

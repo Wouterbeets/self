@@ -44,6 +44,42 @@ export SELF_BRAIN="$PWD/examples/brain-stub"
 ./demo.sh          # or: go test ./...
 ```
 
+## `brain-http` + `brain-http-server` — a local model as the mind
+
+A two-piece brain for running a local model (e.g. Qwen3 30B/32B on one RTX
+4090) as the mind, without adopting a whole coding agent. This is the truer
+test of the contract: a bare model, a bash tool, and the instance's rendered
+state — nothing else.
+
+- **`brain-http-server`** is the dedicated, long-running piece: one endpoint
+  (`POST /run`) in front of any OpenAI-compatible model server (llama.cpp's
+  `llama-server`, Ollama, vLLM), running the tool loop. The model gets two
+  tools: `bash`, to explore and test inside `SELF_HOME` (this is what makes
+  it a *complete* brain per the contract), and `run`, to fire an installed
+  capability through the serving instance's `/run/<command>` route when an
+  ask is an action rather than authorship. Python standard library only.
+- **`brain-http`** is the shim `SELF_BRAIN` points at: self spawns it per
+  ask, it POSTs `{ask, prompt, brief, home}` to the server and prints the
+  body back onto the kernel's pipe. The seam self sees stays a dumb pipe.
+
+```sh
+# the model, on the GPU (--jinja enables tool calls with Qwen templates)
+llama-server -m Qwen3-30B-A3B-Q4_K_M.gguf --jinja -ngl 99 -c 32768 --port 8080
+
+# the brain, beside the instance (it must see SELF_HOME on its filesystem)
+./examples/brain-http-server &
+
+# self
+export SELF_BRAIN="$PWD/examples/brain-http"
+self learn lessons/journal
+```
+
+Every ask and every tool call logs one line on the brain server's stderr, so
+you can watch a cold model orient from the brief, read `site/*.html` and
+`events.jsonl` with bash, test its draft script, and answer. See the header
+of `brain-http-server` for the environment knobs (`BRAIN_MODEL_URL`,
+`BRAIN_MODEL`, `BRAIN_MAX_TURNS`, …) and Ollama/vLLM variants.
+
 ## `brain-opencode`
 
 A working tool-capable brain that delegates to `opencode run`, which can
