@@ -16,14 +16,14 @@ import (
 //	account/
 //	  intent.md      the telling: who this is from, what it means, what
 //	                 might grow from it — read by the human first, the
-//	                 brain second (required)
+//	                 mind second (required)
 //	  record.jsonl   the evidence: events verbatim, moments preserved
 //	                 (optional; intent alone is a bare lesson)
 //	  manifest.json  the attestation: event count + sha256 of the record,
 //	                 so the receiver can see whether what arrived is what
 //	                 was given (optional)
 //
-// Nothing runnable ever rides in an account. The receiver's own brain reads
+// Nothing runnable ever rides in an account. The receiver's own mind reads
 // the intent against the receiver's own state and declares its own
 // capabilities; only the local kernel's signature installs anything. Giving
 // is cheap; learning is the work — that asymmetry is the protocol.
@@ -172,7 +172,7 @@ func cmdGive(home, selector, dir string) error {
 		return err
 	}
 	// The intent stub is written once and never clobbered: editing it is the
-	// giver's moment of curation, and the receiver's brain reads it to decide
+	// giver's moment of curation, and the receiver's mind reads it to decide
 	// how this record should live there.
 	intentPath := filepath.Join(dir, "intent.md")
 	if !fileExists(intentPath) {

@@ -53,63 +53,63 @@ usage: self [command] [args]
 
   self                 rehydrate the instance from the log, then serve it (the default)
   self learn <account> learn an account's intent into capabilities and plant its
-                       record, moments preserved (needs a brain)
+                       record, moments preserved (needs a mind)
   self give <sel> <dir>
                        write an account from the log — <sel> is an event-name
                        prefix ("note.") or command/<name> | projector/<name>;
                        intent + record + manifest land in <dir> for you to
                        curate before passing on
   self run <cmd> ...   run a capability — append events, refresh projections
-  self think "..."     ask the brain; returns {response, events} JSON
-  self reflect         one self-improvement cycle (the brain reflects & grows)
+  self think "..."     ask the mind; returns {response, events} JSON
+  self reflect         one self-improvement cycle (the mind reflects & grows)
   self show <name>     render a projection to stdout
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
   self revise <target> <request>
                        edit an installed local capability with its current script as context
   self retire <target> retire a capability — its script and page leave the
                        surface; the log keeps every event, re-declaring revives
-  self protocol        print the brain + capability wire protocol
+  self protocol        print the mind + capability wire protocol
 
 environment:
   SELF_HOME         the instance — a dir holding events.jsonl and .secret
                     (default: current working directory; set it in your shell rc
                     to pin a shared instance, e.g. export SELF_HOME=~/.self)
 
-  plug a brain (one seam; think, reflect, learn, and compile all pass through it):
-  SELF_BRAIN        a tool-capable executable, e.g. "claude -p" or
-                    examples/brain-opencode — it gets the ask's kind in
+  plug a mind (one seam; think, reflect, learn, and compile all pass through it):
+  SELF_MIND        a tool-capable executable, e.g. "claude -p" or
+                    examples/mind-opencode — it gets the ask's kind in
                     $SELF_ASK, the prompt as its last argument, and an
                     orientation brief on stdin; it answers in event JSONL,
-                    prose tolerated. The brain must inspect SELF_HOME itself
+                    prose tolerated. The mind must inspect SELF_HOME itself
                     (site/*.html, events.jsonl, capabilities/) with its own
-                    tools. See examples/README.md. examples/brain-stub is a
-                    deterministic offline brain for demos/tests.
-  SELF_BRAIN_ID     provenance by-line signed into script.compiled receipts
-                    (default: the brain executable)
+                    tools. See examples/README.md. examples/mind-stub is a
+                    deterministic offline mind for demos/tests.
+  SELF_MIND_ID     provenance by-line signed into script.compiled receipts
+                    (default: the mind executable)
 `
 }
 
 func protocolText() string {
 	return `self protocol — the wire contracts
 
-Brain process contract
+Mind process contract
 
   The same seam handles think, reflect, learn, and compile.
 
-  SELF_BRAIN   executable to spawn, optionally with args. A brain MUST be able to
+  SELF_MIND   executable to spawn, optionally with args. A mind MUST be able to
               inspect files under SELF_HOME (site/*.html, events.jsonl,
               capabilities/) with its own tools — a plain stdin/stdout adapter
-              with no file access cannot do the job. Coding-agent brains
+              with no file access cannot do the job. Coding-agent minds
               (opencode run, claude -p) already have such tools.
   SELF_ASK     request kind: think | reflect | learn | compile
   argv         the prompt is passed as the last argument
-  stdin        an orientation brief (plain text): where the brain is, what
-               capabilities exist, and where to look for the rest. The brain is
+  stdin        an orientation brief (plain text): where the mind is, what
+               capabilities exist, and where to look for the rest. The mind is
                expected to explore SELF_HOME itself for depth — this is a
                wake-up card, not a context dump.
   stdout       event JSONL; non-JSON lines are tolerated as prose reply text
 
-Brain reply events
+Mind reply events
 
   chat.message        prose reply for think:
                       {"name":"chat.message","payload":{"role":"assistant","content":"..."}}
@@ -152,10 +152,10 @@ Accounts (give / learn)
 
   self give writes one from the log (an event-name prefix selects a record;
   command/<name> selects a capability's declarations and receipts). self learn
-  reads one: the receiver's brain reads the intent — and the record, with its
+  reads one: the receiver's mind reads the intent — and the record, with its
   own tools — against local state and declares its own capabilities; the
   record then lands verbatim with its own occurred_at, never routed through
-  the brain. The kernel's own vocabulary (command.declared, script.compiled,
+  the mind. The kernel's own vocabulary (command.declared, script.compiled,
   capability.retired, …) never travels raw: give renames such events to
   lineage.<name> and learn refuses them otherwise — a foreign account carries
   history as evidence but cannot speak in the receiving kernel's voice, so a
@@ -166,26 +166,26 @@ Accounts (give / learn)
 
 Declarations — not code — are what cross every boundary. A generated script
 installs only after the local kernel signs a script.compiled receipt with
-SELF_HOME/.secret and the current SELF_BRAIN_ID.
+SELF_HOME/.secret and the current SELF_MIND_ID.
 `
 }
 
 func commandHelp(cmd string) (string, bool) {
 	switch cmd {
 	case "learn":
-		return "usage: self learn <account-dir>\n\nRead <account-dir>/intent.md, ask the brain to declare capabilities fitted to this instance, compile them under signed receipts, then plant the account's record.jsonl verbatim (moments preserved). The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
+		return "usage: self learn <account-dir>\n\nRead <account-dir>/intent.md, ask the mind to declare capabilities fitted to this instance, compile them under signed receipts, then plant the account's record.jsonl verbatim (moments preserved). The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
 	case "give":
 		return "usage: self give <event-prefix> <dir>\n       self give command/<name> <dir>\n       self give projector/<name> <dir>\n\nWrite an account from this log: the selected events verbatim in record.jsonl, a manifest with their count and sha256, and an intent.md stub to edit — who you are, what this means, what you hope it becomes. Kernel-vocabulary events are renamed lineage.* so they arrive as evidence, never as installables. The giving is remembered as an account.given event.\n", true
 	case "run":
 		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then the projections consuming them re-render.\n", true
 	case "think":
-		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the brain through the SELF_BRAIN protocol. Prints {response, events} JSON and appends nothing.\n", true
+		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the mind through the SELF_MIND protocol. Prints {response, events} JSON and appends nothing.\n", true
 	case "reflect":
-		return "usage: self reflect\n\nAppend a self.reflected event, ask the brain for one small improvement, and compile any declarations it emits.\n", true
+		return "usage: self reflect\n\nAppend a self.reflected event, ask the mind for one small improvement, and compile any declarations it emits.\n", true
 	case "show":
 		return "usage: self show <projection>\n\nRender a projection to stdout by replaying the current log. Use 'kernel' for the instance index.\n", true
 	case "rehydrate":
-		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a brain.\n", true
+		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a mind.\n", true
 	case "revise":
 		return "usage: self revise command/<name> <change request>\n       self revise projector/<name> <change request>\n\nRecord a local revision request, then recompile the installed capability with its latest declaration and verified script as context.\n", true
 	case "retire":

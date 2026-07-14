@@ -27,7 +27,7 @@ first; first impressions are its spec.
   not a mandatory footer. Do not invent a growth announcement for ordinary
   events like notes, tasks, memories, or verses.
 - Degrade honestly: if `self think` fails, emit an assistant `chat.message`
-  that says a brain is unreachable and how to plug one (`SELF_BRAIN`,
+  that says a mind is unreachable and how to plug one (`SELF_MIND`,
   `SELF_LLM_URL`) — inside the conversation, not as a stack trace. The user's
   message is already in the log; say so.
 
@@ -38,7 +38,7 @@ first; first impressions are its spec.
   `who` label, and a single-input form at the bottom POSTing to `/run/chat`.
   An empty log renders the form and nothing broken. The page must be complete
   and legible completely bare: the kernel's serve-time shell supplies the
-  bubbles, the pending state while the brain thinks, and the live re-render
+  bubbles, the pending state while the mind thinks, and the live re-render
   when the log grows — none of that is the projector's job, and none of it
   may be assumed.
 - `welcome` — the kernel promotes a projector named `welcome` to the front
@@ -47,7 +47,7 @@ first; first impressions are its spec.
 - `/identity` shows the current `self.identity` text in full, with a form to
   append a new one via the `identity` command. Identity is data, never
   kernel: the lesson plants the first one; appending replaces it from then on.
-- `compact` folds older turns: it asks the brain for a summary and emits one
+- `compact` folds older turns: it asks the mind for a summary and emits one
   `chat.compacted` event `{summary, through_seq}`. From then on the chat
   script sends the summary (inside the system turn) plus only the turns after
   `through_seq`. Folding is a view change, never deletion — every raw turn
@@ -64,10 +64,10 @@ first; first impressions are its spec.
 
 ## anti-goals
 
-- Never hand the brain rendered HTML as context. Hand it real turns.
+- Never hand the mind rendered HTML as context. Hand it real turns.
 - Never delete or rewrite history to save space. Summarize as an overlay.
 - Never bake the conversational identity into a script. It is data.
-- Never a dead send: if the brain is unreachable, the conversation itself
+- Never a dead send: if the mind is unreachable, the conversation itself
   says so and says how to fix it.
 
 ## what good looks like (the demo, end to end)

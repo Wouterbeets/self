@@ -13,5 +13,5 @@
 events.jsonl
 .self/
 
-# python bytecode (brain adapters are scripts)
+# python bytecode (mind adapters are scripts)
 __pycache__/

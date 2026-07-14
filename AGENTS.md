@@ -4,8 +4,8 @@ Copy the section below into the agent instructions (`CLAUDE.md`, `AGENTS.md`,
 or system prompt) of any project whose sessions should use a self instance as
 shared persistent state. It assumes `self` is on PATH; by default the current
 working directory is the instance, or `SELF_HOME` can pin a shared one. To
-also use the agent as the instance's brain (compiler included), see "The
-brain" in the README.
+also use the agent as the instance's mind (compiler included), see "The
+mind" in the README.
 
 ---
 
@@ -20,7 +20,7 @@ ends.
 
 ```sh
 cat "$SELF_HOME/site/brief.md"      # where you are, what exists, where to look
-export SELF_BRAIN_ID="<who you are>"
+export SELF_MIND_ID="<who you are>"
 ```
 
 The brief is a wake-up card. For depth, read `site/*.html` (the rendered
@@ -36,7 +36,7 @@ installed scripts, one directory per capability with the script at
   command and projection this instance has.
 - **Write.** `self run <command> [args…]` appends events and re-renders all
   projections. The log is append-only; no operation is destructive. Events
-  you cause carry your `SELF_BRAIN_ID` as author where commands record one.
+  you cause carry your `SELF_MIND_ID` as author where commands record one.
 - **Persist.** State lives only in events. Route anything that must survive
   the session through the instance's commands. Where a `remember` command
   exists, use it for durable facts — one self-contained fact per call,
@@ -49,10 +49,10 @@ installed scripts, one directory per capability with the script at
   is report-only: it returns `{response, declarations}` without ingesting —
   a query, not a mutation. Declining to extend is a valid outcome.
 
-**If you are also the brain** (the kernel spawns you for compiles): your
+**If you are also the mind** (the kernel spawns you for compiles): your
 stdout is the only channel and your reply is final — you are never
 re-invoked. Explore first, then answer completely; never end on a plan.
-One caveat for Claude Code brains: the instance directory must be trusted
+One caveat for Claude Code minds: the instance directory must be trusted
 once (`cd $SELF_HOME && claude`, accept the prompt) or the permission
 grants in `$SELF_HOME/.claude/settings.json` — the test bench that lets
 compiles actually run their scripts — are silently ignored.
@@ -70,7 +70,7 @@ nobody will re-read.
 
 ---
 
-*Design note: the runtime does not distinguish an internal brain from an
+*Design note: the runtime does not distinguish an internal mind from an
 external agent — both act through the same three primitives (commands,
 events, projections), read the same replayed state, and leave receipts
 signed by the instance carrying their author string.*

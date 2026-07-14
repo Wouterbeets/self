@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""brain-opencode - a SELF_BRAIN adapter backed by `opencode run`.
+"""mind-opencode - a SELF_MIND adapter backed by `opencode run`.
 
-The self kernel expects a brain process to print self event JSONL (or prose).
+The self kernel expects a mind process to print self event JSONL (or prose).
 OpenCode's `--format json` prints its own event stream instead. This adapter
 extracts the assistant text from that stream and passes it through unchanged;
 the kernel prompt remains the single source of protocol instructions.
 
 Usage:
 
-    export SELF_BRAIN="$PWD/examples/brain-opencode"
+    export SELF_MIND="$PWD/examples/mind-opencode"
     export SELF_OPENCODE_MODEL=github-copilot/gpt-5.5  # optional
     self learn lessons/chat
 """
