@@ -113,6 +113,9 @@ func cmdLearn(home, ref string) error {
 	if err != nil {
 		return fmt.Errorf("learn %q: %w (learning needs a mind — %s)", name, err, mindHint)
 	}
+	if err := appendRouted(home, "learn", res.Mind); err != nil {
+		return err
+	}
 	c := newLLM(home)
 	c.intent = intent
 
@@ -196,7 +199,24 @@ func learnPrompt(ref, intent string, deposit []Event) string {
 		}
 		prompt += fmt.Sprintf("\n\nThe account carries a record of %d event(s) that will be planted in the log, verbatim, right after you answer: read %s to ground your declarations in the evidence (lineage.* events are another instance's history — reference material, never yours to re-emit).", len(deposit), filepath.Join(ref, "record.jsonl"))
 	}
-	return prompt + "\n\n" + mindAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
+	return prompt + rosterPrompt() + "\n\n" + mindAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
+}
+
+// rosterPrompt tells an orchestrating mind which named minds this instance
+// routes among, so it can assign each declared capability to the mind fit for
+// it. What each name is GOOD at is deliberately not kernel text — that
+// knowledge belongs in a lesson or a note the orchestrator reads, not here.
+// Empty without a roster, so a single-mind instance's prompts don't change.
+func rosterPrompt() string {
+	names := rosterNames()
+	if len(names) == 0 {
+		return ""
+	}
+	route := "the default mind"
+	if v := strings.TrimSpace(os.Getenv("SELF_MIND_COMPILE")); v != "" {
+		route = v
+	}
+	return fmt.Sprintf("\n\nThis instance routes compiles among named minds: %s (default route: %s). You MAY add \"mind\":\"<name>\" to any command.declared / projector.declared payload to choose which mind compiles that piece; omit it for the default.", strings.Join(names, ", "), route)
 }
 
 func cmdThink(home, prompt string) error {
@@ -211,9 +231,15 @@ func cmdThink(home, prompt string) error {
 	if err != nil {
 		return fmt.Errorf("mind: %w", err)
 	}
+	out := map[string]any{"response": res.Response, "events": res.Events, "declarations": res.Events}
+	// think appends nothing — the routed mind rides the reply instead of the
+	// log, and only when a roster makes routing a fact worth reporting.
+	if len(rosterNames()) > 0 {
+		out["mind"] = map[string]string{"name": res.Mind.name, "by": res.Mind.identity()}
+	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(map[string]any{"response": res.Response, "events": res.Events, "declarations": res.Events})
+	return enc.Encode(out)
 }
 
 // thinkPrompt wraps a think ask with the answer contract. A think is
@@ -233,14 +259,29 @@ func cmdReflect(home string) error {
 		return err
 	}
 	prompt := `This is a self-improvement reflection. Explore your instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (emit command.declared / projector.declared); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal.` +
-		"\n\n" + mindAnswerContract + reflectionContext(prior)
+		rosterPrompt() + "\n\n" + mindAnswerContract + reflectionContext(prior)
 	res, err := pipeMind(home, "reflect", prompt)
 	if err != nil {
+		return err
+	}
+	if err := appendRouted(home, "reflect", res.Mind); err != nil {
 		return err
 	}
 	applyEvents(home, res)
 	fmt.Println(res.Response)
 	return nil
+}
+
+// appendRouted records which mind handled an ask — but only when a roster
+// (SELF_MINDS) is declared: a single-mind instance's log stays byte-identical
+// to what it was before minds had names.
+func appendRouted(home, ask string, m mindRef) error {
+	if len(rosterNames()) == 0 {
+		return nil
+	}
+	payload, _ := json.Marshal(map[string]any{"ask": ask, "mind": m.name, "exe": m.exe, "by": m.identity()})
+	e := newEvent("mind.routed", payload)
+	return appendEvent(home, &e)
 }
 
 // reflectionContext hands the mind the events since its last reflection —

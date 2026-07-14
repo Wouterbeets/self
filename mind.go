@@ -31,13 +31,7 @@ type llm struct {
 // carries. SELF_MIND_ID lets an agent name itself; otherwise the mind
 // executable is the honest mechanical answer.
 func (c *llm) identity() string {
-	if id := strings.TrimSpace(os.Getenv("SELF_MIND_ID")); id != "" {
-		return id
-	}
-	if exe := mindExe(); exe != "" {
-		return exe
-	}
-	return "mind"
+	return mindRef{exe: mindExe()}.identity()
 }
 
 func newLLM(home string) *llm {
@@ -65,12 +59,12 @@ WHAT YOU ARE GIVEN — your stdin is an orientation brief: where you are, what c
 
 // ────────────────────────────── the compiler ────────────────────────────────
 
-func (c *llm) compileCommand(d commandDecl) (string, error) {
-	return compileViaMind(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d))
+func (c *llm) compileCommand(d commandDecl) (string, string, error) {
+	return compileViaMind(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d), d.Mind)
 }
 
-func (c *llm) compileProjector(d projectorDecl) (string, error) {
-	return compileViaMind(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d))
+func (c *llm) compileProjector(d projectorDecl) (string, string, error) {
+	return compileViaMind(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d), d.Mind)
 }
 
 // compileViaMind hands a compile ask to the plugged mind through the same
@@ -137,16 +131,37 @@ func exemplarScript(home, typ, name string) (exName, exScript string) {
 	return exName, exScript
 }
 
-func compileViaMind(home, intent, reasoning, typ, name, decl string) (string, error) {
+// compileViaMind routes a compile to a resolved mind and returns the script
+// with the identity of the mind that actually authored it — the receipt's
+// by-line. A declaration's hint sets the starting mind; a mechanical failure
+// (the process erroring, or answering without a script) walks up the
+// SELF_MIND_ESCALATION chain, each hop recorded as a compile.escalated event.
+// The unnamed default never escalates: with no roster declared, a failed
+// compile fails exactly as it always has.
+func compileViaMind(home, intent, reasoning, typ, name, decl, hint string) (string, string, error) {
 	exName, exScript := exemplarScript(home, typ, name)
-	res, err := pipeMind(home, "compile", compilePrompt(intent, reasoning, exName, exScript, typ, name, decl))
-	if err != nil {
-		return "", err
+	prompt := compilePrompt(intent, reasoning, exName, exScript, typ, name, decl)
+	m := resolveMind("compile", hint)
+	for {
+		res, err := pipeMindVia(home, "compile", m, prompt)
+		if err == nil && strings.TrimSpace(res.Script) != "" {
+			return res.Script, m.identity(), nil
+		}
+		if err == nil {
+			err = fmt.Errorf("the mind answered a compile ask without a script.authored event")
+		}
+		next, ok := escalateFrom(m)
+		if !ok {
+			return "", "", err
+		}
+		fmt.Fprintf(os.Stderr, "self: compile %s %q via mind %q failed: %s — escalating to %q\n", typ, name, m.name, err, next.name)
+		payload, _ := json.Marshal(map[string]any{"type": typ, "name": name, "from": m.name, "to": next.name, "reason": err.Error()})
+		e := newEvent("compile.escalated", payload)
+		if aerr := appendEvent(home, &e); aerr != nil {
+			return "", "", aerr
+		}
+		m = next
 	}
-	if strings.TrimSpace(res.Script) == "" {
-		return "", fmt.Errorf("the mind answered a compile ask without a script.authored event")
-	}
-	return res.Script, nil
 }
 
 // ──────────────────────────────── the mind ─────────────────────────────────
@@ -155,6 +170,118 @@ func compileViaMind(home, intent, reasoning, typ, name, decl string) (string, er
 // named, and a process behind it honors the one mind contract.
 func mindExe() string {
 	return strings.TrimSpace(os.Getenv("SELF_MIND"))
+}
+
+// ────────────────────────────── named minds ─────────────────────────────────
+//
+// An instance may plug more than one mind and route among them by NAME. The
+// kernel stays model-free: it dereferences operator-chosen names to processes
+// and nothing more — which model answers to a name, its endpoint, its cost,
+// all live in the adapter's environment, exactly as with a single SELF_MIND.
+//
+//   SELF_MINDS               the roster: space-separated names, e.g. "fast deep top"
+//   SELF_MIND_<NAME>         the executable a roster name dereferences to
+//   SELF_MIND_ID_<NAME>      per-name provenance, signed into that mind's receipts
+//   SELF_MIND_<KIND>         per-ask-kind route (THINK/REFLECT/LEARN/COMPILE):
+//                            a roster name, else taken verbatim as an executable
+//   SELF_MIND_ESCALATION     ordered names, cheap→expensive; a mechanically
+//                            failed compile retries one step up the chain
+//
+// With none of these set, SELF_MIND alone behaves exactly as it always has.
+
+// mindRef is a resolved mind: a roster name (empty for the unnamed default)
+// and the executable behind it.
+type mindRef struct {
+	name string
+	exe  string
+}
+
+// identity names this mind for provenance: SELF_MIND_ID_<NAME> for a roster
+// mind, then SELF_MIND_ID, then the executable — the honest mechanical answer.
+func (m mindRef) identity() string {
+	if m.name != "" {
+		if id := strings.TrimSpace(os.Getenv("SELF_MIND_ID_" + strings.ToUpper(m.name))); id != "" {
+			return id
+		}
+	}
+	if id := strings.TrimSpace(os.Getenv("SELF_MIND_ID")); id != "" {
+		return id
+	}
+	if m.exe != "" {
+		return m.exe
+	}
+	return "mind"
+}
+
+// rosterNames returns the declared roster. The ask kinds and "id" are
+// reserved — a roster name becomes an env-var suffix (SELF_MIND_<NAME>), and
+// those suffixes already mean something to the kernel.
+func rosterNames() []string {
+	reserved := map[string]bool{"think": true, "reflect": true, "learn": true, "compile": true, "id": true}
+	var names []string
+	for _, n := range strings.Fields(os.Getenv("SELF_MINDS")) {
+		if reserved[strings.ToLower(n)] {
+			fmt.Fprintf(os.Stderr, "self: SELF_MINDS name %q is reserved — ignored\n", n)
+			continue
+		}
+		names = append(names, n)
+	}
+	return names
+}
+
+// mindByName dereferences a roster name to its executable. A name outside the
+// roster, or one with no SELF_MIND_<NAME> bound, resolves to nothing.
+func mindByName(name string) (mindRef, bool) {
+	for _, n := range rosterNames() {
+		if n == name {
+			if exe := strings.TrimSpace(os.Getenv("SELF_MIND_" + strings.ToUpper(n))); exe != "" {
+				return mindRef{name: n, exe: exe}, true
+			}
+		}
+	}
+	return mindRef{}, false
+}
+
+// resolveMind picks the mind for an ask: a declaration's hint first (honored
+// only when it names a bound roster mind — a miss is noted and never fatal),
+// then the per-kind route, then the plugged default. An empty result means no
+// mind is plugged in at all, and the ask fails with the usual hint.
+func resolveMind(kind, hint string) mindRef {
+	if hint != "" {
+		if m, ok := mindByName(hint); ok {
+			return m
+		}
+		fmt.Fprintf(os.Stderr, "self: declaration asked for mind %q, which SELF_MINDS does not offer — using the %s route\n", hint, kind)
+	}
+	if v := strings.TrimSpace(os.Getenv("SELF_MIND_" + strings.ToUpper(kind))); v != "" {
+		if m, ok := mindByName(v); ok {
+			return m
+		}
+		return mindRef{exe: v}
+	}
+	return mindRef{exe: mindExe()}
+}
+
+// escalateFrom returns the next bound mind after m in SELF_MIND_ESCALATION.
+// Only a roster-named mind escalates — the unnamed default keeps its
+// fail-fast behavior — and an unbound name in the chain is skipped over.
+func escalateFrom(m mindRef) (mindRef, bool) {
+	if m.name == "" {
+		return mindRef{}, false
+	}
+	chain := strings.Fields(os.Getenv("SELF_MIND_ESCALATION"))
+	for i, n := range chain {
+		if n != m.name {
+			continue
+		}
+		for _, next := range chain[i+1:] {
+			if nm, ok := mindByName(next); ok {
+				return nm, true
+			}
+		}
+		break
+	}
+	return mindRef{}, false
 }
 
 func mindEnv(home, kind string) []string {
@@ -180,7 +307,14 @@ func mindEnv(home, kind string) []string {
 // anything else is a returned event — and bare prose joins the reply. With no
 // mind plugged in, the ask fails with a hint.
 func pipeMind(home, kind, prompt string) (*mindResult, error) {
-	exe := mindExe()
+	return pipeMindVia(home, kind, resolveMind(kind, ""), prompt)
+}
+
+// pipeMindVia is pipeMind with the mind already resolved — the compile
+// escalation loop steps through minds without re-resolving, and the result
+// remembers which mind ran so callers can log the route.
+func pipeMindVia(home, kind string, m mindRef, prompt string) (*mindResult, error) {
+	exe := m.exe
 	if exe == "" {
 		return nil, fmt.Errorf("no mind is plugged in — %s", mindHint)
 	}
@@ -202,7 +336,7 @@ func pipeMind(home, kind, prompt string) (*mindResult, error) {
 		return nil, fmt.Errorf("start mind %s: %w (%s)", filepath.Base(bin), err, mindHint)
 	}
 	feedText(stdin, brief)
-	res := &mindResult{Events: []map[string]any{}}
+	res := &mindResult{Events: []map[string]any{}, Mind: m}
 	var prose []string
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1024*1024), 8*1024*1024)

@@ -1530,3 +1530,279 @@ func TestVocabularySpeaksMind(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// ─────────────────────────────── named minds ────────────────────────────────
+
+// markerMind writes a fake mind whose compile answer carries a marker, so a
+// test can tell which of several plugged minds authored an installed script.
+func markerMind(t *testing.T, marker string) string {
+	t.Helper()
+	mind := filepath.Join(t.TempDir(), "mind")
+	src := `#!/usr/bin/env python3
+import os, sys, json
+sys.stdin.read()
+if os.environ.get("SELF_ASK") == "compile":
+    script = "#!/bin/sh\n# authored-by MARKER\necho '{\"name\":\"pinged\",\"payload\":{}}'\n"
+    print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
+else:
+    print("MARKER speaking")
+`
+	if err := os.WriteFile(mind, []byte(strings.ReplaceAll(src, "MARKER", marker)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return mind
+}
+
+// failingMind writes a fake mind that refuses every ask.
+func failingMind(t *testing.T) string {
+	t.Helper()
+	mind := filepath.Join(t.TempDir(), "mind")
+	if err := os.WriteFile(mind, []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return mind
+}
+
+const pingDecl = `{"name":"ping","description":"answer with a pong","event":{"name":"pinged","fields":{}}}`
+
+// installedBy returns the marker of the mind that authored an installed
+// command, and the by-line of its latest verified receipt.
+func installedBy(t *testing.T, home, name string) (script, by string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, "capabilities", "commands", name, "run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := loadSecret(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.Name != "script.compiled" {
+			continue
+		}
+		if r, ok := verifiedReceipt(secret, e.Payload); ok && r.Name == name {
+			by = r.By
+		}
+	}
+	return string(data), by
+}
+
+// A roster name routed to an ask kind sends that kind to its mind — and the
+// receipt is signed with that mind's own identity, not the default's.
+func TestMindRoutesPerAskKind(t *testing.T) {
+	t.Setenv("SELF_MIND", markerMind(t, "the default mind"))
+	t.Setenv("SELF_MIND_ID", "default identity")
+	t.Setenv("SELF_MINDS", "alt")
+	t.Setenv("SELF_MIND_ALT", markerMind(t, "the alt mind"))
+	t.Setenv("SELF_MIND_ID_ALT", "alt identity")
+	t.Setenv("SELF_MIND_COMPILE", "alt")
+
+	home := t.TempDir()
+	if err := ingest(home, []Event{newEvent("command.declared", json.RawMessage(pingDecl))}); err != nil {
+		t.Fatal(err)
+	}
+	script, by := installedBy(t, home, "ping")
+	if !strings.Contains(script, "the alt mind") {
+		t.Fatalf("compile was not routed to the alt mind:\n%s", script)
+	}
+	if by != "alt identity" {
+		t.Fatalf("receipt by = %q, want the alt mind's own identity", by)
+	}
+}
+
+// A declaration's "mind" hint pins its compile to a roster mind; a hint the
+// roster does not offer falls back to the route and still compiles.
+func TestDeclarationMindHint(t *testing.T) {
+	t.Setenv("SELF_MIND", markerMind(t, "the default mind"))
+	t.Setenv("SELF_MIND_ID", "default identity")
+	t.Setenv("SELF_MINDS", "alt")
+	t.Setenv("SELF_MIND_ALT", markerMind(t, "the alt mind"))
+	t.Setenv("SELF_MIND_COMPILE", "")
+
+	home := t.TempDir()
+	hinted := json.RawMessage(`{"name":"ping","description":"pong","event":{"name":"pinged","fields":{}},"mind":"alt"}`)
+	if err := ingest(home, []Event{newEvent("command.declared", hinted)}); err != nil {
+		t.Fatal(err)
+	}
+	if script, _ := installedBy(t, home, "ping"); !strings.Contains(script, "the alt mind") {
+		t.Fatalf("the declaration's mind hint was not honored:\n%s", script)
+	}
+
+	unknown := json.RawMessage(`{"name":"pong","description":"ping","event":{"name":"ponged","fields":{}},"mind":"nope"}`)
+	if err := ingest(home, []Event{newEvent("command.declared", unknown)}); err != nil {
+		t.Fatal(err)
+	}
+	if script, _ := installedBy(t, home, "pong"); !strings.Contains(script, "the default mind") {
+		t.Fatalf("an unknown hint should fall back to the default mind:\n%s", script)
+	}
+}
+
+// A mechanically failed compile walks up SELF_MIND_ESCALATION: the capability
+// still installs, authored and signed by the mind that succeeded, and the hop
+// is in the log as a compile.escalated event.
+func TestCompileEscalation(t *testing.T) {
+	t.Setenv("SELF_MIND", markerMind(t, "the default mind"))
+	t.Setenv("SELF_MIND_ID", "default identity")
+	t.Setenv("SELF_MINDS", "bad good")
+	t.Setenv("SELF_MIND_BAD", failingMind(t))
+	t.Setenv("SELF_MIND_GOOD", markerMind(t, "the good mind"))
+	t.Setenv("SELF_MIND_ID_GOOD", "good identity")
+	t.Setenv("SELF_MIND_COMPILE", "bad")
+	t.Setenv("SELF_MIND_ESCALATION", "bad good")
+
+	home := t.TempDir()
+	if err := ingest(home, []Event{newEvent("command.declared", json.RawMessage(pingDecl))}); err != nil {
+		t.Fatal(err)
+	}
+	script, by := installedBy(t, home, "ping")
+	if !strings.Contains(script, "the good mind") {
+		t.Fatalf("the escalated compile was not authored by the good mind:\n%s", script)
+	}
+	if by != "good identity" {
+		t.Fatalf("receipt by = %q, want the succeeding mind's identity", by)
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escalations := 0
+	for _, e := range events {
+		if e.Name != "compile.escalated" {
+			continue
+		}
+		escalations++
+		var p struct{ Type, Name, From, To, Reason string }
+		if json.Unmarshal(e.Payload, &p) != nil || p.From != "bad" || p.To != "good" || p.Name != "ping" || p.Reason == "" {
+			t.Fatalf("bad escalation event: %s", e.Payload)
+		}
+	}
+	if escalations != 1 {
+		t.Fatalf("logged %d escalations, want 1", escalations)
+	}
+}
+
+// With no roster, a failing mind fails the compile exactly as it always has:
+// nothing installs, nothing escalates.
+func TestNoEscalationForUnnamedDefault(t *testing.T) {
+	t.Setenv("SELF_MIND", failingMind(t))
+	t.Setenv("SELF_MINDS", "")
+	t.Setenv("SELF_MIND_ESCALATION", "")
+
+	home := t.TempDir()
+	if err := ingest(home, []Event{newEvent("command.declared", json.RawMessage(pingDecl))}); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(home, "capabilities", "commands", "ping", "run")) {
+		t.Fatal("a failing default mind installed a script")
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.Name == "compile.escalated" || e.Name == "script.compiled" {
+			t.Fatalf("unexpected %s event without a roster", e.Name)
+		}
+	}
+}
+
+// Per-mind identity precedence: SELF_MIND_ID_<NAME> beats SELF_MIND_ID beats
+// the executable beats the bare word.
+func TestPerMindIdentityPrecedence(t *testing.T) {
+	t.Setenv("SELF_MIND_ID", "")
+	t.Setenv("SELF_MIND_ID_TOP", "")
+	m := mindRef{name: "top", exe: "claude -p"}
+	if got := m.identity(); got != "claude -p" {
+		t.Fatalf("identity = %q, want the executable", got)
+	}
+	t.Setenv("SELF_MIND_ID", "the shared identity")
+	if got := m.identity(); got != "the shared identity" {
+		t.Fatalf("identity = %q, want SELF_MIND_ID", got)
+	}
+	t.Setenv("SELF_MIND_ID_TOP", "fable")
+	if got := m.identity(); got != "fable" {
+		t.Fatalf("identity = %q, want SELF_MIND_ID_TOP", got)
+	}
+	if got := (mindRef{}).identity(); got != "the shared identity" {
+		t.Fatalf("unnamed identity = %q, want SELF_MIND_ID", got)
+	}
+	t.Setenv("SELF_MIND_ID", "")
+	if got := (mindRef{}).identity(); got != "mind" {
+		t.Fatalf("empty identity = %q, want the bare word", got)
+	}
+}
+
+// With a roster declared, learn and reflect record which mind handled the ask
+// as a mind.routed event; without one, the log stays exactly as before.
+func TestRoutedEventOnReflect(t *testing.T) {
+	t.Setenv("SELF_MIND", markerMind(t, "the default mind"))
+	t.Setenv("SELF_MIND_ID", "default identity")
+	t.Setenv("SELF_MINDS", "top")
+	t.Setenv("SELF_MIND_TOP", markerMind(t, "the top mind"))
+	t.Setenv("SELF_MIND_ID_TOP", "top identity")
+	t.Setenv("SELF_MIND_REFLECT", "top")
+
+	home := t.TempDir()
+	if err := cmdReflect(home); err != nil {
+		t.Fatal(err)
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routed := 0
+	for _, e := range events {
+		if e.Name != "mind.routed" {
+			continue
+		}
+		routed++
+		var p struct{ Ask, Mind, Exe, By string }
+		if json.Unmarshal(e.Payload, &p) != nil || p.Ask != "reflect" || p.Mind != "top" || p.By != "top identity" {
+			t.Fatalf("bad mind.routed event: %s", e.Payload)
+		}
+	}
+	if routed != 1 {
+		t.Fatalf("logged %d mind.routed events, want 1", routed)
+	}
+
+	t.Setenv("SELF_MINDS", "")
+	t.Setenv("SELF_MIND_REFLECT", "")
+	bare := t.TempDir()
+	if err := cmdReflect(bare); err != nil {
+		t.Fatal(err)
+	}
+	events, err = readEvents(bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.Name == "mind.routed" {
+			t.Fatal("a single-mind reflect logged mind.routed — the log must stay byte-identical without a roster")
+		}
+	}
+}
+
+// The learn and reflect prompts name the roster so the orchestrating mind can
+// pin declarations to minds — and stay silent without one.
+func TestRosterPromptGatedOnRoster(t *testing.T) {
+	t.Setenv("SELF_MINDS", "")
+	if p := rosterPrompt(); p != "" {
+		t.Fatalf("rosterPrompt without a roster = %q, want empty", p)
+	}
+	t.Setenv("SELF_MINDS", "fast deep top")
+	t.Setenv("SELF_MIND_COMPILE", "deep")
+	p := rosterPrompt()
+	for _, want := range []string{"fast, deep, top", "default route: deep", `"mind":"<name>"`} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("rosterPrompt missing %q:\n%s", want, p)
+		}
+	}
+	if !strings.Contains(learnPrompt("ref", "an intent", nil), "named minds") {
+		t.Fatal("learnPrompt does not carry the roster")
+	}
+}

@@ -86,6 +86,20 @@ environment:
                     deterministic offline mind for demos/tests.
   SELF_MIND_ID     provenance by-line signed into script.compiled receipts
                     (default: the mind executable)
+
+  route among several minds (optional; SELF_MIND alone works as above):
+  SELF_MINDS       a roster of names, space-separated, e.g. "fast deep top" —
+                    each name binds an executable via SELF_MIND_<NAME> and an
+                    optional identity via SELF_MIND_ID_<NAME>
+  SELF_MIND_THINK / SELF_MIND_REFLECT / SELF_MIND_LEARN / SELF_MIND_COMPILE
+                    route an ask kind to a roster name (or a verbatim
+                    executable); unset kinds use SELF_MIND
+  SELF_MIND_ESCALATION
+                    ordered roster names, cheap first — a compile that fails
+                    mechanically (mind errored, or answered without a script)
+                    retries one name up, logged as compile.escalated. A learn
+                    or reflect prompt names the roster so the orchestrating
+                    mind may pin any declaration to a mind: "mind":"<name>"
 `
 }
 
@@ -103,6 +117,17 @@ Mind process contract
               (opencode run, claude -p) already have such tools.
   SELF_ASK     request kind: think | reflect | learn | compile
   argv         the prompt is passed as the last argument
+
+  Several minds may be plugged at once and routed by name: SELF_MINDS
+  declares a roster ("fast deep top"), SELF_MIND_<NAME> binds each name to
+  an executable, SELF_MIND_<KIND> routes an ask kind to a name, and
+  SELF_MIND_ESCALATION orders names cheap→expensive for compile retries.
+  Each spawned process sees the same contract above — a routed mind does
+  not need to know it was routed. Receipts sign SELF_MIND_ID_<NAME> (then
+  SELF_MIND_ID, then the executable) as the author, learn/reflect append a
+  mind.routed event, and each escalation hop appends compile.escalated —
+  routing is in the log or in the signature, never in hidden state. A
+  declaration may carry "mind":"<name>" to pin its compile to a roster mind.
   stdin        an orientation brief (plain text): where the mind is, what
                capabilities exist, and where to look for the rest. The mind is
                expected to explore SELF_HOME itself for depth — this is a
@@ -166,7 +191,7 @@ Accounts (give / learn)
 
 Declarations — not code — are what cross every boundary. A generated script
 installs only after the local kernel signs a script.compiled receipt with
-SELF_HOME/.secret and the current SELF_MIND_ID.
+SELF_HOME/.secret and the identity of the mind that authored it.
 `
 }
 

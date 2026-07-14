@@ -271,6 +271,54 @@ wake-up card, not a context dump. A tool-capable coding agent (`opencode run`,
 tool loop of its own is incomplete by spec. Receipts are signed with
 `SELF_MIND_ID` as the recorded author.
 
+### Named minds — routing among several
+
+One mind is enough, but minds differ in cost and character: a local model is
+free and always on, a subscription model is strong at implementation bulk, a
+frontier agent is the one you want interpreting intent. An instance may plug
+several and route among them **by name**. The kernel stays model-free — it
+dereferences operator-chosen names to processes and nothing more; which model
+answers to a name, its endpoint, its keys, all live in the adapter's
+environment exactly as with a single `SELF_MIND`:
+
+```sh
+export SELF_MIND="claude -p"                        # the default + final fallback
+export SELF_MINDS="fast deep top"                   # the roster
+export SELF_MIND_FAST="$PWD/examples/mind-http"     # a local model (e.g. Qwen via llama-server)
+export SELF_MIND_DEEP="$PWD/examples/mind-opencode" # a subscription model (e.g. GLM via opencode)
+export SELF_MIND_TOP="claude -p"                    # the orchestrator
+export SELF_MIND_ID_FAST=qwen3.6-27b SELF_MIND_ID_DEEP=glm-5.2 SELF_MIND_ID_TOP=claude
+
+export SELF_MIND_THINK=fast     # cheap conversational asks stay local
+export SELF_MIND_COMPILE=deep   # implementation bulk
+export SELF_MIND_LEARN=top      # intent interpretation and decomposition
+export SELF_MIND_REFLECT=top    # judgment
+export SELF_MIND_ESCALATION="fast deep top"
+```
+
+Three things happen on top of the static routes, and every one of them lands
+in the log or in a signature — routing is never hidden state:
+
+- **The orchestrator assigns work.** With a roster declared, the `learn` and
+  `reflect` prompts name it, and the orchestrating mind may pin any
+  declaration to a mind by adding `"mind":"<name>"` to its payload — the hint
+  rides the `command.declared` event, so it is in the log by construction.
+  What each name is *good at* is deliberately not kernel text: teach the
+  orchestrator through a lesson or a note event.
+- **Failed compiles escalate.** A compile that fails mechanically — the mind
+  process errors, or answers without a script — retries one step up
+  `SELF_MIND_ESCALATION`, and each hop is a `compile.escalated` event. The
+  kernel never judges quality; escalation triggers are mechanical only. With
+  no roster, a failed compile fails exactly as it always has.
+- **Provenance stays honest.** Each receipt is signed with the identity of the
+  mind that actually authored the script (`SELF_MIND_ID_<NAME>`, then
+  `SELF_MIND_ID`, then the executable), and `learn`/`reflect` append a
+  `mind.routed` event recording which mind handled the ask. A `think` reports
+  its mind in the reply JSON instead — it appends nothing, as ever.
+
+With none of these variables set, nothing changes: one `SELF_MIND`, one seam,
+a log byte-identical to what it was before minds had names.
+
 ## Where the mind runs
 
 The kernel spawns the mind as a plain subprocess and reads its stdout; it does
@@ -294,6 +342,14 @@ SELF_BIND         bind address, host or host:port (default 127.0.0.1:7777;
                   set 0.0.0.0 to expose)
 SELF_MIND_ID     author string signed into receipts
                   (default: the mind executable)
+
+SELF_MINDS        optional roster of named minds, e.g. "fast deep top";
+                  each name binds SELF_MIND_<NAME> (executable) and
+                  SELF_MIND_ID_<NAME> (receipt author). See "Named minds".
+SELF_MIND_THINK / _REFLECT / _LEARN / _COMPILE
+                  route an ask kind to a roster name (or verbatim executable)
+SELF_MIND_ESCALATION
+                  ordered names, cheap→expensive, for mechanical compile retries
 ```
 
 ## Repository layout

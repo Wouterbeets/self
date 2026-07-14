@@ -37,7 +37,7 @@ func ingest(home string, evs []Event) error {
 func compileDeclarations(c *llm, home string, evs []Event) int {
 	n := 0
 	for _, e := range evs {
-		var typ, name, script string
+		var typ, name, script, by string
 		var err error
 		switch e.Name {
 		case "command.declared":
@@ -47,7 +47,7 @@ func compileDeclarations(c *llm, home string, evs []Event) int {
 			}
 			typ, name = "command", d.Name
 			fmt.Fprintf(os.Stderr, "self: compiling command %q…\n", name)
-			script, err = c.compileCommand(d)
+			script, by, err = c.compileCommand(d)
 		case "projector.declared":
 			var d projectorDecl
 			if json.Unmarshal(e.Payload, &d) != nil || d.Name == "" {
@@ -55,7 +55,7 @@ func compileDeclarations(c *llm, home string, evs []Event) int {
 			}
 			typ, name = "projector", d.Name
 			fmt.Fprintf(os.Stderr, "self: compiling projector %q…\n", name)
-			script, err = c.compileProjector(d)
+			script, by, err = c.compileProjector(d)
 		default:
 			continue
 		}
@@ -63,7 +63,10 @@ func compileDeclarations(c *llm, home string, evs []Event) int {
 			err = installScript(home, typ, name, script)
 		}
 		if err == nil {
-			err = appendReceipt(home, typ, name, script, c.identity())
+			// by names the mind that actually authored the script — with
+			// routed minds that can differ per compile, and the signed
+			// receipt is where that provenance must live.
+			err = appendReceipt(home, typ, name, script, by)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "self: %s %q failed: %s\n", typ, name, err)
@@ -103,11 +106,13 @@ func applyRetirements(home string, evs []Event) int {
 }
 
 // mindResult carries the mind's response: the text it wrote, any events it
-// declared, and (for compile asks) the script it authored.
+// declared, (for compile asks) the script it authored, and which resolved
+// mind ran — so a routed ask can be logged without resolving twice.
 type mindResult struct {
 	Response string
 	Events   []map[string]any
 	Script   string // a compile ask's answer, from a script.authored event
+	Mind     mindRef
 }
 
 // applyEvents appends events the mind returned and runs any capability
