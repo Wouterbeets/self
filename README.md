@@ -319,6 +319,36 @@ in the log or in a signature — routing is never hidden state:
 With none of these variables set, nothing changes: one `SELF_MIND`, one seam,
 a log byte-identical to what it was before minds had names.
 
+### Saying no — refusal and review
+
+A loop where every proposal installs is a loop with no critic. The system
+keeps two kinds of no distinct, because they mean opposite things:
+
+- **"I can't"** is incapacity — the mind crashed or answered without a
+  script. That is what escalation is for: try a stronger mind.
+- **"This shouldn't be done"** is a veto. Any mind may answer any ask with
+  `{"name":"mind.refused","payload":{"reason":"..."}}` — the kernel records
+  the refusal and its reason as a `mind.refused` event and stops. A veto is
+  never escalated: the one mind that objected is not overridden by asking a
+  bigger model.
+
+On top of the maker's veto sits an optional checker: set
+`SELF_MIND_REVIEW=<name>` and every authored script is judged by that mind —
+as a `review` ask — *before* the kernel installs and signs it. An explicit
+`review.rejected` blocks the install, lands in the log with its reason, and
+triggers exactly one recompile with the objection woven into the prompt; a
+second rejection fails the compile. Approval, silence, or a reviewer that
+itself fails all let the script through (the gate is a quality judgment by a
+mind, never a security boundary — that remains the signature, and a rejected
+script never reaches it).
+
+The third layer of no lives above the kernel entirely:
+[`lessons/monitor`](lessons/monitor/intent.md) grows a capability that
+verifies outcomes against intent after the fact and emits
+`monitor.verified` / `monitor.rejected` events — and its projection is the
+natural place to watch every no in the system: refusals, review rejections,
+escalations, and its own verdicts, all read from the log.
+
 ## Where the mind runs
 
 The kernel spawns the mind as a plain subprocess and reads its stdout; it does

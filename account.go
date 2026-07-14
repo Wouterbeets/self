@@ -53,6 +53,8 @@ var kernelVocabulary = map[string]bool{
 	"self.reflected":                true,
 	"mind.routed":                   true,
 	"compile.escalated":             true,
+	"mind.refused":                  true,
+	"review.rejected":               true,
 }
 
 const lineagePrefix = "lineage."

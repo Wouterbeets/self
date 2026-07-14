@@ -113,6 +113,14 @@ func cmdLearn(home, ref string) error {
 	if err != nil {
 		return fmt.Errorf("learn %q: %w (learning needs a mind — %s)", name, err, mindHint)
 	}
+	if res.Refused != "" {
+		// The mind's no is a first-class outcome: the reason lands in the log,
+		// and the exit code still says the lesson did not install.
+		if aerr := appendRefused(home, "learn", res.Mind, res.Refused, map[string]any{"lesson": name}); aerr != nil {
+			return aerr
+		}
+		return fmt.Errorf("the mind refused to learn %q: %s", name, res.Refused)
+	}
 	if err := appendRouted(home, "learn", res.Mind); err != nil {
 		return err
 	}
@@ -233,9 +241,13 @@ func cmdThink(home, prompt string) error {
 	}
 	out := map[string]any{"response": res.Response, "events": res.Events, "declarations": res.Events}
 	// think appends nothing — the routed mind rides the reply instead of the
-	// log, and only when a roster makes routing a fact worth reporting.
+	// log, and only when a roster makes routing a fact worth reporting. A
+	// refusal rides the reply too, for the same reason.
 	if len(rosterNames()) > 0 {
 		out["mind"] = map[string]string{"name": res.Mind.name, "by": res.Mind.identity()}
+	}
+	if res.Refused != "" {
+		out["refused"] = res.Refused
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -263,6 +275,14 @@ func cmdReflect(home string) error {
 	res, err := pipeMind(home, "reflect", prompt)
 	if err != nil {
 		return err
+	}
+	if res.Refused != "" {
+		// Declining to reflect is a legitimate reflection; the reason is the event.
+		if aerr := appendRefused(home, "reflect", res.Mind, res.Refused, nil); aerr != nil {
+			return aerr
+		}
+		fmt.Println("the mind declined to reflect: " + res.Refused)
+		return nil
 	}
 	if err := appendRouted(home, "reflect", res.Mind); err != nil {
 		return err

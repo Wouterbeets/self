@@ -106,13 +106,15 @@ func applyRetirements(home string, evs []Event) int {
 }
 
 // mindResult carries the mind's response: the text it wrote, any events it
-// declared, (for compile asks) the script it authored, and which resolved
-// mind ran — so a routed ask can be logged without resolving twice.
+// declared, (for compile asks) the script it authored, which resolved mind
+// ran — so a routed ask can be logged without resolving twice — and, when the
+// mind answered with an explicit no, its stated reason.
 type mindResult struct {
 	Response string
 	Events   []map[string]any
 	Script   string // a compile ask's answer, from a script.authored event
 	Mind     mindRef
+	Refused  string // a mind.refused answer: the reason; empty means not refused
 }
 
 // applyEvents appends events the mind returned and runs any capability

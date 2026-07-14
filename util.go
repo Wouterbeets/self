@@ -100,6 +100,12 @@ environment:
                     retries one name up, logged as compile.escalated. A learn
                     or reflect prompt names the roster so the orchestrating
                     mind may pin any declaration to a mind: "mind":"<name>"
+  SELF_MIND_REVIEW  a checker mind (roster name or executable) that judges
+                    every authored script BEFORE it installs: review.rejected
+                    blocks the install (logged, with one recompile carrying
+                    the objection); a reviewer that itself fails lets the
+                    script through with a note. Any mind may also answer any
+                    ask with mind.refused — a recorded veto, never escalated
 `
 }
 
@@ -115,7 +121,7 @@ Mind process contract
               capabilities/) with its own tools — a plain stdin/stdout adapter
               with no file access cannot do the job. Coding-agent minds
               (opencode run, claude -p) already have such tools.
-  SELF_ASK     request kind: think | reflect | learn | compile
+  SELF_ASK     request kind: think | reflect | learn | compile | review
   argv         the prompt is passed as the last argument
 
   Several minds may be plugged at once and routed by name: SELF_MINDS
@@ -147,6 +153,15 @@ Mind reply events
 
   script.authored     answer to SELF_ASK=compile only:
                       {"name":"script.authored","payload":{"script":"#!/bin/sh\n..."}}
+
+  mind.refused        any ask may be answered with an explicit no — a recorded
+                      decision, never escalated to another mind:
+                      {"name":"mind.refused","payload":{"reason":"..."}}
+
+  review.approved /   answer to SELF_ASK=review only (the pre-install gate a
+  review.rejected     SELF_MIND_REVIEW checker runs); a rejection carries a
+                      specific objection and is woven into one recompile:
+                      {"name":"review.rejected","payload":{"reason":"..."}}
 
   capability.retired  retire a capability: its script and page leave the derived
                       surface; the log keeps all history and a re-declaration

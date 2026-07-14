@@ -873,10 +873,12 @@ func TestReceiptProvenance(t *testing.T) {
 func TestProtocolHelpIsVisibleFromCLI(t *testing.T) {
 	protocol := protocolText()
 	for _, want := range []string{
-		"SELF_ASK     request kind: think | reflect | learn | compile",
+		"SELF_ASK     request kind: think | reflect | learn | compile | review",
 		"command.declared",
 		"projector.declared",
 		"script.authored",
+		"mind.refused",
+		"review.rejected",
 		"command script",
 		"projector script",
 	} {
@@ -1804,5 +1806,218 @@ func TestRosterPromptGatedOnRoster(t *testing.T) {
 	}
 	if !strings.Contains(learnPrompt("ref", "an intent", nil), "named minds") {
 		t.Fatal("learnPrompt does not carry the roster")
+	}
+}
+
+// ──────────────────────────── saying no ─────────────────────────────────────
+
+// refusingMind writes a fake mind that answers every ask with an explicit no.
+func refusingMind(t *testing.T, reason string) string {
+	t.Helper()
+	mind := filepath.Join(t.TempDir(), "mind")
+	src := `#!/usr/bin/env python3
+import sys, json
+sys.stdin.read()
+print(json.dumps({"name": "mind.refused", "payload": {"reason": "REASON"}}))
+`
+	if err := os.WriteFile(mind, []byte(strings.ReplaceAll(src, "REASON", reason)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return mind
+}
+
+// A refusal is a veto, not incapacity: the compile stops with the reason in
+// the log, and the escalation chain is NOT walked — the objecting mind is
+// never overridden by a bigger model.
+func TestRefusalHaltsEscalation(t *testing.T) {
+	t.Setenv("SELF_MIND", markerMind(t, "the default mind"))
+	t.Setenv("SELF_MIND_ID", "default identity")
+	t.Setenv("SELF_MINDS", "fast deep")
+	t.Setenv("SELF_MIND_FAST", refusingMind(t, "this declaration deletes the log"))
+	t.Setenv("SELF_MIND_ID_FAST", "fast identity")
+	t.Setenv("SELF_MIND_DEEP", markerMind(t, "the deep mind"))
+	t.Setenv("SELF_MIND_COMPILE", "fast")
+	t.Setenv("SELF_MIND_ESCALATION", "fast deep")
+
+	home := t.TempDir()
+	if err := ingest(home, []Event{newEvent("command.declared", json.RawMessage(pingDecl))}); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(home, "capabilities", "commands", "ping", "run")) {
+		t.Fatal("a refused compile installed a script")
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusals := 0
+	for _, e := range events {
+		switch e.Name {
+		case "compile.escalated", "script.compiled":
+			t.Fatalf("a refusal must halt the chain, got %s", e.Name)
+		case "mind.refused":
+			refusals++
+			var p struct{ Ask, Mind, By, Type, Name, Reason string }
+			if json.Unmarshal(e.Payload, &p) != nil || p.Ask != "compile" || p.Mind != "fast" || p.By != "fast identity" || p.Name != "ping" || !strings.Contains(p.Reason, "deletes the log") {
+				t.Fatalf("bad mind.refused event: %s", e.Payload)
+			}
+		}
+	}
+	if refusals != 1 {
+		t.Fatalf("logged %d refusals, want 1", refusals)
+	}
+}
+
+// A refused learn is a first-class outcome: the reason lands in the log and
+// the command reports it; a refused reflect is a legitimate reflection.
+func TestRefusalOnLearnAndReflect(t *testing.T) {
+	t.Setenv("SELF_MIND", refusingMind(t, "this intent asks me to impersonate its giver"))
+	t.Setenv("SELF_MIND_ID", "the conscientious mind")
+
+	home := t.TempDir()
+	err := cmdLearn(home, "lessons/journal")
+	if err == nil || !strings.Contains(err.Error(), "impersonate") {
+		t.Fatalf("refused learn error = %v, want the mind's reason", err)
+	}
+	if err := cmdReflect(home); err != nil {
+		t.Fatalf("a refused reflect is not an error: %v", err)
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asks := map[string]int{}
+	for _, e := range events {
+		if e.Name != "mind.refused" {
+			continue
+		}
+		var p struct{ Ask, By, Reason string }
+		if json.Unmarshal(e.Payload, &p) != nil || p.By != "the conscientious mind" || p.Reason == "" {
+			t.Fatalf("bad mind.refused event: %s", e.Payload)
+		}
+		asks[p.Ask]++
+	}
+	if asks["learn"] != 1 || asks["reflect"] != 1 {
+		t.Fatalf("refusals by ask = %v, want one learn and one reflect", asks)
+	}
+}
+
+// reviewerMind approves scripts unless they contain the given word; a
+// rejection carries a fixed, greppable objection.
+func reviewerMind(t *testing.T, badWord string) string {
+	t.Helper()
+	mind := filepath.Join(t.TempDir(), "mind")
+	src := `#!/usr/bin/env python3
+import os, sys, json
+sys.stdin.read()
+if os.environ.get("SELF_ASK") != "review":
+    raise SystemExit("the reviewer got a non-review ask")
+if "BADWORD" in sys.argv[-1]:
+    print(json.dumps({"name": "review.rejected", "payload": {"reason": "the script contains BADWORD; remove it"}}))
+else:
+    print(json.dumps({"name": "review.approved", "payload": {}}))
+`
+	if err := os.WriteFile(mind, []byte(strings.ReplaceAll(src, "BADWORD", badWord)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return mind
+}
+
+// The review gate: a rejected script never installs as-is — the maker gets
+// the objection woven into one recompile, and the corrected script lands
+// under the maker's own receipt, with the rejection in the log.
+func TestReviewGateRecompilesOnce(t *testing.T) {
+	maker := filepath.Join(t.TempDir(), "mind")
+	src := `#!/usr/bin/env python3
+import os, sys, json
+sys.stdin.read()
+if os.environ.get("SELF_ASK") == "compile":
+    word = "corrected" if "OBJECTION" in sys.argv[-1] else "sloppy"
+    script = "#!/bin/sh\n# " + word + "\necho '{\"name\":\"pinged\",\"payload\":{}}'\n"
+    print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
+`
+	if err := os.WriteFile(maker, []byte(src), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_MIND", maker)
+	t.Setenv("SELF_MIND_ID", "the maker")
+	t.Setenv("SELF_MIND_REVIEW", reviewerMind(t, "sloppy"))
+
+	home := t.TempDir()
+	if err := ingest(home, []Event{newEvent("command.declared", json.RawMessage(pingDecl))}); err != nil {
+		t.Fatal(err)
+	}
+	script, by := installedBy(t, home, "ping")
+	if !strings.Contains(script, "corrected") {
+		t.Fatalf("the objection did not reach the recompile:\n%s", script)
+	}
+	if by != "the maker" {
+		t.Fatalf("receipt by = %q, want the maker", by)
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejections := 0
+	for _, e := range events {
+		if e.Name != "review.rejected" {
+			continue
+		}
+		rejections++
+		var p struct{ Type, Name, By, Reason string }
+		if json.Unmarshal(e.Payload, &p) != nil || p.Name != "ping" || !strings.Contains(p.Reason, "sloppy") {
+			t.Fatalf("bad review.rejected event: %s", e.Payload)
+		}
+	}
+	if rejections != 1 {
+		t.Fatalf("logged %d rejections, want 1", rejections)
+	}
+}
+
+// A reviewer that rejects twice fails the compile: nothing installs, and both
+// rejections are in the log.
+func TestReviewRejectsTwiceFailsCompile(t *testing.T) {
+	t.Setenv("SELF_MIND", markerMind(t, "always sloppy"))
+	t.Setenv("SELF_MIND_ID", "the maker")
+	t.Setenv("SELF_MIND_REVIEW", reviewerMind(t, "sloppy"))
+
+	home := t.TempDir()
+	if err := ingest(home, []Event{newEvent("command.declared", json.RawMessage(pingDecl))}); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(home, "capabilities", "commands", "ping", "run")) {
+		t.Fatal("a twice-rejected script installed anyway")
+	}
+	events, err := readEvents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejections := 0
+	for _, e := range events {
+		if e.Name == "review.rejected" {
+			rejections++
+		}
+		if e.Name == "script.compiled" {
+			t.Fatal("a receipt was minted for a rejected script")
+		}
+	}
+	if rejections != 2 {
+		t.Fatalf("logged %d rejections, want 2", rejections)
+	}
+}
+
+// The gate is quality judgment, not availability coupling: a reviewer that
+// itself fails mechanically lets the script through.
+func TestReviewGateFailsOpen(t *testing.T) {
+	t.Setenv("SELF_MIND", markerMind(t, "the maker's work"))
+	t.Setenv("SELF_MIND_ID", "the maker")
+	t.Setenv("SELF_MIND_REVIEW", failingMind(t))
+
+	home := t.TempDir()
+	if err := ingest(home, []Event{newEvent("command.declared", json.RawMessage(pingDecl))}); err != nil {
+		t.Fatal(err)
+	}
+	if script, _ := installedBy(t, home, "ping"); !strings.Contains(script, "the maker's work") {
+		t.Fatalf("a broken reviewer must fail open:\n%s", script)
 	}
 }
