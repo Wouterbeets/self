@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>self — theater</title>
+<!--
+  The theater: a flashy, optional, deletable lens over a self instance.
+  It reads the same append-only log every other surface reads (/self/events,
+  tailed by byte offset — append-only is what makes that correct), and it
+  speaks through the same seam (`self think`, via the booth's /think).
+  It holds no state. The kernel does not know it exists.
+
+  Every event is drawn as a gaussian splat — a radial-falloff sprite,
+  additively blended, projected from 3D — the zero-dependency cousin of 3DGS.
+  No frameworks, no build, no network beyond the instance itself; voice in
+  (Web Speech API) is the one exception, and typing is the local path.
+-->
+<style>
+  :root{
+    --cyan:#57e6ff; --teal:#2dd4a7; --amber:#ffb454; --gold:#ffd75e;
+    --magenta:#ff6ad5; --blue:#6d8cff; --green:#5eea8d;
+    --ink:#cfeef7; --dim:#5d8a97; --panel:rgba(6,13,17,.78);
+    --edge:rgba(87,230,255,.28);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:#020507;color:var(--ink);overflow:hidden;
+       font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  #sky{position:fixed;inset:0;display:block}
+  #vignette{position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse at 50% 42%,transparent 55%,rgba(0,0,0,.55) 100%)}
+  #scan{position:fixed;inset:0;pointer-events:none;opacity:.05;
+    background:repeating-linear-gradient(0deg,transparent 0 2px,#9feaff 2px 3px)}
+  .panel{background:var(--panel);border:1px solid var(--edge);border-radius:6px;
+    backdrop-filter:blur(8px);box-shadow:0 0 24px rgba(87,230,255,.08),inset 0 0 18px rgba(87,230,255,.04)}
+  header{position:fixed;top:14px;left:14px;right:14px;display:flex;gap:12px;
+    align-items:stretch;pointer-events:none;z-index:3}
+  header .panel{pointer-events:auto;padding:10px 14px}
+  #identity h1{font-size:15px;letter-spacing:.24em;font-weight:600;color:var(--cyan);
+    text-shadow:0 0 12px rgba(87,230,255,.6)}
+  #identity h1 small{color:var(--dim);letter-spacing:.14em;font-weight:400}
+  #identity .sub{color:var(--dim);font-size:11px;margin-top:2px}
+  #lamp{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;
+    background:var(--teal);box-shadow:0 0 10px var(--teal);animation:pulse 2.2s infinite}
+  #lamp.down{background:#ff5d5d;box-shadow:0 0 10px #ff5d5d;animation:none}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  #stats{display:flex;gap:22px;margin-left:auto}
+  #stats div{text-align:right}
+  #stats b{display:block;font-size:19px;color:var(--cyan);font-weight:600;
+    text-shadow:0 0 10px rgba(87,230,255,.5)}
+  #stats span{color:var(--dim);font-size:10px;letter-spacing:.18em}
+  #inspector{position:fixed;top:86px;right:14px;width:340px;max-height:55vh;
+    overflow:auto;padding:12px 14px;z-index:3;display:none}
+  #inspector.on{display:block}
+  #inspector h2{font-size:12px;letter-spacing:.18em;margin-bottom:6px}
+  #inspector .meta{color:var(--dim);font-size:11px;margin-bottom:8px}
+  #inspector pre{white-space:pre-wrap;word-break:break-word;font-size:11px;
+    color:#a8dbe8;border-left:2px solid var(--edge);padding-left:8px}
+  #inspector .x{float:right;cursor:pointer;color:var(--dim)}
+  #reply{position:fixed;left:50%;transform:translateX(-50%);bottom:118px;width:min(680px,92vw);
+    padding:12px 16px;z-index:3;display:none;border-color:rgba(255,215,94,.35)}
+  #reply.on{display:block}
+  #reply h2{font-size:10px;letter-spacing:.24em;color:var(--gold);margin-bottom:6px}
+  #reply p{color:#f2e9c9;font-size:13px;white-space:pre-wrap;max-height:26vh;overflow:auto}
+  footer{position:fixed;left:14px;right:14px;bottom:14px;z-index:3;display:flex;
+    flex-direction:column;gap:8px}
+  #ticker{display:flex;gap:18px;overflow:hidden;padding:7px 12px;color:var(--dim);
+    font-size:11px;white-space:nowrap}
+  #ticker .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px}
+  #ticker b{color:var(--ink);font-weight:400}
+  #ask{display:flex;gap:8px;padding:8px;align-items:center}
+  #mic{width:38px;height:38px;border-radius:50%;border:1px solid var(--edge);cursor:pointer;
+    background:transparent;color:var(--cyan);font-size:15px;flex:none}
+  #mic.live{color:#ff5d5d;border-color:#ff5d5d;box-shadow:0 0 14px rgba(255,93,93,.6);
+    animation:pulse 1s infinite}
+  #mic:disabled{opacity:.3;cursor:default}
+  #prompt{flex:1;background:transparent;border:0;outline:0;color:var(--ink);
+    font:inherit;font-size:14px}
+  #prompt::placeholder{color:var(--dim)}
+  #go{background:transparent;border:1px solid var(--edge);color:var(--cyan);
+    font:inherit;font-size:11px;letter-spacing:.22em;padding:9px 18px;border-radius:4px;
+    cursor:pointer}
+  #go:hover{background:rgba(87,230,255,.08);box-shadow:0 0 16px rgba(87,230,255,.25)}
+  #status{color:var(--dim);font-size:11px;letter-spacing:.14em;padding:0 4px;min-height:16px}
+  #status.think{color:var(--gold);text-shadow:0 0 8px rgba(255,215,94,.5)}
+  #hint{position:fixed;bottom:118px;left:14px;color:var(--dim);font-size:10px;
+    letter-spacing:.14em;z-index:2;opacity:.8}
+</style>
+</head>
+<body>
+<canvas id="sky"></canvas>
+<div id="vignette"></div><div id="scan"></div>
+
+<header>
+  <div class="panel" id="identity">
+    <h1><span id="lamp"></span>SELF <small>// THEATER</small></h1>
+    <div class="sub" id="watching">watching —</div>
+  </div>
+  <div class="panel" id="stats">
+    <div><b id="n-events">0</b><span>EVENTS</span></div>
+    <div><b id="n-caps">0</b><span>CAPABILITIES</span></div>
+    <div><b id="n-seq">—</b><span>SEQ</span></div>
+    <div><b id="n-up">0:00</b><span>WATCHING</span></div>
+  </div>
+</header>
+
+<div class="panel" id="inspector">
+  <span class="x" onclick="ui.inspector.classList.remove('on')">✕</span>
+  <h2 id="i-name"></h2><div class="meta" id="i-meta"></div><pre id="i-payload"></pre>
+</div>
+
+<div class="panel" id="reply"><h2>THE MIND REPLIES</h2><p id="reply-text"></p></div>
+<div id="hint">drag to orbit · wheel to zoom · click a splat to inspect</div>
+
+<footer>
+  <div class="panel" id="ticker"></div>
+  <form class="panel" id="ask">
+    <button id="mic" type="button" title="speak to the mind">◉</button>
+    <input id="prompt" placeholder="speak or type to the mind — it explores the instance and answers…" autocomplete="off">
+    <button id="go">THINK</button>
+  </form>
+  <div id="status">idle — the log is the truth, this is just the light show</div>
+</footer>
+
+<script>
+'use strict';
+/* ───────────────────────────── stage ───────────────────────────── */
+const cv = document.getElementById('sky'), cx2d = cv.getContext('2d');
+let W, H; const fit = () => { W = cv.width = innerWidth * devicePixelRatio;
+  H = cv.height = innerHeight * devicePixelRatio; };
+addEventListener('resize', fit); fit();
+
+const ui = {};
+for (const id of ['lamp','watching','n-events','n-caps','n-seq','n-up','ticker',
+  'inspector','i-name','i-meta','i-payload','reply','reply-text','status','prompt','mic','go'])
+  ui[id.replace(/-/g,'_')] = document.getElementById(id);
+ui.inspector = document.getElementById('inspector');
+
+/* ─────────────────────── palette & splat sprites ─────────────────────── */
+const PAL = { cyan:'#57e6ff', teal:'#2dd4a7', amber:'#ffb454', gold:'#ffd75e',
+              magenta:'#ff6ad5', blue:'#6d8cff', green:'#5eea8d' };
+function colorFor(name){
+  if (name.startsWith('script.'))  return PAL.gold;    // authored bytes
+  if (name.endsWith('.declared'))  return PAL.amber;   // capability growth
+  if (/^(lesson|account|lineage)\./.test(name)) return PAL.magenta; // exchange
+  if (name.startsWith('chat.'))    return PAL.cyan;
+  if (name.startsWith('timer.'))   return PAL.green;
+  const h = [...name].reduce((a,c)=>(a*31+c.charCodeAt(0))>>>0, 7);
+  return [PAL.teal, PAL.blue, PAL.cyan][h % 3];
+}
+// A cached gaussian sprite per color: radial falloff, drawn additively.
+const sprites = {};
+function sprite(color){
+  if (sprites[color]) return sprites[color];
+  const s = document.createElement('canvas'); s.width = s.height = 64;
+  const g = s.getContext('2d'), r = g.createRadialGradient(32,32,0,32,32,32);
+  r.addColorStop(0,'#fff'); r.addColorStop(.25,color); r.addColorStop(1,'transparent');
+  g.fillStyle = r; g.fillRect(0,0,64,64);
+  return sprites[color] = s;
+}
+
+/* ───────────────────────────── camera ───────────────────────────── */
+const cam = { yaw:.6, pitch:.42, dist:290, fov:900, spin:.045 };
+let drag = null;
+cv.addEventListener('pointerdown', e => { drag = {x:e.clientX, y:e.clientY, moved:0}; });
+addEventListener('pointermove', e => { if (!drag) return;
+  const dx = e.clientX-drag.x, dy = e.clientY-drag.y; drag.moved += Math.abs(dx)+Math.abs(dy);
+  cam.yaw += dx*.005; cam.pitch = Math.max(-1.3, Math.min(1.3, cam.pitch + dy*.005));
+  drag.x = e.clientX; drag.y = e.clientY; });
+addEventListener('pointerup', e => { if (drag && drag.moved < 6) pick(e); drag = null; });
+let userZoomed = false;
+addEventListener('wheel', e => { userZoomed = true;
+  cam.dist = Math.max(90, Math.min(2200, cam.dist * (1 + e.deltaY*.001))); }, {passive:true});
+
+function project(p){
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  let x = p.x*cy - p.z*sy, z = p.x*sy + p.z*cy, y = p.y;
+  const y2 = y*cp - z*sp;  z = y*sp + z*cp + cam.dist;  y = y2;
+  if (z < 24) return null;
+  const s = cam.fov * devicePixelRatio / z;
+  return { x: W/2 + x*s, y: H/2 + y*s, s: s/ (cam.fov/220) , z };
+}
+
+/* ───────────────────────── the galaxy of events ───────────────────────── */
+// Each event lands on a Fermat spiral (angle and radius both ∝ √seq), so
+// consecutive events sit beside each other and the chain reads as one
+// continuous coil — the log as a record groove, growing outward. The layout
+// is a pure function of the log: replay it and you get the same galaxy,
+// which is the whole point of the system this is watching.
+const nodes = [], bySeq = new Map(), caps = new Map(), ghosts = [];
+let lastSeq = 0, tickerItems = [];
+function slot(seq){
+  const q = Math.sqrt(seq), a = 2.1 * q;
+  const h = ((seq * 2654435761) >>> 16 & 255) / 255;
+  const r = 24 + 8 * q;
+  return { x: Math.cos(a)*r, y: (h-.5)*10, z: Math.sin(a)*r };
+}
+function addEvent(e, fresh){
+  if (bySeq.has(e.seq)) return;
+  const lifecycle = /^(script|command|projector|lesson|intent|learn|account|lineage)\./.test(e.name);
+  const n = { e, target: slot(e.seq), color: colorFor(e.name),
+              r: lifecycle ? 10 : 6.5, born: fresh ? now : -1e9,
+              pos: fresh ? {x:0,y:0,z:0} : slot(e.seq) };
+  nodes.push(n); bySeq.set(e.seq, n); lastSeq = Math.max(lastSeq, e.seq);
+  if (e.name === 'script.compiled' && e.payload)
+    caps.set((e.payload.type||'?')+'/'+(e.payload.name||'?'), { seq: e.seq });
+  if (e.name === 'capability.retired' && e.payload)
+    caps.delete((e.payload.type||'?')+'/'+(e.payload.name||'?'));
+  tickerItems.unshift(`<span class="dot" style="background:${n.color};box-shadow:0 0 6px ${n.color}"></span><b>${esc(e.name)}</b> <span style="opacity:.6">#${e.seq}</span>`);
+  tickerItems = tickerItems.slice(0, 9);
+  ui.ticker.innerHTML = tickerItems.map(t=>`<span>${t}</span>`).join('');
+  ui.n_events.textContent = nodes.length;
+  ui.n_caps.textContent = caps.size;
+  ui.n_seq.textContent = lastSeq;
+}
+function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ───────────────── tail the log (append-only makes Range honest) ───────────────── */
+// offset counts the bytes of COMPLETE lines already consumed; each poll asks
+// for bytes=offset-. A partial trailing line is left unconsumed and re-read
+// next time; dedupe by seq makes any overlap harmless.
+let offset = 0, booted = false;
+const bytes = s => new TextEncoder().encode(s).length;
+async function poll(){
+  try {
+    const headers = offset ? { Range: 'bytes=' + offset + '-' } : {};
+    const resp = await fetch('/self/events', { headers });
+    if (resp.status === 416) { setLamp(true); return; }          // no new bytes yet
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text = await resp.text();
+    const lines = text.split('\n'), tail = lines.pop();
+    const consumed = bytes(text) - bytes(tail);
+    offset = (resp.status === 206 ? offset : 0) + consumed;
+    for (const line of lines){
+      if (!line.trim()) continue;
+      try { const e = JSON.parse(line); if (e.seq > 0) addEvent(e, booted); }
+      catch (_) {}
+    }
+    booted = true;
+    setLamp(true);
+  } catch (_) { setLamp(false); }
+}
+function setLamp(up){ ui.lamp.classList.toggle('down', !up);
+  ui.watching.textContent = up ? 'watching ' + location.host + '/self → the instance log'
+                               : 'instance unreachable — is `self` serving?'; }
+
+/* ───────────────────────────── think & voice ───────────────────────────── */
+let thinking = false, thinkT0 = 0;
+async function think(prompt){
+  if (thinking || !prompt.trim()) return;
+  thinking = true; thinkT0 = now; ui.prompt.value = '';
+  ui.status.className = 'think';
+  try {
+    const resp = await fetch('/think', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({prompt}) });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    const said = (data.response || '(the mind answered with events only)').trim();
+    ui.reply_text.textContent = said; ui.reply.classList.add('on');
+    speak(said);
+    // A think is report-only: returned events are proposals, not appendings.
+    // Render them as ghosts orbiting the core until they fade.
+    for (const ev of (data.events || []).slice(0, 12))
+      ghosts.push({ name: ev.name, born: now, a: Math.random()*6.283, r: 34+Math.random()*18 });
+    ui.status.textContent = 'the mind spoke — ' + ((now-thinkT0)/1000).toFixed(1) + 's';
+  } catch (err) {
+    ui.status.textContent = 'think failed: ' + err.message;
+  }
+  ui.status.className = ''; thinking = false;
+}
+document.getElementById('ask').addEventListener('submit', e => { e.preventDefault(); think(ui.prompt.value); });
+function speak(text){
+  try { const u = new SpeechSynthesisUtterance(text.slice(0, 600));
+    u.rate = 1.04; u.pitch = .92; speechSynthesis.cancel(); speechSynthesis.speak(u); } catch(_){}
+}
+const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (Rec) {
+  const rec = new Rec(); rec.interimResults = true; rec.lang = 'en-US';
+  let live = false;
+  rec.onresult = ev => { let s = ''; for (const r of ev.results) s += r[0].transcript;
+    ui.prompt.value = s;
+    if (ev.results[ev.results.length-1].isFinal) { rec.stop(); think(s); } };
+  rec.onend = () => { live = false; ui.mic.classList.remove('live'); };
+  ui.mic.onclick = () => { if (live) { rec.stop(); return; }
+    live = true; ui.mic.classList.add('live'); ui.status.textContent = 'listening…'; rec.start(); };
+} else { ui.mic.disabled = true; ui.mic.title = 'no speech API in this browser — type instead'; }
+
+/* ───────────────────────────── picking ───────────────────────────── */
+function pick(ev){
+  const px = ev.clientX * devicePixelRatio, py = ev.clientY * devicePixelRatio;
+  let best = null, bd = 18 * devicePixelRatio;
+  for (const n of nodes){ const p = project(n.pos); if (!p) continue;
+    const d = Math.hypot(p.x-px, p.y-py); if (d < bd) { bd = d; best = n; } }
+  if (!best) return;
+  ui.i_name.textContent = best.e.name;
+  ui.i_meta.textContent = '#' + best.e.seq + ' · ' + (best.e.occurred_at||'').replace('T',' ').slice(0,19)
+                        + ' · ' + (best.e.id||'').slice(0,12);
+  ui.i_payload.textContent = JSON.stringify(best.e.payload, null, 2);
+  ui.inspector.classList.add('on');
+}
+
+/* ───────────────────────────── render ───────────────────────────── */
+const stars = Array.from({length: 260}, () => { const a = Math.random()*6.283, b = Math.acos(2*Math.random()-1), r = 1500;
+  return { x: r*Math.sin(b)*Math.cos(a), y: r*Math.cos(b)*.6, z: r*Math.sin(b)*Math.sin(a), s: Math.random() }; });
+let now = performance.now(), t0 = now;
+function frame(t){
+  now = t;
+  if (!drag) cam.yaw += cam.spin * ((t - (frame.pt||t)) / 1000); frame.pt = t;
+  // auto-frame the whole record until the human takes the wheel
+  const Rg = 24 + 8*Math.sqrt(Math.max(lastSeq, 12));
+  if (!userZoomed) cam.dist += (120 + Rg*2.9 - cam.dist) * .02;
+  cx2d.setTransform(1,0,0,1,0,0);
+  cx2d.fillStyle = '#020507'; cx2d.fillRect(0,0,W,H);
+  cx2d.globalCompositeOperation = 'lighter';
+
+  for (const s of stars){ const p = project(s); if (!p) continue;
+    cx2d.globalAlpha = .25 + .3*s.s; cx2d.fillStyle = '#7ab8cc';
+    cx2d.fillRect(p.x, p.y, 1.4*devicePixelRatio, 1.4*devicePixelRatio); }
+
+  // the chain: each event linked to its predecessor, faint
+  cx2d.globalAlpha = .2; cx2d.strokeStyle = PAL.cyan; cx2d.lineWidth = devicePixelRatio*.8;
+  cx2d.beginPath();
+  for (const n of nodes){ const prev = bySeq.get(n.e.seq-1); if (!prev) continue;
+    const a = project(n.pos), b = project(prev.pos); if (!a || !b) continue;
+    cx2d.moveTo(a.x,a.y); cx2d.lineTo(b.x,b.y); }
+  cx2d.stroke();
+
+  // the core — flaring while the mind thinks
+  const flare = thinking ? 1.9 + .8*Math.sin(t/110) : 1 + .12*Math.sin(t/700);
+  const core = project({x:0,y:0,z:0});
+  if (core){ const d = 60 * core.s * flare;
+    cx2d.globalAlpha = thinking ? .95 : .8;
+    cx2d.drawImage(sprite(thinking ? PAL.gold : PAL.cyan), core.x-d/2, core.y-d/2, d, d); }
+  if (thinking && core){ // sparks orbiting the working mind
+    for (let i=0;i<7;i++){ const a = t/300 + i*.9, r = 26 + 9*Math.sin(t/210+i);
+      const p = project({x:Math.cos(a)*r, y:Math.sin(t/260+i*2)*7, z:Math.sin(a)*r}); if (!p) continue;
+      const d = 12*p.s; cx2d.globalAlpha=.9;
+      cx2d.drawImage(sprite(PAL.gold), p.x-d/2, p.y-d/2, d, d); } }
+
+  // every event, a splat; newborns fly out from the core and flash
+  for (const n of nodes){
+    const age = Math.min(1, (t - n.born) / 1200), k = 1-(1-age)*(1-age)*(1-age);
+    n.pos = { x:n.target.x*k, y:n.target.y*k, z:n.target.z*k };
+    const p = project(n.pos); if (!p) continue;
+    const flash = Math.max(0, 1 - (t-n.born)/900);
+    const d = (n.r*2 + flash*26) * p.s;
+    cx2d.globalAlpha = .75 + .25*Math.sin(t/900 + n.e.seq);
+    cx2d.drawImage(sprite(n.color), p.x-d/2, p.y-d/2, d, d);
+  }
+
+  // ghosts — the mind's report-only proposals, fading truthfully away
+  for (let i=ghosts.length-1; i>=0; i--){ const g = ghosts[i], life = (t-g.born)/45000;
+    if (life > 1) { ghosts.splice(i,1); continue; }
+    const a = g.a + t/2600, p = project({x:Math.cos(a)*g.r, y:6*Math.sin(a*1.7), z:Math.sin(a)*g.r});
+    if (!p) continue; const d = 15*p.s;
+    cx2d.globalAlpha = .5*(1-life);
+    cx2d.drawImage(sprite(PAL.magenta), p.x-d/2, p.y-d/2, d, d); }
+
+  // the capability ring — installed powers orbiting the whole record
+  cx2d.globalCompositeOperation = 'source-over';
+  const R = Rg + 48; let ci = 0;
+  for (const [name] of caps){
+    const a = t/9000 + (ci++ / Math.max(caps.size,1)) * 6.283;
+    const p = project({ x: Math.cos(a)*R, y: -4, z: Math.sin(a)*R }); if (!p) continue;
+    const d = 7*p.s;
+    cx2d.save(); cx2d.translate(p.x,p.y); cx2d.rotate(Math.PI/4);
+    cx2d.fillStyle = PAL.amber; cx2d.globalAlpha = .95;
+    cx2d.shadowColor = PAL.amber; cx2d.shadowBlur = 12*devicePixelRatio;
+    cx2d.fillRect(-d/2,-d/2,d,d); cx2d.restore();
+    cx2d.globalAlpha = .8; cx2d.fillStyle = '#e8d9b0';
+    cx2d.font = (10*devicePixelRatio)+'px ui-monospace,monospace';
+    cx2d.fillText(name, p.x + d, p.y + 3*devicePixelRatio);
+  }
+  cx2d.globalAlpha = 1;
+
+  const up = Math.floor((t - t0)/1000);
+  ui.n_up.textContent = Math.floor(up/60) + ':' + String(up%60).padStart(2,'0');
+  if (thinking) ui.status.textContent = 'the mind is exploring the instance… '
+      + ((t-thinkT0)/1000).toFixed(0) + 's';
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+poll(); setInterval(poll, 1500);
+</script>
+</body>
+</html>

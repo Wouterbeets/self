@@ -311,6 +311,10 @@ SELF_MIND_ID     author string signed into receipts
   network); `mind-opencode` is a working tool-capable mind (it delegates to
   `opencode run`, which can inspect `SELF_HOME`). Not part of the kernel.
 - `demo.sh` — the offline, no-mind walkthrough of the loop.
+- `theater/` — the flashy, optional, deletable front end (`make theater`): the
+  log as a galaxy of splats, capabilities as an orbiting ring, voice-in /
+  speech-out `think`. A lens over the same log and seams, holding no state —
+  see `theater/README.md`. Not part of the kernel.
 - `lessons/journal` — the smallest example: one command, one projection.
 - `lessons/memory` — durable memory for a stateless mind: `remember` writes
   facts to the log; a cold mind orients from `/memory`. The in-log answer to
