@@ -2,8 +2,10 @@
 """mind-http-server — a dedicated, minimal mind for self: one HTTP endpoint
 (POST /run) in front of a local OpenAI-compatible model, with a small tool
 loop so the model can explore SELF_HOME itself. Python standard library only.
-The weights live behind whatever OpenAI-compatible server you already run —
-llama.cpp's llama-server, Ollama, vLLM — e.g. Qwen3 30B/32B on one RTX 4090.
+The weights live behind whatever OpenAI-compatible server you already run.
+The defaults assume Qwen3.6-27B (dense, Apache-2.0, ~17 GB at Q4_K_M — one
+24 GB card) on llama.cpp's llama-server at its default bind, 127.0.0.1:8080,
+so that setup needs zero MIND_* configuration.
 
     self ── SELF_MIND=examples/mind-http ──▶ POST /run ──▶ this server
                                                   │  tool loop: bash, run
@@ -12,13 +14,13 @@ llama.cpp's llama-server, Ollama, vLLM — e.g. Qwen3 30B/32B on one RTX 4090.
 
 Point the model server at the GPU, this mind at the model, self at the shim:
 
-    # 1. the model (pick one)
-    llama-server -m Qwen3-30B-A3B-Q4_K_M.gguf --jinja -ngl 99 -c 32768 --port 8080
-    #   (--jinja is required for tool calls with Qwen templates)
-    # or: ollama pull qwen3:32b
-    #   → MIND_MODEL_URL=http://127.0.0.1:11434/v1 MIND_MODEL=qwen3:32b
-    # or: vllm serve Qwen/Qwen3-32B-AWQ --enable-auto-tool-choice --tool-call-parser hermes
-    #   → MIND_MODEL_URL=http://127.0.0.1:8000/v1 MIND_MODEL=Qwen/Qwen3-32B-AWQ
+    # 1. the model (llama-server's default bind is the default MIND_MODEL_URL)
+    llama-server -hf unsloth/Qwen3.6-27B-GGUF:Q4_K_M --jinja -ngl 99 -fa \
+        -c 65536 --temp 0.7 --top-p 0.8 --top-k 20
+    #   --jinja parses tool calls via the GGUF's embedded chat template —
+    #   without it the model cannot call bash/run. Sampling per the model
+    #   card. Any other OpenAI-compatible server works: set MIND_MODEL_URL
+    #   (Ollama: http://127.0.0.1:11434/v1) and MIND_MODEL to its tag.
 
     # 2. this mind
     ./examples/mind-http-server &
@@ -30,8 +32,8 @@ Point the model server at the GPU, this mind at the model, self at the shim:
 Environment:
     MIND_BIND          bind address           (default 127.0.0.1:8484)
     MIND_MODEL_URL     OpenAI-compatible base (default http://127.0.0.1:8080/v1)
-    MIND_MODEL         model name to request  (default "qwen3"; llama-server
-                        serves one model and ignores the name)
+    MIND_MODEL         model name to request  (default "qwen3.6-27b";
+                        llama-server serves one model and ignores the name)
     MIND_API_KEY       bearer token, if the model server wants one
     MIND_MAX_TURNS     tool-loop budget per ask        (default 32)
     MIND_BASH_TIMEOUT  seconds per bash call           (default 120)
@@ -72,7 +74,7 @@ def env(name, default):
 
 BIND = env("MIND_BIND", "127.0.0.1:8484")
 MODEL_URL = env("MIND_MODEL_URL", "http://127.0.0.1:8080/v1").rstrip("/")
-MODEL = env("MIND_MODEL", "qwen3")
+MODEL = env("MIND_MODEL", "qwen3.6-27b")
 API_KEY = env("MIND_API_KEY", "")
 MAX_TURNS = int(env("MIND_MAX_TURNS", "32"))
 BASH_TIMEOUT = int(env("MIND_BASH_TIMEOUT", "120"))

@@ -46,8 +46,10 @@ export SELF_MIND="$PWD/examples/mind-stub"
 
 ## `mind-http` + `mind-http-server` — a local model as the mind
 
-A two-piece mind for running a local model (e.g. Qwen3 30B/32B on one RTX
-4090) as the mind, without adopting a whole coding agent. This is the truer
+A two-piece mind for running a local model as the mind, without adopting a
+whole coding agent. The defaults assume Qwen3.6-27B (dense, ~17 GB at
+Q4_K_M — one RTX 4090) behind llama.cpp's `llama-server` at its default
+port, so that setup needs zero `MIND_*` configuration. This is the truer
 test of the contract: a bare model, a bash tool, and the instance's rendered
 state — nothing else.
 
@@ -63,8 +65,9 @@ state — nothing else.
   body back onto the kernel's pipe. The seam self sees stays a dumb pipe.
 
 ```sh
-# the model, on the GPU (--jinja enables tool calls with Qwen templates)
-llama-server -m Qwen3-30B-A3B-Q4_K_M.gguf --jinja -ngl 99 -c 32768 --port 8080
+# the model, on the GPU (--jinja enables tool calls; sampling per the model card)
+llama-server -hf unsloth/Qwen3.6-27B-GGUF:Q4_K_M --jinja -ngl 99 -fa \
+    -c 65536 --temp 0.7 --top-p 0.8 --top-k 20
 
 # the mind, beside the instance (it must see SELF_HOME on its filesystem)
 ./examples/mind-http-server &
