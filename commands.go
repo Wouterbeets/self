@@ -239,7 +239,7 @@ func cmdThink(home, prompt string) error {
 	if err != nil {
 		return fmt.Errorf("mind: %w", err)
 	}
-	out := map[string]any{"response": res.Response, "events": res.Events, "declarations": res.Events}
+	out := map[string]any{"response": res.Response, "events": res.Events}
 	// think appends nothing — the routed mind rides the reply instead of the
 	// log, and only when a roster makes routing a fact worth reporting. A
 	// refusal rides the reply too, for the same reason.

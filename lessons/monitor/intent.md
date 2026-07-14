@@ -24,6 +24,6 @@ It provides the "something that can say no" and automated completion check.
 
 ## what good looks like
 
-After `self learn some-lesson`, run `self run monitor.check some-lesson` (or auto-trigger on ingest). If tests pass / projection shows expected state / success criteria met → `monitor.verified`. If not → `monitor.rejected "tests failing because..."` + retry suggestion. The loop retries with modified intent until accepted or human-reviewed.
+After `self learn some-lesson`, run `self run monitor.check some-lesson` (or auto-trigger on ingest). If tests pass / projection shows expected state / success criteria met → `monitor.verified`. If not → `monitor.rejected "tests failing because..."` + retry suggestion. The loop retries with modified intent — **bounded**: after three rejections of the same intent, stop requesting retries and leave the trail of `monitor.rejected` events for a human or the next `reflect`; an unbounded retry loop is itself the failure mode a monitor exists to catch.
 
 This makes the strange loop robust: proposals are verified before (or after) becoming part of the surface.
