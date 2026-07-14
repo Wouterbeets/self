@@ -9,7 +9,7 @@ It provides the "something that can say no" and automated completion check.
 ## surface
 
 - `self run monitor.check <intent-ref> <evidence...>` : runs verification for a referenced intent/task. Emits `monitor.verified` or `monitor.rejected` events with reasoning and optional retry suggestions.
-- `/monitor` : projection showing recent verifications, pending retries, rejected intents with explanations.
+- `/monitor` : projection showing recent verifications, pending retries, rejected intents with explanations. It should consume the kernel's own no-vocabulary alongside the monitor's — `monitor.verified`, `monitor.rejected`, `retry.requested`, plus `mind.refused`, `review.rejected`, and `compile.escalated` — so this one page shows every no in the system: who declined what, and why.
 
 - Events: `monitor.verified`, `monitor.rejected`, `retry.requested` (with modified intent).
 
@@ -18,11 +18,12 @@ It provides the "something that can say no" and automated completion check.
 - The monitor uses the current state (projections, log) + success criteria from the intent to judge achievement.
 - On reject: explain why, suggest modifications, optionally trigger retry by emitting a new declaration or task.
 - Idempotent and safe: re-checking the same intent is harmless.
-- Use a separate model invocation if needed for judgment (via the mind seam), or deterministic rules for simple cases.
+- When judgment needs a model, the command shells out to `self think "<judgment prompt>"` and reads the JSON reply — with named minds plugged, that ask routes through `SELF_MIND_THINK`, so the monitor's judgment rides the cheap tier by default and the operator can re-route it without touching the script. Deterministic rules stay preferable for simple cases.
+- The monitor is the post-hoc layer of a three-layer no: a maker can refuse an ask outright (`mind.refused`, kernel), a checker can reject a script before it installs (`SELF_MIND_REVIEW` → `review.rejected`, kernel), and the monitor judges outcomes after they land (this lesson, user space). It reads the first two layers' events as evidence rather than duplicating them.
 - Integrate with `reflect`: the monitor can feed into improvement cycles.
 
 ## what good looks like
 
-After `self learn some-lesson`, run `self run monitor.check some-lesson` (or auto-trigger on ingest). If tests pass / projection shows expected state / success criteria met → `monitor.verified`. If not → `monitor.rejected "tests failing because..."` + retry suggestion. The loop retries with modified intent until accepted or human-reviewed.
+After `self learn some-lesson`, run `self run monitor.check some-lesson` (or auto-trigger on ingest). If tests pass / projection shows expected state / success criteria met → `monitor.verified`. If not → `monitor.rejected "tests failing because..."` + retry suggestion. The loop retries with modified intent — **bounded**: after three rejections of the same intent, stop requesting retries and leave the trail of `monitor.rejected` events for a human or the next `reflect`; an unbounded retry loop is itself the failure mode a monitor exists to catch.
 
 This makes the strange loop robust: proposals are verified before (or after) becoming part of the surface.

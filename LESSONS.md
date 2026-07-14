@@ -75,7 +75,9 @@ cover:
   the idea to work (field names, ordering, how views consume which events).
 - **Anti-goals** — what it must *not* do. These are as useful as the goals.
 - **What good looks like** — a short end-to-end walkthrough. If you can describe
-  the demo, the mind can build toward it.
+  the demo, the mind can build toward it. State it checkably — what a page
+  shows, what event a command emits — so a monitor (see `lessons/monitor`) can
+  verify achievement against the intent instead of taking success on report.
 
 Two rules of thumb:
 

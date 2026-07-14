@@ -93,3 +93,42 @@ export SELF_MIND="$PWD/examples/mind-opencode"
 export SELF_OPENCODE_MODEL=github-copilot/gpt-5.5  # optional
 self learn lessons/chat
 ```
+
+## Tiered minds — all three at once
+
+The adapters compose: the kernel can route among several plugged minds by
+name (see [Named minds](../README.md#named-minds--routing-among-several)).
+A working three-tier setup — a free local model for cheap asks, a
+subscription model for implementation bulk, a frontier agent to interpret
+intent and orchestrate the other two:
+
+```sh
+# tier "fast": a local model behind mind-http-server (free, always on)
+llama-server -m Qwen3.6-27B-Q4_K_M.gguf --jinja -ngl 99 -c 32768 --port 8080
+./examples/mind-http-server &
+
+# tier "deep": a subscription model through opencode
+# tier "top":  claude -p, no adapter
+
+export SELF_MIND="claude -p"                        # default + final fallback
+export SELF_MINDS="fast deep top"
+export SELF_MIND_FAST="$PWD/examples/mind-http"
+export SELF_MIND_DEEP="$PWD/examples/mind-opencode"
+export SELF_MIND_TOP="claude -p"
+export SELF_MIND_ID_FAST=qwen3.6-27b SELF_MIND_ID_DEEP=glm-5.2 SELF_MIND_ID_TOP=claude
+export SELF_OPENCODE_MODEL=zai/glm-5.2              # what "deep" answers as
+
+export SELF_MIND_THINK=fast SELF_MIND_COMPILE=deep
+export SELF_MIND_LEARN=top SELF_MIND_REFLECT=top
+export SELF_MIND_ESCALATION="fast deep top"
+
+self learn lessons/journal
+```
+
+The learn goes to `top`, which decomposes the intent and may pin any declared
+capability to a mind (`"mind":"fast"` in the declaration payload); compiles
+default to `deep`; a compile that fails mechanically escalates up the chain,
+logged as `compile.escalated`. Each receipt is signed by the mind that
+actually authored the script, so `events.jsonl` always answers who wrote
+what. Every routed process sees the unchanged single-mind contract — none of
+these adapters know the roster exists.

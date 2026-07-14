@@ -86,6 +86,26 @@ environment:
                     deterministic offline mind for demos/tests.
   SELF_MIND_ID     provenance by-line signed into script.compiled receipts
                     (default: the mind executable)
+
+  route among several minds (optional; SELF_MIND alone works as above):
+  SELF_MINDS       a roster of names, space-separated, e.g. "fast deep top" —
+                    each name binds an executable via SELF_MIND_<NAME> and an
+                    optional identity via SELF_MIND_ID_<NAME>
+  SELF_MIND_THINK / SELF_MIND_REFLECT / SELF_MIND_LEARN / SELF_MIND_COMPILE
+                    route an ask kind to a roster name (or a verbatim
+                    executable); unset kinds use SELF_MIND
+  SELF_MIND_ESCALATION
+                    ordered roster names, cheap first — a compile that fails
+                    mechanically (mind errored, or answered without a script)
+                    retries one name up, logged as compile.escalated. A learn
+                    or reflect prompt names the roster so the orchestrating
+                    mind may pin any declaration to a mind: "mind":"<name>"
+  SELF_MIND_REVIEW  a checker mind (roster name or executable) that judges
+                    every authored script BEFORE it installs: review.rejected
+                    blocks the install (logged, with one recompile carrying
+                    the objection); a reviewer that itself fails lets the
+                    script through with a note. Any mind may also answer any
+                    ask with mind.refused — a recorded veto, never escalated
 `
 }
 
@@ -101,8 +121,19 @@ Mind process contract
               capabilities/) with its own tools — a plain stdin/stdout adapter
               with no file access cannot do the job. Coding-agent minds
               (opencode run, claude -p) already have such tools.
-  SELF_ASK     request kind: think | reflect | learn | compile
+  SELF_ASK     request kind: think | reflect | learn | compile | review
   argv         the prompt is passed as the last argument
+
+  Several minds may be plugged at once and routed by name: SELF_MINDS
+  declares a roster ("fast deep top"), SELF_MIND_<NAME> binds each name to
+  an executable, SELF_MIND_<KIND> routes an ask kind to a name, and
+  SELF_MIND_ESCALATION orders names cheap→expensive for compile retries.
+  Each spawned process sees the same contract above — a routed mind does
+  not need to know it was routed. Receipts sign SELF_MIND_ID_<NAME> (then
+  SELF_MIND_ID, then the executable) as the author, learn/reflect append a
+  mind.routed event, and each escalation hop appends compile.escalated —
+  routing is in the log or in the signature, never in hidden state. A
+  declaration may carry "mind":"<name>" to pin its compile to a roster mind.
   stdin        an orientation brief (plain text): where the mind is, what
                capabilities exist, and where to look for the rest. The mind is
                expected to explore SELF_HOME itself for depth — this is a
@@ -122,6 +153,15 @@ Mind reply events
 
   script.authored     answer to SELF_ASK=compile only:
                       {"name":"script.authored","payload":{"script":"#!/bin/sh\n..."}}
+
+  mind.refused        any ask may be answered with an explicit no — a recorded
+                      decision, never escalated to another mind:
+                      {"name":"mind.refused","payload":{"reason":"..."}}
+
+  review.approved /   answer to SELF_ASK=review only (the pre-install gate a
+  review.rejected     SELF_MIND_REVIEW checker runs); a rejection carries a
+                      specific objection and is woven into one recompile:
+                      {"name":"review.rejected","payload":{"reason":"..."}}
 
   capability.retired  retire a capability: its script and page leave the derived
                       surface; the log keeps all history and a re-declaration
@@ -166,7 +206,7 @@ Accounts (give / learn)
 
 Declarations — not code — are what cross every boundary. A generated script
 installs only after the local kernel signs a script.compiled receipt with
-SELF_HOME/.secret and the current SELF_MIND_ID.
+SELF_HOME/.secret and the identity of the mind that authored it.
 `
 }
 

@@ -31,13 +31,7 @@ type llm struct {
 // carries. SELF_MIND_ID lets an agent name itself; otherwise the mind
 // executable is the honest mechanical answer.
 func (c *llm) identity() string {
-	if id := strings.TrimSpace(os.Getenv("SELF_MIND_ID")); id != "" {
-		return id
-	}
-	if exe := mindExe(); exe != "" {
-		return exe
-	}
-	return "mind"
+	return mindRef{exe: mindExe()}.identity()
 }
 
 func newLLM(home string) *llm {
@@ -61,16 +55,18 @@ const mindAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout.
 
 THIS REPLY IS FINAL — you run once per ask and are never re-invoked. Explore first, THEN answer completely: never end on a plan or a promise ("I'll explore and then respond") — whatever you have not said when you exit was never said.
 
+YOU MAY SAY NO — if you judge the ask itself wrong to fulfill (not merely hard), answer with one line: {"name":"mind.refused","payload":{"reason":"<why>"}} and nothing else. A refusal is a recorded decision, not a failure: the kernel logs your reason and never retries the ask on another mind.
+
 WHAT YOU ARE GIVEN — your stdin is an orientation brief: where you are, what capabilities exist, where to look for the rest. That is all. To do your job you must EXPLORE the instance surface with your tools: read ` + "`SELF_HOME/site/kernel.html`" + ` for the full self-description, ` + "`SELF_HOME/site/*.html`" + ` for the rendered state a human sees, ` + "`SELF_HOME/events.jsonl`" + ` for the raw log, ` + "`SELF_HOME/capabilities/`" + ` for the compiled scripts. The kernel holds no internal state you cannot see on disk. A mind without tools to read those files cannot do this job.`
 
 // ────────────────────────────── the compiler ────────────────────────────────
 
-func (c *llm) compileCommand(d commandDecl) (string, error) {
-	return compileViaMind(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d))
+func (c *llm) compileCommand(d commandDecl) (string, string, error) {
+	return compileViaMind(c.home, c.intent, c.reasoning, "command", d.Name, jsonRepr(d), d.Mind)
 }
 
-func (c *llm) compileProjector(d projectorDecl) (string, error) {
-	return compileViaMind(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d))
+func (c *llm) compileProjector(d projectorDecl) (string, string, error) {
+	return compileViaMind(c.home, c.intent, c.reasoning, "projector", d.Name, jsonRepr(d), d.Mind)
 }
 
 // compileViaMind hands a compile ask to the plugged mind through the same
@@ -95,7 +91,9 @@ DECLARATION (%s %q):
 If the declaration carries an "implementation", it is a reference script: verify it and adapt it here — never copy it blindly. If it also carries a "revision", preserve the existing behavior except for that requested change. Use your own tools freely to write and TEST the script by execution before answering — but do not install it, edit events.jsonl, or run the self CLI: the kernel installs and signs the script from the one line you print, and nothing else. If this is a projector, emit only bare semantic HTML: no CSS, no JavaScript, no inline style attributes, no external assets.
 
 Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
-{"name":"script.authored","payload":{"script":"<the full script>"}}`, pipeContract, typ, name, decl)
+{"name":"script.authored","payload":{"script":"<the full script>"}}
+
+If the declaration itself should not be built — malformed, destructive, or against this instance's intent — refuse instead with {"name":"mind.refused","payload":{"reason":"<why>"}}: a refusal is recorded with your reason and never escalated to another mind.`, pipeContract, typ, name, decl)
 	if strings.TrimSpace(exemplarScript) != "" {
 		prompt = "Here is a recently compiled " + typ + " as an idiom/reference for this instance. Learn its style and pipe-contract shape, but do not copy it blindly.\n\n--- EXEMPLAR " + exemplarName + " ---\n" + exemplarScript + "\n--- END EXEMPLAR ---\n\n" + prompt
 	}
@@ -137,16 +135,140 @@ func exemplarScript(home, typ, name string) (exName, exScript string) {
 	return exName, exScript
 }
 
-func compileViaMind(home, intent, reasoning, typ, name, decl string) (string, error) {
+// compileViaMind routes a compile to a resolved mind and returns the script
+// with the identity of the mind that actually authored it — the receipt's
+// by-line. A declaration's hint sets the starting mind; a mechanical failure
+// (the process erroring, or answering without a script) walks up the
+// SELF_MIND_ESCALATION chain, each hop recorded as a compile.escalated event.
+// The unnamed default never escalates: with no roster declared, a failed
+// compile fails exactly as it always has.
+//
+// Two kinds of no are kept distinct on purpose. A mind that CANNOT deliver
+// (crashed, empty answer) triggers escalation — incapacity is a reason to try
+// a stronger mind. A mind that answers mind.refused is saying the ask itself
+// should not be fulfilled — that veto is recorded and honored: never
+// escalated, never retried on a bigger model. And when a review gate is
+// plugged (SELF_MIND_REVIEW), a checker mind judges each authored script
+// before the kernel installs and signs it: one rejection recompiles with the
+// objection woven in; a second rejection fails the compile.
+func compileViaMind(home, intent, reasoning, typ, name, decl, hint string) (string, string, error) {
 	exName, exScript := exemplarScript(home, typ, name)
-	res, err := pipeMind(home, "compile", compilePrompt(intent, reasoning, exName, exScript, typ, name, decl))
+	base := compilePrompt(intent, reasoning, exName, exScript, typ, name, decl)
+	prompt := base
+	m := resolveMind("compile", hint)
+	reviewed := false
+	for {
+		res, err := pipeMindVia(home, "compile", m, prompt)
+		if err == nil && res.Refused != "" {
+			if aerr := appendRefused(home, "compile", m, res.Refused, map[string]any{"type": typ, "name": name}); aerr != nil {
+				return "", "", aerr
+			}
+			return "", "", fmt.Errorf("the mind refused this compile: %s", res.Refused)
+		}
+		if err == nil && strings.TrimSpace(res.Script) == "" {
+			err = fmt.Errorf("the mind answered a compile ask without a script.authored event")
+		}
+		if err != nil {
+			next, ok := escalateFrom(m)
+			if !ok {
+				return "", "", err
+			}
+			fmt.Fprintf(os.Stderr, "self: compile %s %q via mind %q failed: %s — escalating to %q\n", typ, name, m.name, err, next.name)
+			payload, _ := json.Marshal(map[string]any{"type": typ, "name": name, "from": m.name, "to": next.name, "reason": err.Error()})
+			e := newEvent("compile.escalated", payload)
+			if aerr := appendEvent(home, &e); aerr != nil {
+				return "", "", aerr
+			}
+			m = next
+			continue
+		}
+		objection, rejected, rerr := reviewAuthored(home, typ, name, decl, res.Script)
+		if rerr != nil {
+			return "", "", rerr
+		}
+		if !rejected {
+			return res.Script, m.identity(), nil
+		}
+		if reviewed {
+			return "", "", fmt.Errorf("the reviewer rejected the %s %q twice: %s", typ, name, objection)
+		}
+		reviewed = true
+		prompt = "A REVIEWER rejected the previous attempt at this script for the reason below. Author a corrected script that answers the objection.\n\n--- OBJECTION ---\n" + objection + "\n--- END OBJECTION ---\n\n" + base
+	}
+}
+
+// appendRefused records an explicit no as an event: the ask, the mind that
+// declined, and its stated reason. A refusal is a decision, not a failure —
+// the reason belongs in the log, where reflect and a monitor can read it.
+func appendRefused(home, ask string, m mindRef, reason string, extra map[string]any) error {
+	fields := map[string]any{"ask": ask, "mind": m.name, "by": m.identity(), "reason": reason}
+	for k, v := range extra {
+		fields[k] = v
+	}
+	payload, _ := json.Marshal(fields)
+	e := newEvent("mind.refused", payload)
+	return appendEvent(home, &e)
+}
+
+// reviewAuthored pipes an authored script through the review gate, when one
+// is plugged (SELF_MIND_REVIEW names the checker — a roster name or a
+// verbatim executable). Only an explicit review.rejected blocks the install,
+// logged with its reason; approval, silence, and a reviewer that itself fails
+// all let the script through — the last with a note on stderr. The gate is a
+// quality judgment by a mind, never a security boundary: that remains the
+// signature, and a rejected script never reaches it.
+func reviewAuthored(home, typ, name, decl, script string) (string, bool, error) {
+	if strings.TrimSpace(os.Getenv("SELF_MIND_REVIEW")) == "" {
+		return "", false, nil
+	}
+	rev := resolveMind("review", "")
+	res, err := pipeMindVia(home, "review", rev, reviewPrompt(typ, name, decl, script))
 	if err != nil {
-		return "", err
+		fmt.Fprintf(os.Stderr, "self: the review gate failed (%s) — installing unreviewed\n", err)
+		return "", false, nil
 	}
-	if strings.TrimSpace(res.Script) == "" {
-		return "", fmt.Errorf("the mind answered a compile ask without a script.authored event")
+	for _, e := range res.Events {
+		if e["name"] != "review.rejected" {
+			continue
+		}
+		reason := "no reason stated"
+		if p, ok := e["payload"].(json.RawMessage); ok {
+			var pr struct{ Reason string }
+			if json.Unmarshal(p, &pr) == nil && strings.TrimSpace(pr.Reason) != "" {
+				reason = strings.TrimSpace(pr.Reason)
+			}
+		}
+		payload, _ := json.Marshal(map[string]any{"type": typ, "name": name, "mind": rev.name, "by": rev.identity(), "reason": reason})
+		ev := newEvent("review.rejected", payload)
+		if aerr := appendEvent(home, &ev); aerr != nil {
+			return "", false, aerr
+		}
+		fmt.Fprintf(os.Stderr, "self: review rejected %s %q: %s\n", typ, name, reason)
+		return reason, true, nil
 	}
-	return res.Script, nil
+	return "", false, nil
+}
+
+// reviewPrompt frames the checker's ask: a different mind authored the
+// script; judge it against its declaration and the pipe contract, and answer
+// with one verdict line. A rejection must carry a specific, actionable
+// objection — it is woven into exactly one recompile.
+func reviewPrompt(typ, name, decl, script string) string {
+	return fmt.Sprintf(`REVIEW one authored capability before it installs. You are the checker; a different mind was the maker. Judge only what matters: does the script honor the pipe contract below, does it do what its declaration says, and is it free of destructive or out-of-scope behavior? Style is not grounds for rejection. Use your own tools to test the script by execution if you need to — but do not install it, edit events.jsonl, or run the self CLI.
+
+%s
+
+DECLARATION (%s %q):
+%s
+
+--- SCRIPT ---
+%s
+--- END SCRIPT ---
+
+Answer with ONE line of JSON and nothing else — no Markdown, no code fence:
+{"name":"review.approved","payload":{}}
+or
+{"name":"review.rejected","payload":{"reason":"<specific, actionable objection>"}}`, pipeContract, typ, name, decl, script)
 }
 
 // ──────────────────────────────── the mind ─────────────────────────────────
@@ -155,6 +277,118 @@ func compileViaMind(home, intent, reasoning, typ, name, decl string) (string, er
 // named, and a process behind it honors the one mind contract.
 func mindExe() string {
 	return strings.TrimSpace(os.Getenv("SELF_MIND"))
+}
+
+// ────────────────────────────── named minds ─────────────────────────────────
+//
+// An instance may plug more than one mind and route among them by NAME. The
+// kernel stays model-free: it dereferences operator-chosen names to processes
+// and nothing more — which model answers to a name, its endpoint, its cost,
+// all live in the adapter's environment, exactly as with a single SELF_MIND.
+//
+//   SELF_MINDS               the roster: space-separated names, e.g. "fast deep top"
+//   SELF_MIND_<NAME>         the executable a roster name dereferences to
+//   SELF_MIND_ID_<NAME>      per-name provenance, signed into that mind's receipts
+//   SELF_MIND_<KIND>         per-ask-kind route (THINK/REFLECT/LEARN/COMPILE):
+//                            a roster name, else taken verbatim as an executable
+//   SELF_MIND_ESCALATION     ordered names, cheap→expensive; a mechanically
+//                            failed compile retries one step up the chain
+//
+// With none of these set, SELF_MIND alone behaves exactly as it always has.
+
+// mindRef is a resolved mind: a roster name (empty for the unnamed default)
+// and the executable behind it.
+type mindRef struct {
+	name string
+	exe  string
+}
+
+// identity names this mind for provenance: SELF_MIND_ID_<NAME> for a roster
+// mind, then SELF_MIND_ID, then the executable — the honest mechanical answer.
+func (m mindRef) identity() string {
+	if m.name != "" {
+		if id := strings.TrimSpace(os.Getenv("SELF_MIND_ID_" + strings.ToUpper(m.name))); id != "" {
+			return id
+		}
+	}
+	if id := strings.TrimSpace(os.Getenv("SELF_MIND_ID")); id != "" {
+		return id
+	}
+	if m.exe != "" {
+		return m.exe
+	}
+	return "mind"
+}
+
+// rosterNames returns the declared roster. The ask kinds and "id" are
+// reserved — a roster name becomes an env-var suffix (SELF_MIND_<NAME>), and
+// those suffixes already mean something to the kernel.
+func rosterNames() []string {
+	reserved := map[string]bool{"think": true, "reflect": true, "learn": true, "compile": true, "review": true, "id": true}
+	var names []string
+	for _, n := range strings.Fields(os.Getenv("SELF_MINDS")) {
+		if reserved[strings.ToLower(n)] {
+			fmt.Fprintf(os.Stderr, "self: SELF_MINDS name %q is reserved — ignored\n", n)
+			continue
+		}
+		names = append(names, n)
+	}
+	return names
+}
+
+// mindByName dereferences a roster name to its executable. A name outside the
+// roster, or one with no SELF_MIND_<NAME> bound, resolves to nothing.
+func mindByName(name string) (mindRef, bool) {
+	for _, n := range rosterNames() {
+		if n == name {
+			if exe := strings.TrimSpace(os.Getenv("SELF_MIND_" + strings.ToUpper(n))); exe != "" {
+				return mindRef{name: n, exe: exe}, true
+			}
+		}
+	}
+	return mindRef{}, false
+}
+
+// resolveMind picks the mind for an ask: a declaration's hint first (honored
+// only when it names a bound roster mind — a miss is noted and never fatal),
+// then the per-kind route, then the plugged default. An empty result means no
+// mind is plugged in at all, and the ask fails with the usual hint.
+func resolveMind(kind, hint string) mindRef {
+	if hint != "" {
+		if m, ok := mindByName(hint); ok {
+			return m
+		}
+		fmt.Fprintf(os.Stderr, "self: declaration asked for mind %q, which SELF_MINDS does not offer — using the %s route\n", hint, kind)
+	}
+	if v := strings.TrimSpace(os.Getenv("SELF_MIND_" + strings.ToUpper(kind))); v != "" {
+		if m, ok := mindByName(v); ok {
+			return m
+		}
+		return mindRef{exe: v}
+	}
+	return mindRef{exe: mindExe()}
+}
+
+// escalateFrom returns the next bound mind after m in SELF_MIND_ESCALATION.
+// Only a roster-named mind escalates — the unnamed default keeps its
+// fail-fast behavior — and an unbound name in the chain is skipped over.
+func escalateFrom(m mindRef) (mindRef, bool) {
+	if m.name == "" {
+		return mindRef{}, false
+	}
+	chain := strings.Fields(os.Getenv("SELF_MIND_ESCALATION"))
+	for i, n := range chain {
+		if n != m.name {
+			continue
+		}
+		for _, next := range chain[i+1:] {
+			if nm, ok := mindByName(next); ok {
+				return nm, true
+			}
+		}
+		break
+	}
+	return mindRef{}, false
 }
 
 func mindEnv(home, kind string) []string {
@@ -180,7 +414,14 @@ func mindEnv(home, kind string) []string {
 // anything else is a returned event — and bare prose joins the reply. With no
 // mind plugged in, the ask fails with a hint.
 func pipeMind(home, kind, prompt string) (*mindResult, error) {
-	exe := mindExe()
+	return pipeMindVia(home, kind, resolveMind(kind, ""), prompt)
+}
+
+// pipeMindVia is pipeMind with the mind already resolved — the compile
+// escalation loop steps through minds without re-resolving, and the result
+// remembers which mind ran so callers can log the route.
+func pipeMindVia(home, kind string, m mindRef, prompt string) (*mindResult, error) {
+	exe := m.exe
 	if exe == "" {
 		return nil, fmt.Errorf("no mind is plugged in — %s", mindHint)
 	}
@@ -202,7 +443,7 @@ func pipeMind(home, kind, prompt string) (*mindResult, error) {
 		return nil, fmt.Errorf("start mind %s: %w (%s)", filepath.Base(bin), err, mindHint)
 	}
 	feedText(stdin, brief)
-	res := &mindResult{Events: []map[string]any{}}
+	res := &mindResult{Events: []map[string]any{}, Mind: m}
 	var prose []string
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1024*1024), 8*1024*1024)
@@ -233,6 +474,13 @@ func pipeMind(home, kind, prompt string) (*mindResult, error) {
 			var p struct{ Script string }
 			if json.Unmarshal(e.Payload, &p) == nil {
 				res.Script = p.Script
+			}
+		case "mind.refused":
+			var p struct{ Reason string }
+			json.Unmarshal(e.Payload, &p)
+			res.Refused = strings.TrimSpace(p.Reason)
+			if res.Refused == "" {
+				res.Refused = "no reason stated"
 			}
 		default:
 			res.Events = append(res.Events, map[string]any{"name": e.Name, "payload": json.RawMessage(e.Payload)})

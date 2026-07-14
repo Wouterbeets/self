@@ -301,6 +301,11 @@ type commandDecl struct {
 		Request     string `json:"request,omitempty"`
 		FromReceipt string `json:"from_receipt,omitempty"`
 	} `json:"revision,omitempty"`
+	// Mind optionally names the roster mind (SELF_MINDS) that should compile
+	// this declaration — the orchestrator's routing hint, in the log by
+	// construction because it rides the declaration payload. A name the
+	// roster does not offer falls back to the compile route.
+	Mind string `json:"mind,omitempty"`
 }
 
 type projectorDecl struct {
@@ -312,4 +317,5 @@ type projectorDecl struct {
 		Request     string `json:"request,omitempty"`
 		FromReceipt string `json:"from_receipt,omitempty"`
 	} `json:"revision,omitempty"`
+	Mind string `json:"mind,omitempty"` // see commandDecl.Mind
 }
