@@ -64,7 +64,7 @@ describe capabilities that can be built this way:
 ## Writing a good `intent.md`
 
 The top-level directories in `lessons/` are worked examples. Read them.
-`journal` is the smallest; `chat` is a full surface; **monitor** demonstrates the orchestrator/monitor/rejector role — the critic that checks intent achievement and can request retries. A good intent tends to
+`journal` is the smallest; `chat` is a full surface; **monitor** demonstrates the orchestrator/monitor/rejector role — the critic that checks intent achievement and can request retries; **harvest** grows an existing surface in place — one verb and a projector revision that turn ended sessions into durable work facts. A good intent tends to
 cover:
 
 - **Purpose** — what this is for, in a sentence or two.
