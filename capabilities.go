@@ -124,11 +124,9 @@ func stateBrief(home string) string {
 		return b.String()
 	}
 
-	fmt.Fprintf(&b, "## read this first\n\n")
-	fmt.Fprintf(&b, "- `site/kernel.html` — the instance's full self-description (capabilities, the pipe contract, where things live).\n")
-	fmt.Fprintf(&b, "- `site/*.html` — rendered state, the same pages a human sees.\n")
-	fmt.Fprintf(&b, "- `events.jsonl` — the whole append-only log (the only truth).\n")
-	fmt.Fprintf(&b, "- `capabilities/` — the compiled scripts currently installed.\n\n")
+	fmt.Fprintf(&b, "## orientation\n\n")
+	fmt.Fprintf(&b, "- `site/kernel.html` — read this closely: the instance's full self-description (capabilities, the pipe contract, where things live).\n")
+	fmt.Fprintf(&b, "- Explore the rest as you see fit: `site/*.html` (rendered state, the same pages a human sees), `events.jsonl` (the whole append-only log, the only truth), `capabilities/` (the compiled scripts currently installed).\n\n")
 
 	if len(projOrder) > 0 {
 		b.WriteString("## projections (current state)\n\n")
