@@ -23,9 +23,9 @@ Env:
   SELF_API_KEY    bearer token (or SELF_API_KEY_FILE pointing at one)
   SELF_API_MODEL  default grok-4
   SELF_RUN_URL    default derived from SELF_BIND, else http://127.0.0.1:7777
-  SELF_BRAIN_MAX_TURNS     default 16
-  SELF_BRAIN_BASH_TIMEOUT  seconds, default 30
-  SELF_BRAIN_DEBUG=1       trace tool calls per turn on stderr
+  SELF_MIND_MAX_TURNS     default 16
+  SELF_MIND_BASH_TIMEOUT  seconds, default 30
+  SELF_MIND_DEBUG=1       trace tool calls per turn on stderr
 """
 
 import json
@@ -154,9 +154,9 @@ def api_key():
 
 def tool_bash(cmd):
     home = self_home()
-    timeout = int(os.environ.get("SELF_BRAIN_BASH_TIMEOUT", "30"))
+    timeout = int(os.environ.get("SELF_MIND_BASH_TIMEOUT", "30"))
     if platform.system() == "Darwin":
-        tmp = tempfile.mkdtemp(prefix="selfbrain-")
+        tmp = tempfile.mkdtemp(prefix="selfmind-")
         profile = DARWIN_PROFILE.format(tmp=tmp)
         full = ["sandbox-exec", "-p", profile, "/bin/bash", "-c", cmd]
     elif os.path.exists("/usr/bin/bwrap") or os.path.exists("/usr/local/bin/bwrap"):
@@ -215,7 +215,7 @@ def chat(messages):
         if attempt:
             time.sleep(2 ** attempt)
         try:
-            with urllib.request.urlopen(req, timeout=int(os.environ.get("SELF_BRAIN_API_TIMEOUT", "120")), context=SSL_CTX) as resp:
+            with urllib.request.urlopen(req, timeout=int(os.environ.get("SELF_MIND_API_TIMEOUT", "120")), context=SSL_CTX) as resp:
                 return json.loads(resp.read())["choices"][0]["message"]
         except urllib.error.HTTPError as e:
             if e.code in (408, 429, 500, 502, 503, 504):
@@ -269,8 +269,8 @@ def main():
         {"role": "system", "content": system_prompt(ask)},
         {"role": "user", "content": (brief.strip() + "\n\n" + prompt).strip()},
     ]
-    max_turns = int(os.environ.get("SELF_BRAIN_MAX_TURNS", "16"))
-    debug = os.environ.get("SELF_BRAIN_DEBUG") == "1"
+    max_turns = int(os.environ.get("SELF_MIND_MAX_TURNS", "16"))
+    debug = os.environ.get("SELF_MIND_DEBUG") == "1"
     nudged = False
     for turn in range(max_turns):
         msg = chat(messages)

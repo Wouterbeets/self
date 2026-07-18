@@ -21,8 +21,7 @@ judgment is the mind's; the log only remembers that the judgment happened.
   `session.started` event, and the note says what was kept and where
   ("kept: worklog 590, signal 591") or states plainly that nothing was
   ("nothing durable — routine deploy watch, clean"). `by` comes from
-  `SELF_MIND_ID` when the caller's environment provides it, falling back
-  to `SELF_BRAIN_ID` for older environments.
+  `SELF_MIND_ID` when the caller's environment provides it.
 - The projection that already shows sessions (`/agents` on instances that
   have one) grows a **harvest queue** in place — not a new page: every
   session that has ended and whose seq no `session.harvested` ref covers,
