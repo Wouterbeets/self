@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""mind-api — a SELF_MIND with a typed tool-calling channel.
+
+Instead of parsing events out of a coding agent's stdout prose, the mind runs
+a direct chat-completions loop with three tools:
+
+  bash(cmd)             sensory: read-only, network-less exploration of SELF_HOME
+  run(command, args)    motor: act through the instance's own HTTP surface
+                        (POST /run/<command>) — same channel a human's form uses
+  finish(reply, events) terminal: the typed final answer; its events are flushed
+                        to the kernel as JSONL, exactly once, at the end
+
+Growth (command.declared / projector.declared / script.authored) rides in
+finish.events — proposals, never mid-loop mutations. Actions (run) are real and
+land immediately via the serving kernel, which is fine: they are ordinary
+capability executions, the same as a browser click.
+
+Zero dependencies (urllib only). OpenAI-compatible wire, so xAI, Groq,
+OpenRouter and Ollama all work.
+
+Env:
+  SELF_API_URL    default https://api.x.ai/v1  (chat completions base)
+  SELF_API_KEY    bearer token (or SELF_API_KEY_FILE pointing at one)
+  SELF_API_MODEL  default grok-4
+  SELF_RUN_URL    default derived from SELF_BIND, else http://127.0.0.1:7777
+  SELF_BRAIN_MAX_TURNS     default 16
+  SELF_BRAIN_BASH_TIMEOUT  seconds, default 30
+  SELF_BRAIN_DEBUG=1       trace tool calls per turn on stderr
+"""
+
+import json
+import os
+import platform
+import ssl
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+MAX_TOOL_OUTPUT = 20_000
+
+EVENT_NAMES = (
+    "chat.message", "command.declared", "projector.declared",
+    "script.authored", "capability.retired",
+)
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Run a read-only shell command inside SELF_HOME to explore the instance (events.jsonl, capabilities/, site/). Sandboxed: no writes, no network. Compose freely: find, grep, tail, jq, wc.",
+            "parameters": {
+                "type": "object",
+                "properties": {"cmd": {"type": "string", "description": "shell command; cwd is SELF_HOME"}},
+                "required": ["cmd"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run",
+            "description": "Execute an existing capability through the instance's HTTP surface, exactly like a human submitting its form. Appends that command's events to the log immediately. args are positional, in the command's declared field order.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "args": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["command", "args"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "finish",
+            "description": "Finish this ask. reply is your complete prose answer (in the user's language) — it becomes the chat message, do NOT also emit a chat.message event. events carries only protocol events: command.declared / projector.declared / script.authored / capability.retired, each {name, payload}. Declarations belong here, never in prose.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reply": {"type": "string"},
+                    "events": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "enum": list(EVENT_NAMES)},
+                                "payload": {"type": "object"},
+                            },
+                            "required": ["name", "payload"],
+                        },
+                    },
+                },
+                "required": ["reply", "events"],
+            },
+        },
+    },
+]
+
+DARWIN_PROFILE = """(version 1)
+(deny default)
+(allow process-fork)
+(allow process-exec)
+(allow file-read*)
+(allow file-write* (subpath "/dev/null") (subpath "{tmp}"))
+(allow file-ioctl (subpath "/dev"))
+(allow sysctl-read)
+(allow mach-lookup)
+(deny network*)
+"""
+
+
+def ssl_context():
+    """Homebrew pythons often lack a wired CA bundle; find one that exists."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        pass
+    for cafile in ("/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"):
+        if os.path.exists(cafile):
+            return ssl.create_default_context(cafile=cafile)
+    return ssl.create_default_context()
+
+
+SSL_CTX = ssl_context()
+
+
+def self_home():
+    return os.environ.get("SELF_HOME") or os.getcwd()
+
+
+def run_url():
+    if u := os.environ.get("SELF_RUN_URL"):
+        return u.rstrip("/")
+    bind = os.environ.get("SELF_BIND", "127.0.0.1:7777")
+    if ":" not in bind:
+        bind += ":7777"
+    return f"http://{bind}"
+
+
+def api_key():
+    if k := os.environ.get("SELF_API_KEY"):
+        return k.strip()
+    if f := os.environ.get("SELF_API_KEY_FILE"):
+        return open(f).read().strip()
+    return ""
+
+
+def tool_bash(cmd):
+    home = self_home()
+    timeout = int(os.environ.get("SELF_BRAIN_BASH_TIMEOUT", "30"))
+    if platform.system() == "Darwin":
+        tmp = tempfile.mkdtemp(prefix="selfbrain-")
+        profile = DARWIN_PROFILE.format(tmp=tmp)
+        full = ["sandbox-exec", "-p", profile, "/bin/bash", "-c", cmd]
+    elif os.path.exists("/usr/bin/bwrap") or os.path.exists("/usr/local/bin/bwrap"):
+        bwrap = "/usr/bin/bwrap" if os.path.exists("/usr/bin/bwrap") else "/usr/local/bin/bwrap"
+        full = [
+            bwrap, "--ro-bind", "/", "/", "--tmpfs", "/tmp",
+            "--dev", "/dev", "--unshare-net", "--die-with-parent",
+            "/bin/bash", "-c", cmd,
+        ]
+    else:
+        # No sandbox available: refuse rather than run unjailed.
+        return "error: no sandbox available on this host (need sandbox-exec or bwrap)"
+    try:
+        p = subprocess.run(full, cwd=home, text=True, timeout=timeout,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           stdin=subprocess.DEVNULL)
+        out = p.stdout or ""
+    except subprocess.TimeoutExpired:
+        return f"error: timeout after {timeout}s"
+    if len(out) > MAX_TOOL_OUTPUT:
+        out = out[:MAX_TOOL_OUTPUT] + f"\n…[truncated at {MAX_TOOL_OUTPUT} chars]"
+    return out if out.strip() else "(no output, exit %d)" % p.returncode
+
+
+def tool_run(command, args):
+    # Positional form-encoded values, document order — the kernel's contract.
+    body = "&".join(f"v{i}={urllib.parse.quote(str(a))}" for i, a in enumerate(args))
+    req = urllib.request.Request(
+        f"{run_url()}/run/{urllib.parse.quote(command)}",
+        data=body.encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return f"ok ({resp.status})"
+    except urllib.error.HTTPError as e:
+        return f"error {e.code}: {e.read().decode(errors='replace')[:500]}"
+    except Exception as e:  # server down: say so honestly
+        return f"error: instance unreachable at {run_url()} ({e})"
+
+
+def chat(messages):
+    url = os.environ.get("SELF_API_URL", "https://api.x.ai/v1").rstrip("/") + "/chat/completions"
+    payload = {
+        "model": os.environ.get("SELF_API_MODEL", "grok-4"),
+        "messages": messages,
+        "tools": TOOLS,
+    }
+    headers = {"Content-Type": "application/json", "User-Agent": "mind-api/1.0"}
+    if k := api_key():
+        headers["Authorization"] = f"Bearer {k}"
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
+    last_err = None
+    for attempt in range(4):
+        if attempt:
+            time.sleep(2 ** attempt)
+        try:
+            with urllib.request.urlopen(req, timeout=int(os.environ.get("SELF_BRAIN_API_TIMEOUT", "120")), context=SSL_CTX) as resp:
+                return json.loads(resp.read())["choices"][0]["message"]
+        except urllib.error.HTTPError as e:
+            if e.code in (408, 429, 500, 502, 503, 504):
+                last_err = e
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError) as e:
+            last_err = e
+            continue
+    raise last_err
+
+
+def system_prompt(ask):
+    base = (
+        "You are the mind of a `self` instance (SELF_HOME is your cwd for bash). "
+        "Explore with bash (read-only), act with run (real, immediate), and ALWAYS "
+        "finish by calling the finish tool exactly once — reply in the user's "
+        "language, all protocol events typed in finish.events, never described in prose."
+    )
+    if ask == "compile":
+        base += " This is a compile ask: finish.events must contain exactly one script.authored event whose payload.script is the complete executable script."
+    return base
+
+
+def flush(reply, events, ask):
+    lines = []
+    for e in events:
+        if not (isinstance(e, dict) and e.get("name") in EVENT_NAMES and isinstance(e.get("payload"), dict)):
+            continue
+        if e["name"] == "chat.message":
+            # The model must not hand-build chat messages (payload shapes drift:
+            # {text} vs {role, content}); reply is the one canonical channel.
+            if not reply:
+                reply = e["payload"].get("content") or e["payload"].get("text") or ""
+            continue
+        lines.append(json.dumps(e, separators=(",", ":"), ensure_ascii=False))
+    if ask == "think" and reply:
+        lines.insert(0, json.dumps(
+            {"name": "chat.message", "payload": {"role": "assistant", "content": reply}},
+            separators=(",", ":"), ensure_ascii=False))
+    if not lines and reply:
+        lines = [reply]
+    print("\n".join(lines))
+
+
+def main():
+    ask = os.environ.get("SELF_ASK", "think")
+    prompt = sys.argv[-1] if len(sys.argv) > 1 else ""
+    brief = sys.stdin.read()
+    messages = [
+        {"role": "system", "content": system_prompt(ask)},
+        {"role": "user", "content": (brief.strip() + "\n\n" + prompt).strip()},
+    ]
+    max_turns = int(os.environ.get("SELF_BRAIN_MAX_TURNS", "16"))
+    debug = os.environ.get("SELF_BRAIN_DEBUG") == "1"
+    nudged = False
+    for turn in range(max_turns):
+        msg = chat(messages)
+        calls = msg.get("tool_calls") or []
+        if debug:
+            names = [c["function"]["name"] for c in calls] or ["(no tools)"]
+            print(f"mind-api[{turn}]: {names} content={str(msg.get('content'))[:80]!r}", file=sys.stderr)
+        messages.append({"role": "assistant", "content": msg.get("content"), "tool_calls": calls or None})
+        if turn == max_turns - 4 and not any(c["function"]["name"] == "finish" for c in calls):
+            messages.append({"role": "user", "content": "Turn budget nearly exhausted: stop exploring and call the finish tool on your next turn."})
+        if not calls:
+            if not nudged:
+                nudged = True
+                messages.append({"role": "user", "content": "Finish by calling the finish tool now — reply plus typed events, nothing else."})
+                continue
+            flush(msg.get("content") or "", [], ask)  # degrade honestly
+            return
+        for call in calls:
+            fn = call["function"]["name"]
+            try:
+                args = json.loads(call["function"]["arguments"] or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            if fn == "finish":
+                flush(args.get("reply", ""), args.get("events", []), ask)
+                return
+            if fn == "bash":
+                result = tool_bash(args.get("cmd", ""))
+            elif fn == "run":
+                result = tool_run(args.get("command", ""), args.get("args", []))
+            else:
+                result = f"error: unknown tool {fn}"
+            messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": result})
+    print("error: the mind reached its turn limit without calling finish", file=sys.stderr)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
