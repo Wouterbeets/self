@@ -21,16 +21,16 @@ func renderKernelHTML(home string) {
 		return
 	}
 	commands, cmdOrder, projectors, projOrder := declaredCaps(events)
-	// grownBy is provenance: the latest kernel-signed receipt's By per capability.
+	// authoredBy is provenance: the latest kernel-signed receipt's By per capability.
 	// Verified, not merely read — an unsigned or forged by-line never renders.
-	grownBy := map[string]string{}
+	authoredBy := map[string]string{}
 	if secret, _ := loadSecret(home); secret != nil {
 		for _, e := range events {
 			if e.Name != "script.compiled" {
 				continue
 			}
 			if r, ok := verifiedReceipt(secret, e.Payload); ok && r.By != "" {
-				grownBy[r.Type+"/"+r.Name] = r.By
+				authoredBy[r.Type+"/"+r.Name] = r.By
 			}
 		}
 	}
@@ -40,7 +40,7 @@ func renderKernelHTML(home string) {
 	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>self</title></head><body>\n")
 	b.WriteString("<h1>self</h1>\n")
 	b.WriteString("<p class=\"muted\">a local-first, event-sourced runtime with LLM-generated capabilities</p>\n")
-	b.WriteString("<p>One append-only event log is the authoritative state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log. Humans and agents read the same rendered result. Every path below is a plain file.</p>\n")
+	b.WriteString("<p>One append-only event log is the authoritative state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log. Humans and agents read the same rendered result. Every path below is a plain file. Minds also get a short orientation brief at <code>site/brief.md</code> (stdin when spawned); this page is optional depth.</p>\n")
 	b.WriteString(orientationHTML)
 
 	b.WriteString("<h2>commands</h2>\n")
@@ -55,8 +55,8 @@ func renderKernelHTML(home string) {
 			b.WriteString(" · args " + esc(jsonRepr(d.Params)))
 		}
 		b.WriteString(" · <code>self run " + esc(d.Name) + " …</code>")
-		if by := grownBy["command/"+d.Name]; by != "" {
-			b.WriteString(" · grown by " + esc(by))
+		if by := authoredBy["command/"+d.Name]; by != "" {
+			b.WriteString(" · authored by " + esc(by))
 		}
 		b.WriteString("</p></article>\n")
 	}
@@ -69,8 +69,8 @@ func renderKernelHTML(home string) {
 		d := projectors[n]
 		b.WriteString("<article class=\"card\"><h3><a href=\"/" + esc(d.Name) + "\">/" + esc(d.Name) + "</a></h3><p>" + esc(d.Description) + "</p>")
 		b.WriteString("<p class=\"muted\">consumes <code>" + esc(strings.Join(d.Consumes, ", ")) + "</code>")
-		if by := grownBy["projector/"+d.Name]; by != "" {
-			b.WriteString(" · grown by " + esc(by))
+		if by := authoredBy["projector/"+d.Name]; by != "" {
+			b.WriteString(" · authored by " + esc(by))
 		}
 		b.WriteString("</p></article>\n")
 	}
@@ -81,13 +81,16 @@ func renderKernelHTML(home string) {
 		{"compiled commands", filepath.Join(home, "capabilities", "commands")},
 		{"compiled projectors", filepath.Join(home, "capabilities", "projectors")},
 		{"materialized HTML", filepath.Join(home, "site")},
+		{"orientation brief", filepath.Join(home, "site", "brief.md")},
 	} {
 		b.WriteString("<tr><td>" + esc(row[0]) + "</td><td><code>" + esc(row[1]) + "</code></td></tr>")
 	}
 	b.WriteString("</table>\n")
 
-	b.WriteString("<h2>the pipe contract</h2>\n<pre>" + esc(pipeContract) + "</pre>\n")
-	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (the strange loop, at learn time and run time alike). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds my whole instance from them. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it.</p>\n")
+	b.WriteString("<h2>compiled capability pipe</h2>\n")
+	b.WriteString("<p class=\"muted\">Contract for installed command and projector <em>scripts</em> — not the mind adapter seam. Mind answers are process stdout; see <code>self protocol</code>.</p>\n")
+	b.WriteString("<pre>" + esc(pipeContract) + "</pre>\n")
+	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (at learn time and run time alike). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds derived state (<code>capabilities/</code> + <code>site/</code>) from the log and that key. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it. Between instances, the Account Protocol is <code>self give</code> / <code>self learn</code>: accounts carry intent and evidence, never runnable code.</p>\n")
 	b.WriteString("</body></html>\n")
 
 	siteDir := filepath.Join(home, "site")

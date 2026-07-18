@@ -138,8 +138,8 @@ directory the receiver reads, curates, and **learns** from:
 
 ```
 account/
-  intent.md      the telling: who this is from, what it means, what might
-                 grow from it (required — a bare intent is just a lesson)
+  intent.md      the telling: who this is from, what it means, what you hope it
+                 becomes (required — a bare intent is just a lesson)
   record.jsonl   the evidence: events verbatim, moments preserved (optional)
   manifest.json  the attestation: event count + sha256 of the record (optional)
 ```
@@ -160,12 +160,12 @@ Three rules keep the exchange honest, all mechanical:
   them raw. A foreign account carries its history as evidence but cannot
   speak in the receiving kernel's voice — a hostile account cannot install
   anything (there is a test for this).
-- **Moments are preserved.** Planted events keep their own `occurred_at`;
+- **Moments are preserved.** Deposited events keep their own `occurred_at`;
   a record arriving is history, not news.
 - **Interventions are visible.** Curation is editing the directory — the
   account is plain text, and deleting a line before learning is legitimate.
   The `lesson.learned` receipt records the sha256 of what was actually
-  planted beside what the manifest claimed, so the edit shows in both logs.
+  deposited beside what the manifest claimed, so the edit shows in both logs.
 
 Giving is cheap; learning is the work. The giver's log keeps `account.given`,
 the receiver's keeps `lesson.learned` — both sides remember.
@@ -175,7 +175,7 @@ the receiver's keeps `lesson.learned` — both sides remember.
 ```
 self                 rehydrate from the log, then serve (default)
 self learn <account> learn an account: capabilities from its intent.md (needs a
-                     mind), its record planted verbatim, moments preserved
+                     mind), its record deposited verbatim, moments preserved
 self give <sel> <dir>
                      write an account from the log — <sel> is an event-name
                      prefix ("note.") or command/<name> | projector/<name>
@@ -319,11 +319,11 @@ SELF_MIND_ID     author string signed into receipts
   generates it mid-conversation.
 - `lessons/files` — small files carried in the log as events: content in the
   payload, digest as identity, served back as data: URIs from a pure
-  projection. What the kernel's file store used to do, regrown as a lesson.
+  projection. What the kernel's file store used to do, relearned as a lesson.
 - `lessons/timers` — scheduled intentions with the clock kept outside: an
   external tick (cron, a session, a human) fires due timers as events, so
   replay sees history and never a trigger. What the kernel's ticker used to
-  do, regrown as a lesson.
+  do, relearned as a lesson.
 
 ## Limits and threat model
 

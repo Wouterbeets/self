@@ -52,16 +52,16 @@ a signed receipt.
 usage: self [command] [args]
 
   self                 rehydrate the instance from the log, then serve it (the default)
-  self learn <account> learn an account's intent into capabilities and plant its
-                       record, moments preserved (needs a mind)
+  self learn <account> learn an account's intent into capabilities and deposit its
+                       record verbatim, moments preserved (needs a mind)
   self give <sel> <dir>
                        write an account from the log — <sel> is an event-name
                        prefix ("note.") or command/<name> | projector/<name>;
                        intent + record + manifest land in <dir> for you to
                        curate before passing on
   self run <cmd> ...   run a capability — append events, refresh projections
-  self think "..."     ask the mind; returns {response, events} JSON
-  self reflect         one self-improvement cycle (the mind reflects & grows)
+  self think "..."     ask the mind; returns {response, events} JSON (report-only)
+  self reflect         one self-improvement cycle (the mind may declare)
   self show <name>     render a projection to stdout
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
   self revise <target> <request>
@@ -103,11 +103,13 @@ Mind process contract
               (opencode run, claude -p) already have such tools.
   SELF_ASK     request kind: think | reflect | learn | compile
   argv         the prompt is passed as the last argument
-  stdin        an orientation brief (plain text): where the mind is, what
-               capabilities exist, and where to look for the rest. The mind is
-               expected to explore SELF_HOME itself for depth — this is a
-               wake-up card, not a context dump.
-  stdout       event JSONL; non-JSON lines are tolerated as prose reply text
+  stdin        an orientation brief (plain text, also at site/brief.md): where
+               the mind is, how write/extend work, what commands and
+               projections exist, and where depth lives. The mind explores
+               SELF_HOME itself for depth — this is a wake-up card, not a
+               context dump. How an adapter produces stdout is adapter-local.
+  stdout       what the kernel receives: event JSONL; non-JSON lines are
+               prose reply text. think is report-only (nothing appended).
 
 Mind reply events
 
@@ -154,15 +156,16 @@ Accounts (give / learn)
   command/<name> selects a capability's declarations and receipts). self learn
   reads one: the receiver's mind reads the intent — and the record, with its
   own tools — against local state and declares its own capabilities; the
-  record then lands verbatim with its own occurred_at, never routed through
-  the mind. The kernel's own vocabulary (command.declared, script.compiled,
-  capability.retired, …) never travels raw: give renames such events to
-  lineage.<name> and learn refuses them otherwise — a foreign account carries
-  history as evidence but cannot speak in the receiving kernel's voice, so a
-  hostile account cannot install anything. lesson.learned records the sha256
-  of what was actually planted beside the manifest's claim: editing an
-  account before learning it (the receiver's intervention) is visible in
-  both logs. Curation is file editing — the account is plain text.
+  record is then deposited verbatim with its own occurred_at, never routed
+  through the mind. The kernel's own vocabulary (command.declared,
+  script.compiled, capability.retired, …) never travels raw: give renames
+  such events to lineage.<name> and learn refuses them otherwise — a foreign
+  account carries history as evidence but cannot speak in the receiving
+  kernel's voice, so a hostile account cannot install anything.
+  lesson.learned records the sha256 of what was actually deposited beside the
+  manifest's claim: editing an account before learning it (the receiver's
+  intervention) is visible in both logs. Curation is file editing — the
+  account is plain text.
 
 Declarations — not code — are what cross every boundary. A generated script
 installs only after the local kernel signs a script.compiled receipt with
@@ -173,7 +176,7 @@ SELF_HOME/.secret and the current SELF_MIND_ID.
 func commandHelp(cmd string) (string, bool) {
 	switch cmd {
 	case "learn":
-		return "usage: self learn <account-dir>\n\nRead <account-dir>/intent.md, ask the mind to declare capabilities fitted to this instance, compile them under signed receipts, then plant the account's record.jsonl verbatim (moments preserved). The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
+		return "usage: self learn <account-dir>\n\nRead <account-dir>/intent.md, ask the mind to declare capabilities fitted to this instance, compile them under signed receipts, then deposit the account's record.jsonl verbatim (moments preserved). The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
 	case "give":
 		return "usage: self give <event-prefix> <dir>\n       self give command/<name> <dir>\n       self give projector/<name> <dir>\n\nWrite an account from this log: the selected events verbatim in record.jsonl, a manifest with their count and sha256, and an intent.md stub to edit — who you are, what this means, what you hope it becomes. Kernel-vocabulary events are renamed lineage.* so they arrive as evidence, never as installables. The giving is remembered as an account.given event.\n", true
 	case "run":

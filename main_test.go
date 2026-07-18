@@ -646,8 +646,9 @@ func TestEventAsksGuideTheMindToStdout(t *testing.T) {
 	must("learn", learnPrompt(".", "some intent", nil), "stdout", "events.jsonl", "no markdown", "one line")
 	// think is report-only, but the mind must still be told stdout is the
 	// only channel — a tool-capable mind otherwise tries to persist its work.
-	must("think", thinkPrompt("what is missing here?"), "stdout", "cannot write the log", "no code fences")
+	must("think", thinkPrompt("what is missing here?"), "stdout", "cannot write the log", "no code fences", "report-only")
 	must("answer contract", mindAnswerContract, "stdout", "cannot write the log", "no code fences", "reply is final", "never re-invoked")
+	must("think contract", mindThinkContract, "report-only", "does not append")
 	// compile: the mind may test with its tools, but must not install or persist.
 	must("compile", compilePrompt("", "", "", "", "command", "note", `{"name":"note"}`),
 		"do not install", "events.jsonl", "no code fence")
@@ -1061,12 +1062,18 @@ print("read " + str(len(data)) + " bytes on stdin")
 	}
 	brief := string(fed)
 
-	// the brief names the instance and points the mind at where to look
+	// the brief names the instance, teaches mechanism, and lists the catalog
 	if !strings.Contains(brief, "# self — orientation brief") {
 		t.Fatalf("brief missing instance header:\n%s", brief)
 	}
+	if !strings.Contains(brief, "How you act") {
+		t.Fatalf("brief missing mechanism section:\n%s", brief)
+	}
+	if !strings.Contains(brief, "stdout") {
+		t.Fatalf("brief missing process-receive (stdout) guidance:\n%s", brief)
+	}
 	if !strings.Contains(brief, "site/kernel.html") {
-		t.Fatalf("brief does not point the mind at kernel.html:\n%s", brief)
+		t.Fatalf("brief does not mention kernel.html as optional depth:\n%s", brief)
 	}
 	if !strings.Contains(brief, "note.taken") {
 		t.Fatalf("brief missing the note command's event:\n%s", brief)
@@ -1074,14 +1081,17 @@ print("read " + str(len(data)) + " bytes on stdin")
 	if !strings.Contains(brief, "events.jsonl") {
 		t.Fatalf("brief does not point the mind at the raw log:\n%s", brief)
 	}
+	if !strings.Contains(brief, "self run note") {
+		t.Fatalf("brief missing run contract for note:\n%s", brief)
+	}
 
 	// and it is NOT the raw JSONL log: no event-object line with a `"seq":` key
 	if strings.Contains(brief, `"seq":`) {
 		t.Fatalf("mind was fed the raw log, not a brief:\n%s", brief)
 	}
-	// bounded: the brief is small relative to a grown log
-	if len(brief) > 4096 {
-		t.Fatalf("brief is %d bytes — not bounded", len(brief))
+	// bounded: O(state) — a small catalog stays far under a few KiB
+	if len(brief) > 8192 {
+		t.Fatalf("brief is %d bytes — not bounded for a tiny catalog", len(brief))
 	}
 }
 
@@ -1272,7 +1282,7 @@ func TestFreshSitePageTracksTheLog(t *testing.T) {
 }
 
 // TestGiveLearnRoundTrip pins the account round trip: give writes the
-// selected events verbatim with a manifest attesting to them; learn plants
+// selected events verbatim with a manifest attesting to them; learn deposits
 // them in another instance with their own moments intact, and its
 // lesson.learned receipt attests to the same digest the manifest claimed.
 func TestGiveLearnRoundTrip(t *testing.T) {
@@ -1323,7 +1333,7 @@ func TestGiveLearnRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	events, _ = readEvents(receiver)
-	planted := 0
+	deposited := 0
 	var learned struct {
 		Events         int    `json:"events"`
 		RecordSha256   string `json:"record_sha256"`
@@ -1332,9 +1342,9 @@ func TestGiveLearnRoundTrip(t *testing.T) {
 	for _, e := range events {
 		if e.Name == "note.taken" {
 			if !e.OccurredAt.Equal(past) && !e.OccurredAt.Equal(past.Add(time.Hour)) {
-				t.Fatalf("planted event lost its moment: %s", e.OccurredAt)
+				t.Fatalf("deposited event lost its moment: %s", e.OccurredAt)
 			}
-			planted++
+			deposited++
 		}
 		if e.Name == "lesson.learned" {
 			if err := json.Unmarshal(e.Payload, &learned); err != nil {
@@ -1342,8 +1352,8 @@ func TestGiveLearnRoundTrip(t *testing.T) {
 			}
 		}
 	}
-	if planted != 2 {
-		t.Fatalf("planted %d events, want 2", planted)
+	if deposited != 2 {
+		t.Fatalf("deposited %d events, want 2", deposited)
 	}
 	if learned.Events != 2 {
 		t.Fatalf("lesson.learned events = %d, want 2", learned.Events)
@@ -1355,7 +1365,7 @@ func TestGiveLearnRoundTrip(t *testing.T) {
 
 // TestLearnRefusesKernelVocabulary pins the receiver's gate: the kernel's own
 // vocabulary never travels raw, so a hostile record that tries to speak it —
-// here, planting a script.compiled — is refused before anything is appended.
+// here, depositing a script.compiled — is refused before anything is appended.
 func TestLearnRefusesKernelVocabulary(t *testing.T) {
 	t.Setenv("SELF_MIND", stubMind(t))
 	dir := filepath.Join(t.TempDir(), "hostile")
@@ -1380,7 +1390,7 @@ func TestLearnRefusesKernelVocabulary(t *testing.T) {
 }
 
 // TestGiveCapabilityAsLineage pins the capability flavor: give renames the
-// declarations and receipts to lineage.*, learn plants them as inert
+// declarations and receipts to lineage.*, learn deposits them as inert
 // evidence, and the only thing that installs is what the receiver's own
 // mind declared, under the receiver's own key. Foreign bytes never install.
 func TestGiveCapabilityAsLineage(t *testing.T) {
@@ -1439,7 +1449,7 @@ func TestGiveCapabilityAsLineage(t *testing.T) {
 // TestLearnRecordsInterventionDigest pins intervention visibility: editing an
 // account between giving and learning is not forbidden — it is the receiver's
 // (or a curator's) move — but the lesson.learned receipt carries both the
-// manifest's claim and the digest of what was actually planted, so the edit
+// manifest's claim and the digest of what was actually deposited, so the edit
 // is visible forever.
 func TestLearnRecordsInterventionDigest(t *testing.T) {
 	t.Setenv("SELF_MIND", stubMind(t))

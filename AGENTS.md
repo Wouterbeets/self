@@ -43,7 +43,7 @@ installed scripts, one directory per capability with the script at
   written for a future reader with no other context; check `/memory` before
   re-learning something the instance already knows.
 - **Extend.** Declarations compile on ingestion. `self learn <account>` learns a
-  capability set from an `intent.md` (and plants its record, if it carries one);
+  capability set from an `intent.md` (and deposits its record, if it carries one);
   `self revise command/<name> "<change request>"` recompiles an installed
   capability with its current script as context. `self think "<prompt>"`
   is report-only: it returns `{response, declarations}` without ingesting —

@@ -3,10 +3,10 @@
 ## purpose
 
 Talking to self in plain language should feel like one continuous
-relationship, not a series of stateless prompts — and it is how self grows:
-ask for something it cannot do yet and it builds the capability
-mid-conversation, live on the next refresh. This is the seed a demo grows
-first; first impressions are its spec.
+relationship, not a series of stateless prompts — and it is how self
+extends: ask for something it cannot do yet and it declares and compiles the
+capability mid-conversation, live on the next refresh. This is the lesson a
+demo learns first; first impressions are its spec.
 
 ## the mechanics (exact — the loop lives or dies on these)
 
@@ -21,10 +21,10 @@ first; first impressions are its spec.
   must emit, in order: the user's `chat.message`, the assistant's
   `chat.message`, and then every declaration verbatim as its own event.
   Re-emitting the declarations is what makes the kernel compile them; a
-  declaration left unemitted is growth that never happens.
-- When new capabilities were declared, the assistant may name what grew and
+  declaration left unemitted is a capability that never installs.
+- When new capabilities were declared, the assistant may name what was added and
   where it lives if that helps the user orient, but this must be ordinary prose,
-  not a mandatory footer. Do not invent a growth announcement for ordinary
+  not a mandatory footer. Do not invent a capability announcement for ordinary
   events like notes, tasks, memories, or verses.
 - Degrade honestly: if `self think` fails, emit an assistant `chat.message`
   that says a mind is unreachable and how to plug one (`SELF_MIND`,
@@ -46,7 +46,7 @@ first; first impressions are its spec.
   lands in the conversation, not in kernel internals.
 - `/identity` shows the current `self.identity` text in full, with a form to
   append a new one via the `identity` command. Identity is data, never
-  kernel: the lesson plants the first one; appending replaces it from then on.
+  kernel: the lesson deposits the first one; appending replaces it from then on.
 - `compact` folds older turns: it asks the mind for a summary and emits one
   `chat.compacted` event `{summary, through_seq}`. From then on the chat
   script sends the summary (inside the system turn) plus only the turns after

@@ -131,7 +131,7 @@ func applyEvents(home string, res *mindResult) {
 		c := newLLM(home)
 		c.reasoning = res.Response
 		n := compileDeclarations(c, home, evs)
-		fmt.Fprintf(os.Stderr, "self: grew %d capabilit(ies)\n", n)
+		fmt.Fprintf(os.Stderr, "self: compiled %d capabilit(ies)\n", n)
 		if r := applyRetirements(home, evs); r > 0 {
 			fmt.Fprintf(os.Stderr, "self: retired %d capabilit(ies)\n", r)
 		}

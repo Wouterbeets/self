@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -87,19 +88,19 @@ func declaredCaps(events []Event) (commands map[string]commandDecl, cmdOrder []s
 	return commands, cmdOrder, projectors, projOrder
 }
 
-// stateBrief is the kernel's wake-up card for a mind: pure orientation, not a
-// log digest. It tells the mind where it is, what capabilities exist, and
-// where to look for the rest — and nothing else. The mind is expected to
-// explore SELF_HOME itself: read site/kernel.html for the full
-// self-description, site/*.html for the rendered state a human sees,
-// events.jsonl for the raw log, capabilities/ for the compiled scripts. The
-// kernel holds no internal state a mind cannot see on disk.
+// stateBrief is the kernel's wake-up card for a mind: Layer 0 orientation —
+// mechanism + a generated catalog of what exists — not a log digest and not
+// philosophy. It tells the mind where it is, how write/extend work, what
+// commands and projections are installed, and where depth lives on disk.
+// Values and "open when" guidance never live here; they appear only if this
+// instance has learned projections that surface them.
 //
 // A consequence: a mind that cannot inspect files under SELF_HOME — a plain
 // stdin/stdout API adapter with no tools — cannot do the job. The kernel's
-// seam is still a pipe, but a real mind needs a tool loop on its side of it.
-// The kernel does not sandbox or supply tools; isolating the mind's
-// exploration is the mind's own concern (a coding agent already has its own).
+// process seam is still a pipe (brief on stdin; stdout parsed on exit), but a
+// real mind needs a tool loop on its side of it. How an adapter turns tools or
+// APIs into that process stdout is adapter-local (see examples/). The kernel
+// does not sandbox or supply tools.
 //
 // The kernel materializes the brief to SELF_HOME/site/brief.md (see
 // renderBriefFile) so it is explorable on disk like every other piece of
@@ -116,40 +117,83 @@ func stateBrief(home string) string {
 	oneLine := func(s string) string {
 		return strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
 	}
+	fmtMap := func(m map[string]string) string {
+		if len(m) == 0 {
+			return ""
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, k+":"+m[k])
+		}
+		return strings.Join(parts, ", ")
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "# self — orientation brief\n\n")
-	fmt.Fprintf(&b, "Instance: `%s`\n\n", home)
+	fmt.Fprintf(&b, "Instance: `%s`\n", home)
+	fmt.Fprintf(&b, "Log: %d events. Set `SELF_MIND_ID` when you author — receipts record it.\n\n", len(events))
+
+	b.WriteString("## How you act\n\n")
+	b.WriteString("State that survives is only what lands in `events.jsonl`. The log is append-only.\n\n")
+	b.WriteString("- **Read** — open files under this instance: `site/*.html` (rendered state a human sees), `events.jsonl` (authoritative log), `capabilities/` (installed scripts).\n")
+	b.WriteString("- **Write (commands)** — prefer installed verbs: `self run <command> …` (or HTTP `POST /run/<command>` when serving). Args follow each command below.\n")
+	b.WriteString("- **Write (events)** — when this ask expects you to persist directly, emit domain events as this process's stdout (one compact JSON object per line: `{\"name\":\"…\",\"payload\":{…}}`). Do not edit `events.jsonl` yourself; do not install scripts yourself.\n")
+	b.WriteString("- **Extend** — emit `command.declared` / `projector.declared` the same way when this ask is learn/reflect (or declare is warranted). The kernel compiles and signs; you only author.\n")
+	b.WriteString("- **Query** — `think` is report-only: the kernel returns your reply and does not append from it.\n\n")
+	b.WriteString("When the kernel spawned you, it reads **only this process's stdout** after you exit. How your adapter turns tools or API calls into that stdout is adapter-local — see `self protocol` and `examples/`.\n\n")
+
 	if len(events) == 0 {
-		b.WriteString("Empty log. Learn a lesson: `self learn <account>` (try `lessons/journal`).\n")
+		b.WriteString("## Empty log\n\n")
+		b.WriteString("Nothing installed yet. Learn an account: `self learn <account>` (try `lessons/journal`).\n")
 		return b.String()
 	}
 
-	fmt.Fprintf(&b, "## orientation\n\n")
-	fmt.Fprintf(&b, "- `site/kernel.html` — read this closely: the instance's full self-description (capabilities, the pipe contract, where things live).\n")
-	fmt.Fprintf(&b, "- Explore the rest as you see fit: `site/*.html` (rendered state, the same pages a human sees), `events.jsonl` (the whole append-only log, the only truth), `capabilities/` (the compiled scripts currently installed).\n\n")
+	if len(cmdOrder) > 0 {
+		b.WriteString("## Commands\n\n")
+		for _, n := range cmdOrder {
+			d := commands[n]
+			fmt.Fprintf(&b, "- `%s` — %s\n", n, oneLine(d.Description))
+			fmt.Fprintf(&b, "  - run: `self run %s …`\n", n)
+			if d.Event.Name != "" {
+				fields := fmtMap(d.Event.Fields)
+				if fields != "" {
+					fmt.Fprintf(&b, "  - emits: `%s` — fields: %s\n", d.Event.Name, fields)
+				} else {
+					fmt.Fprintf(&b, "  - emits: `%s`\n", d.Event.Name)
+				}
+			}
+			if params := fmtMap(d.Params); params != "" {
+				fmt.Fprintf(&b, "  - params: %s\n", params)
+			}
+		}
+		b.WriteString("\n")
+	}
 
 	if len(projOrder) > 0 {
-		b.WriteString("## projections (current state)\n\n")
+		b.WriteString("## Projections\n\n")
 		for _, n := range projOrder {
 			d := projectors[n]
 			consumes := strings.Join(d.Consumes, ", ")
 			if consumes == "" {
 				consumes = "—"
 			}
-			fmt.Fprintf(&b, "- `/%s` — %s (consumes %s) → `site/%s.html`\n",
-				n, oneLine(d.Description), consumes, n)
+			fmt.Fprintf(&b, "- `/%s` — %s → `site/%s.html` (consumes %s)\n",
+				n, oneLine(d.Description), n, consumes)
 		}
 		b.WriteString("\n")
 	}
-	if len(cmdOrder) > 0 {
-		b.WriteString("## commands (verbs — `self run <name> …`)\n\n")
-		for _, n := range cmdOrder {
-			d := commands[n]
-			fmt.Fprintf(&b, "- `%s` — %s (emits %s)\n", n, oneLine(d.Description), d.Event.Name)
-		}
-		b.WriteString("\n")
-	}
-	fmt.Fprintf(&b, "%d events in the log. Explore for the rest.\n", len(events))
+
+	b.WriteString("## Depth (optional)\n\n")
+	b.WriteString("- `events.jsonl` — append-only log (authoritative)\n")
+	b.WriteString("- `capabilities/` — installed command and projector scripts\n")
+	b.WriteString("- `site/kernel.html` — full index, compiled-capability pipe contract, lifecycle events\n")
+	b.WriteString("- Account exchange: `self give` / `self learn` (Account Protocol) — not required for ordinary run/think\n")
+	b.WriteString("- Reconstruction: `self rehydrate` rebuilds `capabilities/` + `site/` from the log + `.secret` (no mind)\n")
 	return b.String()
 }
 

@@ -53,15 +53,18 @@ The kernel sets SELF_HOME on every script. Any language with a shebang works; us
 // mindAnswerContract tells a capable, tool-using mind how to hand its answer
 // back. A coding-agent mind (claude -p) will otherwise try to persist its work
 // itself — write events.jsonl, run `self`, install a script — and that effort is
-// wasted and denied: the kernel reads ONLY stdout and appends what it finds
-// there, under its own signature. It also emits Markdown by habit; the pipe
-// tolerates fences, but one clean JSON object per line is what actually wants
-// ingesting. Woven into every ask that expects events (learn, reflect, compile).
-const mindAnswerContract = `HOW TO ANSWER — the kernel reads ONLY your stdout. Event lines are JSON objects; prose lines are reply text. You do not and cannot write the log yourself: do not edit events.jsonl, run the self CLI, or install anything with your tools — that work is wasted. To persist ordinary state, print the domain event that records it. To add capabilities, print command.declared / projector.declared events as ONE line of compact JSON each (no Markdown, no code fences, no backticks). Declare only what is missing; ordinary domain events are not capability growth.
+// wasted and denied: the kernel reads ONLY this process's stdout and acts on
+// what it finds there. How an adapter produces that stdout (tools, HTTP, MCP)
+// is adapter-local; the receive contract is not. Woven into learn/reflect and
+// as the shared core of think (think adds a report-only rider).
+const mindAnswerContract = `HOW TO ANSWER — when the kernel spawned you, it reads ONLY this process's stdout after you exit. Event lines are one compact JSON object each ({"name":"…","payload":{…}}); every other line is reply prose. No Markdown, no code fences, no backticks around JSON. You do not and cannot write the log yourself: do not edit events.jsonl, do not install under capabilities/, and do not run the self CLI to "finish" this ask — that work is wasted. To persist ordinary state when this ask expects it, print the domain event on stdout. To add capabilities, print command.declared / projector.declared the same way. Declare only what is missing; ordinary domain events are not new capabilities.
 
 THIS REPLY IS FINAL — you run once per ask and are never re-invoked. Explore first, THEN answer completely: never end on a plan or a promise ("I'll explore and then respond") — whatever you have not said when you exit was never said.
 
-WHAT YOU ARE GIVEN — your stdin is an orientation brief: where you are, what capabilities exist, where to look for the rest. That is all. To do your job you must EXPLORE the instance surface with your tools: read ` + "`SELF_HOME/site/kernel.html`" + ` for the full self-description, ` + "`SELF_HOME/site/*.html`" + ` for the rendered state a human sees, ` + "`SELF_HOME/events.jsonl`" + ` for the raw log, ` + "`SELF_HOME/capabilities/`" + ` for the compiled scripts. The kernel holds no internal state you cannot see on disk. A mind without tools to read those files cannot do this job.`
+WHAT YOU ARE GIVEN — your stdin is an orientation brief (also at SELF_HOME/site/brief.md): where you are, how you act, what commands and projections exist, where depth lives. That is enough to act. Explore the instance with your tools as needed: site/*.html, events.jsonl, capabilities/. site/kernel.html is optional depth (full index and the compiled-capability pipe). The kernel holds no internal state you cannot see on disk. A mind without tools to read those files cannot do this job.`
+
+// mindThinkContract is the think-specific rider: report-only, nothing appended.
+const mindThinkContract = `THIS ASK IS REPORT-ONLY (think) — the kernel returns your stdout to the caller and does not append events from it. Answer in prose. Do not emit domain events or declarations to "save" anything; nothing you print is ingested into the log.`
 
 // ────────────────────────────── the compiler ────────────────────────────────
 

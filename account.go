@@ -11,11 +11,11 @@ import (
 )
 
 // An account is the one wire format between instances — a directory a mind
-// gives and another mind learns from:
+// gives and another mind learns from (the Account Protocol):
 //
 //	account/
 //	  intent.md      the telling: who this is from, what it means, what
-//	                 might grow from it — read by the human first, the
+//	                 you hope it becomes — read by the human first, the
 //	                 mind second (required)
 //	  record.jsonl   the evidence: events verbatim, moments preserved
 //	                 (optional; intent alone is a bare lesson)
@@ -76,7 +76,7 @@ func parseDeposit(raw []byte) ([]Event, error) {
 // readAccount reads one account directory: the intent (required), the record
 // (optional, validated), and the manifest (optional). recordHash is the
 // sha256 of the record file actually read — what learn will attest to having
-// planted, beside whatever the manifest claims.
+// deposited, beside whatever the manifest claims.
 func readAccount(ref string) (name, intent string, deposit []Event, m manifest, recordHash string, err error) {
 	data, e := os.ReadFile(filepath.Join(ref, "intent.md"))
 	if e != nil {
@@ -217,9 +217,9 @@ should live here: render them beside what this instance already holds, and
 where the two records describe the same things, make the overlap visible —
 agreements, contradictions, and what only one side saw. The giver's event
 names and fields may not match this instance's; translate in the
-projection, never by rewriting the planted events.
+projection, never by rewriting the deposited events.
 
 (Giver: edit this file before passing the directory on — say who you are,
-what these events mean, and what you hope grows from them.)
+what these events mean, and what you hope they become elsewhere.)
 `, m.Prefix, m.Events)
 }

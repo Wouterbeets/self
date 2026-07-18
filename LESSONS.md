@@ -18,7 +18,7 @@ exchange). A hand-written lesson usually carries just the intent:
 ```
 mylesson/
   intent.md      required — prose: what this capability set is for
-  record.jsonl   optional — events to plant verbatim at learn time
+  record.jsonl   optional — events to deposit verbatim at learn time
   manifest.json  optional — an attestation over the record (written by self give)
 ```
 
@@ -33,10 +33,10 @@ mylesson/
    (HTML views over events).
 3. It declares each capability. The kernel compiles each one into a script,
    installs it, and records a signed receipt.
-4. If `record.jsonl` is present, its events are planted verbatim — this
+4. If `record.jsonl` is present, its events are deposited verbatim — this
    instance's ids, the events' own moments — so the new views have something
    to render from the first moment. A `lesson.learned` receipt closes the
-   learn, attesting to what was planted.
+   learn, attesting to what was deposited.
 
 ## The contract your capabilities must honor
 
@@ -64,7 +64,7 @@ describe capabilities that can be built this way:
 ## Writing a good `intent.md`
 
 The top-level directories in `lessons/` are worked examples. Read them.
-`journal` is the smallest; `chat` is a full surface; **monitor** demonstrates the orchestrator/monitor/rejector role — the critic that checks intent achievement and can request retries; **harvest** grows an existing surface in place — one verb and a projector revision that turn ended sessions into durable work facts. A good intent tends to
+`journal` is the smallest; `chat` is a full surface; **monitor** demonstrates the orchestrator/monitor/rejector role — the critic that checks intent achievement and can request retries; **harvest** extends an existing surface in place — one verb and a projector revision that turn ended sessions into durable work facts. A good intent tends to
 cover:
 
 - **Purpose** — what this is for, in a sentence or two.
@@ -90,10 +90,10 @@ Two rules of thumb:
 
 When a lesson comes from another instance's life — written by `self give`
 rather than by hand — the same rules apply plus three the kernel enforces:
-planted events keep their own `occurred_at`; the kernel's lifecycle
+deposited events keep their own `occurred_at`; the kernel's lifecycle
 vocabulary (`command.declared`, `script.compiled`, …) is refused in a record
 and travels only renamed as `lineage.*` events, which land inert; and the
-`lesson.learned` receipt records the sha256 of what was actually planted
+`lesson.learned` receipt records the sha256 of what was actually deposited
 beside what the manifest claimed, so curating an account before learning it
 is visible in the log forever. Read an account before you learn it — the
 intent tells you what the giver hopes for; the record is theirs, verbatim.

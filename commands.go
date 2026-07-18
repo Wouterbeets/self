@@ -90,7 +90,7 @@ func receiptCount(home, typ, name string) int {
 }
 
 // cmdLearn learns an account: a directory with intent.md (the telling — prose
-// intent, not a parts-list), and optionally record.jsonl (events to plant,
+// intent, not a parts-list), and optionally record.jsonl (events to deposit
 // verbatim) and manifest.json (the giver's attestation). The mind reads the
 // intent — and the record, with its own tools — against this instance's
 // state and declares the decomposition that realizes it here; each piece is
@@ -145,14 +145,14 @@ func cmdLearn(home, ref string) error {
 	if len(declEvents) == 0 && len(deposit) == 0 {
 		return fmt.Errorf("nothing to learn from %q: the mind declared no capability and the account carries no record", name)
 	}
-	grown := compileDeclarations(c, home, declEvents)
-	if grown != len(declEvents) {
+	compiled := compileDeclarations(c, home, declEvents)
+	if compiled != len(declEvents) {
 		refreshSite(home)
-		return fmt.Errorf("recorded %q in the log, but %d of %d declared capabilities compiled; no lesson.learned receipt was written", name, grown, len(declEvents))
+		return fmt.Errorf("recorded %q in the log, but %d of %d declared capabilities compiled; no lesson.learned receipt was written", name, compiled, len(declEvents))
 	}
 
 	// The record lands verbatim: this instance's id and seq, the event's own
-	// moment. Planted events never route through the mind — the model only
+	// moment. Deposited events never route through the mind — the model only
 	// ever writes the disposable part, never the part that accumulates.
 	for _, e := range deposit {
 		fresh := newEvent(e.Name, e.Payload)
@@ -164,10 +164,10 @@ func cmdLearn(home, ref string) error {
 		}
 	}
 
-	// The receipt attests to what was actually planted, beside what the
+	// The receipt attests to what was actually deposited, beside what the
 	// manifest claimed: a mismatch means the account was edited between
 	// giving and learning — an intervention, visible forever in both logs.
-	receipt := map[string]any{"lesson": name, "capabilities": grown, "events": len(deposit)}
+	receipt := map[string]any{"lesson": name, "capabilities": compiled, "events": len(deposit)}
 	if recordHash != "" {
 		receipt["record_sha256"] = recordHash
 	}
@@ -180,7 +180,7 @@ func cmdLearn(home, ref string) error {
 		return err
 	}
 	refreshSite(home)
-	fmt.Printf("learned %q: %d capabilit(ies), %d event(s) planted — %s\n", name, grown, len(deposit), res.Response)
+	fmt.Printf("learned %q: %d capabilit(ies), %d event(s) deposited — %s\n", name, compiled, len(deposit), res.Response)
 	return nil
 }
 
@@ -194,7 +194,7 @@ func learnPrompt(ref, intent string, deposit []Event) string {
 		if abs, err := filepath.Abs(ref); err == nil {
 			ref = abs
 		}
-		prompt += fmt.Sprintf("\n\nThe account carries a record of %d event(s) that will be planted in the log, verbatim, right after you answer: read %s to ground your declarations in the evidence (lineage.* events are another instance's history — reference material, never yours to re-emit).", len(deposit), filepath.Join(ref, "record.jsonl"))
+		prompt += fmt.Sprintf("\n\nThe account carries a record of %d event(s) that will be deposited in the log, verbatim, right after you answer: read %s to ground your declarations in the evidence (lineage.* events are another instance's history — reference material, never yours to re-emit).", len(deposit), filepath.Join(ref, "record.jsonl"))
 	}
 	return prompt + "\n\n" + mindAnswerContract + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
 }
@@ -216,14 +216,12 @@ func cmdThink(home, prompt string) error {
 	return enc.Encode(map[string]any{"response": res.Response, "events": res.Events, "declarations": res.Events})
 }
 
-// thinkPrompt wraps a think ask with the answer contract. A think is
-// report-only — the kernel returns mind-authored events to the caller instead
-// of ingesting them — but the mind still needs to know its stdout is the only
-// channel: without the contract, a tool-capable mind wastes its session trying
-// to persist its work itself (edit the log, run the CLI) and gets denied. Every
-// event-expecting ask carries the same guidance; this was the one naked ask left.
+// thinkPrompt wraps a think ask with the shared answer contract plus a
+// report-only rider. A think returns mind output to the caller and does not
+// append; without the contract a tool-capable mind wastes its session trying
+// to persist work itself (edit the log, run the CLI) and gets denied.
 func thinkPrompt(prompt string) string {
-	return prompt + "\n\n" + mindAnswerContract
+	return prompt + "\n\n" + mindAnswerContract + "\n\n" + mindThinkContract
 }
 
 func cmdReflect(home string) error {
