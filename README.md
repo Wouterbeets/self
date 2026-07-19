@@ -13,6 +13,26 @@ The point is durable, inspectable state for an LLM agent: one log, replayed into
 every view, with a record of who generated each script and the ability to
 reconstruct it offline. What is not in the log did not happen.
 
+## Vision
+
+`self` exists to make **metis** — practical, contextual, accumulated wisdom built
+through lived use — a first-class citizen alongside powerful frontier intelligence.
+
+Frontier models excel at broad reasoning, synthesis, and handling the novel.
+Local instances like this provide durable personal history, organic capability
+growth from real interaction, verifiable provenance, and user-controlled evolution.
+
+These are complementary, not competing. A healthy metis layer gives frontier models
+richer, better-grounded context to work with. Users keep long-term agency and
+continuity without routing everything through any single provider. This is not
+hostility toward powerful models; it is the missing substrate that lets them
+participate in sovereign, long-lived personal systems.
+
+The result is a win-win: general intelligence and lived practical wisdom reinforce
+each other. The goal is a more resilient ecosystem where decentralized, user-owned
+metis can grow and travel alongside the most capable models — preserving space
+for agency that is not captured by any one company.
+
 This runtime is the reference implementation of a larger idea:
 
 - **[the Account Protocol](https://github.com/wouterbeets/knowledge-seed-protocol)**
@@ -248,7 +268,7 @@ The `SELF_MIND` process contract:
 So a whole mind is any program that switches on `$SELF_ASK` and prints events:
 
 ```python
-#!/usr/bin/env python3
+#!/usr/bin/python3
 import os, sys, json
 brief  = sys.stdin.read()         # an orientation brief, plain text — where to look
 ask    = os.environ["SELF_ASK"]    # think | reflect | learn | compile
@@ -322,8 +342,8 @@ SELF_MIND_ID     author string signed into receipts
   projection. What the kernel's file store used to do, relearned as a lesson.
 - `lessons/timers` — scheduled intentions with the clock kept outside: an
   external tick (cron, a session, a human) fires due timers as events, so
-  replay sees history and never a trigger. What the kernel's ticker used to
-  do, relearned as a lesson.
+  replay sees history and never a trigger. What the kernel's ticker used to do,
+  relearned as a lesson.
 
 ## Limits and threat model
 
