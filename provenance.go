@@ -57,6 +57,7 @@ func appendReceipt(home, typ, name, script, by string) error {
 	}
 	payload, _ := json.Marshal(receipt{typ, name, script, by, sign(secret, typ, name, script, by)})
 	e := newEvent("script.compiled", payload)
+	e.Via = "kernel" // the receipt is the kernel's own act; the author is By, signed inside
 	return appendEvent(home, &e)
 }
 

@@ -14,13 +14,28 @@ import (
 	"time"
 )
 
+// An Event carries two provenance fields beside its payload. Via is the
+// door: the channel the event entered this log through (cli, http:<addr>,
+// mind:<id>, learn:<account>, kernel), stamped by the kernel at append time
+// and never accepted from a script, a mind, or a record — it states what the
+// kernel itself witnessed. By is the speaker: the caller's claimed identity
+// (SELF_CALLER locally, the X-Self-Caller header over HTTP), recorded
+// verbatim — a claim, not a verified fact, and rendered as one. Via is local
+// like Seq: a deposited event gets this log's door. By is portable like
+// OccurredAt: testimony keeps its speaker when it travels between bodies.
 type Event struct {
 	ID         string          `json:"id"`
 	Seq        int             `json:"seq"`
 	Name       string          `json:"name"`
 	OccurredAt time.Time       `json:"occurred_at"`
+	Via        string          `json:"via,omitempty"`
+	By         string          `json:"by,omitempty"`
 	Payload    json.RawMessage `json:"payload"`
 }
+
+// callerClaim is the speaker a local invocation claims to be: SELF_CALLER,
+// verbatim, empty when nothing was claimed.
+func callerClaim() string { return strings.TrimSpace(os.Getenv("SELF_CALLER")) }
 
 func newEvent(name string, payload json.RawMessage) Event {
 	b := make([]byte, 16)
