@@ -255,6 +255,9 @@ func pipeProcess(home, bin string, argv []string) ([]Event, error) {
 		if line == "" {
 			continue
 		}
+		// Only name and payload are read from a process's output: a script
+		// that emits via/by is claiming a door, and doors are not claimable —
+		// the caller of runCommand stamps what the kernel witnessed.
 		var partial struct {
 			Name    string          `json:"name"`
 			Payload json.RawMessage `json:"payload"`
@@ -315,7 +318,11 @@ func verifyInstalledScript(home, typ, name string) (string, error) {
 	return bin, nil
 }
 
-func runCommand(home, command string, args []string) ([]Event, error) {
+// runCommand executes an installed command and ingests what it emits. via
+// and by are the invocation's provenance — the door the kernel witnessed and
+// the caller's claim — stamped onto every emitted event before it lands: a
+// script's own output cannot set them.
+func runCommand(home, command string, args []string, via, by string) ([]Event, error) {
 	bin, err := verifyInstalledScript(home, "command", command)
 	if err != nil {
 		return nil, err
@@ -323,6 +330,9 @@ func runCommand(home, command string, args []string) ([]Event, error) {
 	evs, err := pipeProcess(home, bin, args)
 	if err != nil {
 		return nil, err
+	}
+	for i := range evs {
+		evs[i].Via, evs[i].By = via, by
 	}
 	return evs, ingest(home, evs)
 }

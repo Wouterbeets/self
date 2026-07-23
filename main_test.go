@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,7 +129,7 @@ func TestStrangeLoop(t *testing.T) {
 	}
 
 	// Run the grown command; its event must land on the log and in the view.
-	if _, err := runCommand(home, "note", []string{"water", "the", "plants"}); err != nil {
+	if _, err := runCommand(home, "note", []string{"water", "the", "plants"}, "cli", ""); err != nil {
 		t.Fatal(err)
 	}
 	page, err := os.ReadFile(filepath.Join(home, "site", "board.html"))
@@ -175,7 +176,7 @@ func TestRehydrateRoundTrip(t *testing.T) {
 	if err := ingest(src, decls); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCommand(src, "entry", []string{"first", "entry"}); err != nil {
+	if _, err := runCommand(src, "entry", []string{"first", "entry"}, "cli", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -507,7 +508,7 @@ else:
 	}
 
 	// and the capability runs
-	evs, err := runCommand(home, "ping", []string{"hello"})
+	evs, err := runCommand(home, "ping", []string{"hello"}, "cli", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +735,7 @@ func TestStubMindCoversThinkAndLearn(t *testing.T) {
 	if !fileExists(filepath.Join(home, "capabilities", "projectors", "journal", "run")) {
 		t.Fatal("stub learn did not install the declared projector")
 	}
-	if _, err := runCommand(home, "entry", []string{"hello", "offline", "world"}); err != nil {
+	if _, err := runCommand(home, "entry", []string{"hello", "offline", "world"}, "cli", ""); err != nil {
 		t.Fatal(err)
 	}
 	page, err := runProjection(home, "journal")
@@ -787,7 +788,7 @@ func TestLiveExecutionRejectsTamperedScripts(t *testing.T) {
 	if err := os.WriteFile(command, []byte("#!/bin/sh\necho tampered\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCommand(home, "note", []string{"x"}); err == nil || !strings.Contains(err.Error(), "verified receipt") {
+	if _, err := runCommand(home, "note", []string{"x"}, "cli", ""); err == nil || !strings.Contains(err.Error(), "verified receipt") {
 		t.Fatalf("tampered command execution error = %v", err)
 	}
 	projector, _ := scriptPath(home, "projector", "notes")
@@ -807,7 +808,7 @@ func TestStubCommandHonorsDeclaredField(t *testing.T) {
 	if err := ingest(home, []Event{decl}); err != nil {
 		t.Fatal(err)
 	}
-	events, err := runCommand(home, "memo", []string{"uses", "text"})
+	events, err := runCommand(home, "memo", []string{"uses", "text"}, "cli", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1492,6 +1493,125 @@ func TestLearnRecordsInterventionDigest(t *testing.T) {
 	}
 	if learned.RecordSha256 == learned.ManifestSha256 {
 		t.Fatal("an edited record still matches the manifest — the intervention is invisible")
+	}
+}
+
+// TestProvenanceDoorStamped pins the door rule: via records the channel the
+// kernel itself witnessed, stamped at append time — a script that emits its
+// own via/by is claiming a door, and doors are not claimable. by carries the
+// caller's claim verbatim.
+func TestProvenanceDoorStamped(t *testing.T) {
+	home := t.TempDir()
+	script := "#!/bin/sh\necho '{\"name\":\"fact.stated\",\"via\":\"kernel\",\"by\":\"forged\",\"payload\":{\"text\":\"hello\"}}'\n"
+	if err := installTrustedScript(home, "command", "state", script, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCommand(home, "state", nil, "cli", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := readEvents(home)
+	found := false
+	for _, e := range events {
+		if e.Name != "fact.stated" {
+			continue
+		}
+		found = true
+		if e.Via != "cli" {
+			t.Fatalf("via = %q, want %q — a script set its own door", e.Via, "cli")
+		}
+		if e.By != "alice" {
+			t.Fatalf("by = %q, want the caller's claim %q", e.By, "alice")
+		}
+	}
+	if !found {
+		t.Fatal("the command's event did not land")
+	}
+}
+
+// TestProvenanceHTTPDoor pins the second door: a form POST lands with
+// via http:<remote-addr> and the X-Self-Caller header recorded verbatim as
+// the claimed speaker.
+func TestProvenanceHTTPDoor(t *testing.T) {
+	home := t.TempDir()
+	script := "#!/bin/sh\nprintf '{\"name\":\"fact.stated\",\"payload\":{\"text\":\"%s\"}}\\n' \"$1\"\n"
+	if err := installTrustedScript(home, "command", "state", script, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	mux := serveMux(home)
+	req := httptest.NewRequest("POST", "/run/state", strings.NewReader("text=from+the+web"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Self-Caller", "claude-main")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("POST /run/state = %d: %s", w.Code, w.Body.String())
+	}
+	events, _ := readEvents(home)
+	found := false
+	for _, e := range events {
+		if e.Name != "fact.stated" {
+			continue
+		}
+		found = true
+		if !strings.HasPrefix(e.Via, "http:") {
+			t.Fatalf("via = %q, want an http:<addr> door", e.Via)
+		}
+		if e.By != "claude-main" {
+			t.Fatalf("by = %q, want the header's claim %q", e.By, "claude-main")
+		}
+	}
+	if !found {
+		t.Fatal("the form's event did not land")
+	}
+}
+
+// TestDepositProvenance pins the travel rule: by is portable like
+// occurred_at — testimony keeps its speaker across bodies — while via is
+// local like seq, so whatever door a record claims, the deposit here is
+// stamped learn:<account>. The learn's own receipts carry their doors too:
+// the mind's declarations enter mind:*, the attestation is the kernel's.
+func TestDepositProvenance(t *testing.T) {
+	t.Setenv("SELF_MIND", stubMind(t))
+	giver := t.TempDir()
+	e := newEvent("note.taken", json.RawMessage(`{"title":"low tide at dawn"}`))
+	e.Via, e.By = "http:10.0.0.7:9999", "giver-mind"
+	if err := appendEvent(giver, &e); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "notes")
+	if err := cmdGive(giver, "note.", dir); err != nil {
+		t.Fatal(err)
+	}
+	receiver := t.TempDir()
+	if err := cmdLearn(receiver, dir); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := readEvents(receiver)
+	deposited, attested, declared := false, false, false
+	for _, ev := range events {
+		switch ev.Name {
+		case "note.taken":
+			deposited = true
+			if ev.By != "giver-mind" {
+				t.Fatalf("deposited by = %q — the speaker did not travel", ev.By)
+			}
+			if ev.Via != "learn:notes" {
+				t.Fatalf("deposited via = %q, want %q — a foreign door was inherited", ev.Via, "learn:notes")
+			}
+		case "lesson.learned":
+			attested = true
+			if ev.Via != "kernel" {
+				t.Fatalf("lesson.learned via = %q, want kernel", ev.Via)
+			}
+		case "command.declared", "projector.declared":
+			declared = true
+			if !strings.HasPrefix(ev.Via, "mind:") {
+				t.Fatalf("declaration via = %q, want a mind:* door", ev.Via)
+			}
+		}
+	}
+	if !deposited || !attested || !declared {
+		t.Fatalf("missing events: deposited=%v attested=%v declared=%v", deposited, attested, declared)
 	}
 }
 

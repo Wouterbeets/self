@@ -29,6 +29,7 @@ func ensureHome(home string) error {
 		return err
 	}
 	e := newEvent("kernel.initialized", json.RawMessage(`{}`))
+	e.Via = "kernel"
 	if err := appendEvent(home, &e); err != nil {
 		return err
 	}
@@ -86,6 +87,10 @@ environment:
                     deterministic offline mind for demos/tests.
   SELF_MIND_ID     provenance by-line signed into script.compiled receipts
                     (default: the mind executable)
+  SELF_CALLER      claimed speaker recorded verbatim as by on events your CLI
+                    invocations append (over HTTP the X-Self-Caller header
+                    carries the claim); the door (via) is stamped by the
+                    kernel itself and cannot be claimed
 `
 }
 
@@ -134,8 +139,14 @@ Compiled capability contract
 
   command script      argv are command args; stdin is the current event log JSONL;
                       stdout is new event JSONL: {"name":"event.name","payload":{...}}
-                      the kernel assigns id, seq, and occurred_at, appends the
-                      events, then re-renders the projections that consume them.
+                      the kernel assigns id, seq, occurred_at, and provenance —
+                      via, the door the events entered through (cli, http:<addr>,
+                      mind:<id>, learn:<account>, kernel), stamped from what the
+                      kernel witnessed and never accepted from a script; and by,
+                      the caller's claimed identity (SELF_CALLER locally, the
+                      X-Self-Caller header over HTTP), recorded verbatim as a
+                      claim — then appends the events and re-renders the
+                      projections that consume them.
 
   projector script    stdin is the events matching the projector's declared
                       consumes list, as JSONL (an empty list or "*" means every
@@ -156,8 +167,10 @@ Accounts (give / learn)
   command/<name> selects a capability's declarations and receipts). self learn
   reads one: the receiver's mind reads the intent — and the record, with its
   own tools — against local state and declares its own capabilities; the
-  record is then deposited verbatim with its own occurred_at, never routed
-  through the mind. The kernel's own vocabulary (command.declared,
+  record is then deposited verbatim with its own occurred_at and by (the
+  speaker travels with its testimony), never routed through the mind. The
+  deposit's via is stamped learn:<account> — doors are local facts and are
+  never inherited from another body's log. The kernel's own vocabulary (command.declared,
   script.compiled, capability.retired, …) never travels raw: give renames
   such events to lineage.<name> and learn refuses them otherwise — a foreign
   account carries history as evidence but cannot speak in the receiving

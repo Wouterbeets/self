@@ -104,6 +104,7 @@ func cmdLearn(home, ref string) error {
 
 	payload, _ := json.Marshal(map[string]any{"name": name, "intent": intent})
 	ie := newEvent("intent.declared", payload)
+	ie.Via, ie.By = "cli", callerClaim()
 	if err := appendEvent(home, &ie); err != nil {
 		return err
 	}
@@ -120,10 +121,12 @@ func cmdLearn(home, ref string) error {
 	// from intent to script survives in the log, and weave it into each
 	// compile of this learn so every piece is authored with the plan in
 	// view — in-band continuity, never a session store.
+	mindDoor := "mind:" + mindIdentity()
 	if r := strings.TrimSpace(res.Response); r != "" {
 		c.reasoning = r
 		rp, _ := json.Marshal(map[string]any{"lesson": name, "reasoning": r})
 		re := newEvent("learn.orchestrated", rp)
+		re.Via = mindDoor
 		if err := appendEvent(home, &re); err != nil {
 			return err
 		}
@@ -137,6 +140,7 @@ func cmdLearn(home, ref string) error {
 			continue
 		}
 		e := newEvent(n, p)
+		e.Via = mindDoor
 		if err := appendEvent(home, &e); err != nil {
 			return err
 		}
@@ -152,13 +156,16 @@ func cmdLearn(home, ref string) error {
 	}
 
 	// The record lands verbatim: this instance's id and seq, the event's own
-	// moment. Deposited events never route through the mind — the model only
-	// ever writes the disposable part, never the part that accumulates.
+	// moment and speaker. Deposited events never route through the mind — the
+	// model only ever writes the disposable part, never the part that
+	// accumulates. The door is this log's own: whatever via the record
+	// carried was another body's fact, and this body's fact is the learn.
 	for _, e := range deposit {
 		fresh := newEvent(e.Name, e.Payload)
 		if !e.OccurredAt.IsZero() {
 			fresh.OccurredAt = e.OccurredAt
 		}
+		fresh.Via, fresh.By = "learn:"+name, e.By
 		if err := appendEvent(home, &fresh); err != nil {
 			return err
 		}
@@ -176,6 +183,7 @@ func cmdLearn(home, ref string) error {
 	}
 	rp, _ := json.Marshal(receipt)
 	se := newEvent("lesson.learned", rp)
+	se.Via = "kernel"
 	if err := appendEvent(home, &se); err != nil {
 		return err
 	}
@@ -227,6 +235,7 @@ func thinkPrompt(prompt string) string {
 func cmdReflect(home string) error {
 	prior, _ := readEvents(home)
 	hb := newEvent("self.reflected", json.RawMessage(`{}`))
+	hb.Via, hb.By = "cli", callerClaim()
 	if err := appendEvent(home, &hb); err != nil {
 		return err
 	}
@@ -281,7 +290,7 @@ func cmdRun(home, command string, args []string) error {
 	if p, _ := scriptPath(home, "command", command); !fileExists(p) {
 		return fmt.Errorf("command %q not found (learn a lesson that declares it)", command)
 	}
-	evs, err := runCommand(home, command, args)
+	evs, err := runCommand(home, command, args, "cli", callerClaim())
 	if err != nil {
 		return err
 	}
@@ -357,10 +366,11 @@ func cmdRevise(home, target string, words []string) error {
 	updatedDecl, _ := json.Marshal(decl)
 	revisionPayload, _ := json.Marshal(map[string]any{"type": typ, "name": name, "request": request, "from_receipt": receiptID})
 	before := receiptCount(home, typ, name)
-	if err := ingest(home, []Event{
-		newEvent("capability.revision.requested", revisionPayload),
-		newEvent(typ+".declared", updatedDecl),
-	}); err != nil {
+	rev := newEvent("capability.revision.requested", revisionPayload)
+	redecl := newEvent(typ+".declared", updatedDecl)
+	rev.Via, rev.By = "cli", callerClaim()
+	redecl.Via, redecl.By = "cli", callerClaim()
+	if err := ingest(home, []Event{rev, redecl}); err != nil {
 		return err
 	}
 	if receiptCount(home, typ, name) <= before {
@@ -391,7 +401,9 @@ func cmdRetire(home, target string) error {
 		return fmt.Errorf("nothing to retire: %s/%s is not currently declared", typ, name)
 	}
 	payload, _ := json.Marshal(retirement{Type: typ, Name: name})
-	if err := ingest(home, []Event{newEvent("capability.retired", payload)}); err != nil {
+	tomb := newEvent("capability.retired", payload)
+	tomb.Via, tomb.By = "cli", callerClaim()
+	if err := ingest(home, []Event{tomb}); err != nil {
 		return err
 	}
 	fmt.Printf("retired %s/%s — the log keeps its history; re-declare to revive\n", typ, name)

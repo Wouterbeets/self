@@ -118,8 +118,15 @@ events.jsonl    the append-only log — the only structured state
 
 Everything else (`capabilities/`, `site/`) is derived and can be rebuilt.
 
-**Events.** Each record is `{id, seq, name, occurred_at, payload}`. Records are
-never changed or deleted; a deletion is expressed as a later event.
+**Events.** Each record is `{id, seq, name, occurred_at, via, by, payload}`.
+Records are never changed or deleted; a deletion is expressed as a later
+event. `via` and `by` are provenance: `via` is the **door** — the channel the
+event entered through (`cli`, `http:<addr>`, `mind:<id>`, `learn:<account>`,
+`kernel`) — stamped by the kernel from what it witnessed and never accepted
+from a script, mind, or record; `by` is the **speaker** — the caller's claimed
+identity (`SELF_CALLER` locally, the `X-Self-Caller` header over HTTP),
+recorded verbatim as a claim, not a verified fact. `via` is local like `seq`;
+`by` is portable like `occurred_at` and travels with an account.
 
 **Commands.** A command is an executable script. It receives its arguments as
 `argv` and the current log as JSONL on stdin, and writes new events as JSONL on
@@ -180,8 +187,10 @@ Three rules keep the exchange honest, all mechanical:
   them raw. A foreign account carries its history as evidence but cannot
   speak in the receiving kernel's voice — a hostile account cannot install
   anything (there is a test for this).
-- **Moments are preserved.** Deposited events keep their own `occurred_at`;
-  a record arriving is history, not news.
+- **Moments are preserved.** Deposited events keep their own `occurred_at`
+  and their own speaker (`by`) — testimony travels with its time and its
+  voice. The door (`via`) is re-stamped `learn:<account>`: doors are this
+  log's facts, never another body's. A record arriving is history, not news.
 - **Interventions are visible.** Curation is editing the directory — the
   account is plain text, and deleting a line before learning is legitimate.
   The `lesson.learned` receipt records the sha256 of what was actually
@@ -314,6 +323,10 @@ SELF_BIND         bind address, host or host:port (default 127.0.0.1:7777;
                   set 0.0.0.0 to expose)
 SELF_MIND_ID     author string signed into receipts
                   (default: the mind executable)
+SELF_CALLER       claimed speaker, recorded verbatim as `by` on events your
+                  CLI invocations append; over HTTP the `X-Self-Caller`
+                  header carries the claim. The door (`via`) is stamped by
+                  the kernel itself and cannot be claimed.
 ```
 
 ## Repository layout

@@ -186,6 +186,7 @@ func cmdGive(home, selector, dir string) error {
 		"selector": selector, "events": len(selected), "dir": dir, "record_sha256": m.RecordSha256,
 	})
 	e := newEvent("account.given", given)
+	e.Via, e.By = "cli", callerClaim()
 	if err := appendEvent(home, &e); err != nil {
 		return err
 	}

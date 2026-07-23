@@ -113,6 +113,7 @@ type mindResult struct {
 // applyEvents appends events the mind returned and runs any capability
 // declarations among them through the strange loop.
 func applyEvents(home string, res *mindResult) {
+	mindDoor := "mind:" + mindIdentity()
 	var evs []Event
 	for _, d := range res.Events {
 		name, _ := d["name"].(string)
@@ -121,6 +122,7 @@ func applyEvents(home string, res *mindResult) {
 			continue
 		}
 		e := newEvent(name, payload)
+		e.Via = mindDoor
 		if err := appendEvent(home, &e); err != nil {
 			fmt.Fprintf(os.Stderr, "self: append mind event: %s\n", err)
 			return

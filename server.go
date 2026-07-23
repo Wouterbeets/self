@@ -142,7 +142,10 @@ func serveMux(home string) *http.ServeMux {
 				args = []string{msg}
 			}
 		}
-		if _, err := runCommand(home, command, args); err != nil {
+		// The door is what the kernel witnessed (this HTTP request); the
+		// speaker is whatever the caller claimed — a deployment that verifies
+		// identity does so at a proxy, which strips and re-injects the header.
+		if _, err := runCommand(home, command, args, "http:"+r.RemoteAddr, r.Header.Get("X-Self-Caller")); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}

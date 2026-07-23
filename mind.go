@@ -27,10 +27,11 @@ type llm struct {
 	reasoning string
 }
 
-// identity names the mind for provenance: who authored the bytes a receipt
-// carries. SELF_MIND_ID lets an agent name itself; otherwise the mind
+// mindIdentity names the mind for provenance: who authored the bytes a
+// receipt carries, and the speaker behind every mind:* door on the event
+// envelope. SELF_MIND_ID lets an agent name itself; otherwise the mind
 // executable is the honest mechanical answer.
-func (c *llm) identity() string {
+func mindIdentity() string {
 	if id := strings.TrimSpace(os.Getenv("SELF_MIND_ID")); id != "" {
 		return id
 	}
@@ -40,13 +41,15 @@ func (c *llm) identity() string {
 	return "mind"
 }
 
+func (c *llm) identity() string { return mindIdentity() }
+
 func newLLM(home string) *llm {
 	return &llm{home: home}
 }
 
 // ─────────────────────────────── the prompts ────────────────────────────────
 
-const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at.
+const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at, and provenance (via — the door the invocation came through — and by, the caller's claim); a script cannot set them.
 projector script: receives the events matching its declared consumes list as JSONL on stdin (an empty list or "*" means every event — declare consumes precisely and the script never needs to filter), writes bare semantic HTML on stdout. Do not emit CSS, JavaScript, inline styles, or external assets: the kernel injects the shared shell at serve time. The kernel persists projector output to SELF_HOME/site/<name>.html.
 The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries.`
 
