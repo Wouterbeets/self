@@ -28,6 +28,29 @@ unauditable, absent from every account. An instance's memory is its events and
 projections; a mind that needs to remember something should write it to the
 log through a capability, where `rehydrate` can reach it.
 
+## `mind-codex` — the OpenAI Codex CLI as the mind
+
+`codex exec` is non-interactive and explores with its own tools, but it
+prints a human session log on stdout — banner, reasoning, tool calls, token
+count — and the kernel reads stdout as the answer. This adapter asks Codex
+for its final message alone (`--output-last-message`), sends the session log
+to stderr where a human can watch it, and puts nothing else on the pipe. It
+runs Codex with `--sandbox workspace-write` so the mind can test a candidate
+script before answering; `--cd $SELF_HOME` and `--skip-git-repo-check` point
+it at the instance, which is not a git repository.
+
+```sh
+codex login                                # ChatGPT sign-in, once
+export SELF_MIND="$PWD/examples/mind-codex"
+export SELF_MIND_ID="codex"
+self learn lessons/chat
+```
+
+Knobs: `SELF_CODEX` (the executable), `SELF_CODEX_MODEL`,
+`SELF_CODEX_SANDBOX`, `SELF_CODEX_ARGS`. For a full macOS walkthrough — from
+Homebrew to the first served page — see
+[`INSTALL-MACOS.md`](../INSTALL-MACOS.md).
+
 ## `mind-stub`
 
 The deterministic offline mind — no LLM, no network, Python standard library

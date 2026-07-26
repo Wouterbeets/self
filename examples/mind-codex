@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""mind-codex - a SELF_MIND adapter backed by `codex exec`.
+
+The kernel reads ONLY this process's stdout: event JSONL, and prose for
+everything else. `codex exec` writes a human session log there instead - a
+banner, reasoning, every tool call, a token count - with the final answer
+buried in it. So this adapter asks codex for its last message in a file
+(`--output-last-message`), sends the session log to stderr where a human can
+watch it, and prints that last message alone on the pipe. The kernel prompt
+remains the single source of protocol instructions; nothing here rewrites it.
+
+`codex exec` is non-interactive and never asks for approval, so the sandbox
+flag is the whole safety story: `workspace-write` lets the mind explore
+SELF_HOME and execute a candidate script before answering, which is what the
+mind contract asks for - a mind that cannot read `site/*.html`,
+`events.jsonl` and `capabilities/`, and cannot test what it writes, is not a
+complete mind. Nothing it does installs anything: only a locally-signed
+receipt does that.
+
+Usage:
+
+    codex login                                    # ChatGPT sign-in, once
+    export SELF_MIND="$PWD/examples/mind-codex"
+    export SELF_MIND_ID="codex"
+    self learn lessons/chat
+
+Environment:
+
+    SELF_CODEX          the codex executable (default: codex)
+    SELF_CODEX_MODEL    model to pass to --model (default: codex's own)
+    SELF_CODEX_SANDBOX  read-only | workspace-write | danger-full-access
+                        (default: workspace-write)
+    SELF_CODEX_ARGS     extra arguments, split like a shell line
+"""
+
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
+
+
+def codex_command(last_message_path):
+    home = os.environ.get("SELF_HOME") or os.getcwd()
+    cmd = [
+        os.environ.get("SELF_CODEX", "codex"),
+        "exec",
+        "--skip-git-repo-check",  # an instance home is not a git repository
+        "--cd", home,
+        "--sandbox", os.environ.get("SELF_CODEX_SANDBOX", "workspace-write"),
+        "--color", "never",
+        "--output-last-message", last_message_path,
+    ]
+    model = os.environ.get("SELF_CODEX_MODEL", "")
+    if model:
+        cmd.extend(["--model", model])
+    cmd.extend(shlex.split(os.environ.get("SELF_CODEX_ARGS", "")))
+    return cmd
+
+
+def run_codex(prompt, brief):
+    # codex appends piped stdin to the prompt as a <stdin> block, so the
+    # orientation brief arrives with the ask, as the kernel intends.
+    with tempfile.NamedTemporaryFile(prefix="mind-codex-", suffix=".txt") as out:
+        proc = subprocess.run(
+            codex_command(out.name) + [prompt],
+            input=brief,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=None,  # codex's stderr passes through to the kernel's
+            cwd=os.environ.get("SELF_HOME") or None,
+        )
+        session_log = proc.stdout or ""
+        sys.stderr.write(session_log)  # the log is for the human, not the pipe
+        if proc.returncode != 0:
+            raise SystemExit(proc.returncode)
+        with open(out.name, "r") as f:
+            answer = f.read().strip()
+    # A silent success means codex wrote no last message - hand back the raw
+    # log rather than nothing, so the failure is legible in the reply.
+    return answer or session_log.strip()
+
+
+def main():
+    prompt = sys.argv[-1] if len(sys.argv) > 1 else ""
+    brief = sys.stdin.read()  # orientation brief - codex explores SELF_HOME itself
+    print(run_codex(prompt, brief))
+
+
+if __name__ == "__main__":
+    main()

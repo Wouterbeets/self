@@ -52,7 +52,12 @@ your project's `CLAUDE.md` / agent instructions, and your sessions gain an
 append-only memory that outlives them — no browser, no config, growth when
 you ask for it. Prebuilt binaries are on the
 [releases page](https://github.com/Wouterbeets/self/releases); or
-`go install github.com/Wouterbeets/self@latest`.
+`go install github.com/wouterbeets/self@main`.
+
+**On a Mac, starting from nothing?**
+[`INSTALL-MACOS.md`](INSTALL-MACOS.md) is the step-by-step: Homebrew, the
+binary, and the OpenAI Codex CLI plugged in as the mind on a ChatGPT
+subscription.
 
 ### 1. See the machinery with no LLM (about 10 seconds)
 
