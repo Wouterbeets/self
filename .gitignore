@@ -5,3 +5,11 @@
 # signed receipts (events.jsonl + .secret are the only source of truth)
 **/capabilities/
 **/site/
+
+# a self home living in the working directory — the convention on main, where
+# the default SELF_HOME is $PWD. Never commit one: .secret is a signing key and
+# events.jsonl is a live log.
+.self/
+
+# build output directory (`go build -o bin/self .`)
+/bin/
