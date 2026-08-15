@@ -27,7 +27,8 @@ by design — what's committed here is what the protocol says travels:
 - **`leap1.html`** — the deliverable: a self-contained three.js animation
   (three.js r160 inlined, no network needed) of LEAP-1 sprinting, hitting
   the ramp, and transforming. Open it in a browser; the buttons seek the
-  acts, the scrubber drives the timeline.
+  acts, the scrubber drives the timeline — and **You drive!** switches to
+  interactive mode: steer, gas, jump, transform, on touch pads or keyboard.
 
 To rebuild the instance itself, replay the account into a fresh home and
 let a mind re-author the capabilities it wants — declarations travel,

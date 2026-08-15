@@ -92,3 +92,10 @@ three-stage transform — with the same stage order the servo choreography
 will use. Geometry is deliberately boxes and cylinders in Optimus red/blue
 so the mechanism reads clearly. Buttons seek to each act; the scrubber
 drives the whole timeline (the show is a pure function of time).
+
+**You drive!** mode hands the driver the controls: hold-to-steer left/right,
+gas and reverse, a jump button (a suspension hop — and much bigger air off
+the ramp), and a transform toggle that works in both shapes. Big touch pads
+for small thumbs, or arrows/WASD, SPACE to jump, T to transform. The
+transform button refuses mid-air, exactly like the real car's IMU interlock
+will.

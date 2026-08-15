@@ -103,10 +103,41 @@
     width: 100%; accent-color: var(--red);
     height: 22px; cursor: pointer;
   }
+  button.mode { background: #1b2440; color: #fff; }
+  #movieBtns { display: contents; }
+
+  /* drive-mode touch pads */
+  .pad {
+    position: fixed; bottom: 128px;
+    display: none; gap: 12px; z-index: 5;
+    user-select: none; -webkit-user-select: none; touch-action: none;
+  }
+  .pad.left { left: 16px; align-items: flex-end; }
+  .pad.right { right: 16px; flex-direction: column; align-items: flex-end; }
+  .pad .row2 { display: flex; gap: 12px; }
+  .pad button {
+    width: 76px; height: 68px;
+    font-size: 26px; border-radius: 18px; padding: 0;
+    touch-action: none;
+  }
+  .pad button small { display: block; font-size: 10px; letter-spacing: 0.08em; }
+  #btnGas { background: var(--red); color: #fff; height: 80px; font-size: 17px; }
+  #btnJump { background: #ffc23d; font-size: 17px; }
+  #btnBot { background: var(--blue); color: #fff; }
+  #btnRev { width: 58px; height: 80px; font-size: 13px; }
+  body.drive .pad { display: flex; }
+  body.drive #play, body.drive #movieBtns, body.drive #scrubRow { display: none; }
+  #hint { display: none; font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; opacity: 0.75; text-align: center; }
+  body.drive #hint { display: block; }
+
   @media (max-width: 560px) {
     .sticker h1 { font-size: 22px; }
     button { font-size: 12px; padding: 7px 10px; }
     .speedo { display: none; }
+    .pad { bottom: 118px; }
+    .pad button { width: 64px; height: 60px; font-size: 20px; }
+    #btnGas, #btnRev { height: 70px; }
+    #hint { display: none !important; }
   }
 </style>
 
@@ -117,18 +148,37 @@
   <p>fast &bull; jumps &bull; transforms</p>
 </header>
 
+<div class="pad left" aria-label="Steering">
+  <button id="btnLeft" aria-label="Steer left">&#9664;</button>
+  <button id="btnRight" aria-label="Steer right">&#9654;</button>
+</div>
+<div class="pad right" aria-label="Gas, jump and transform">
+  <div class="row2">
+    <button id="btnJump" aria-label="Jump">&#11014; JUMP</button>
+    <button id="btnBot" aria-label="Transform">&#129302;</button>
+  </div>
+  <div class="row2">
+    <button id="btnRev" aria-label="Reverse">REV</button>
+    <button id="btnGas" aria-label="Gas">&#9889; GAS</button>
+  </div>
+</div>
+
 <section class="dock" aria-label="Animation controls">
   <div class="row">
+    <button id="mode" class="mode">&#127918; You drive!</button>
     <button id="play" aria-label="Pause">&#9208;</button>
-    <button class="race" data-seek="0">&#127937; Race</button>
-    <button class="jump" data-seek="7.1">&#128640; Jump</button>
-    <button class="bot" data-seek="12.1">&#129302; Transform</button>
+    <span id="movieBtns">
+      <button class="race" data-seek="0">&#127937; Race</button>
+      <button class="jump" data-seek="7.1">&#128640; Jump</button>
+      <button class="bot" data-seek="12.1">&#129302; Transform</button>
+    </span>
     <div class="caption" id="caption" role="status">FULL THROTTLE &mdash; 4WD SPRINT</div>
     <div class="speedo"><span id="speed">0</span> km/h</div>
   </div>
-  <div class="row">
+  <div class="row" id="scrubRow">
     <input id="scrub" type="range" min="0" max="30" step="0.01" value="0" aria-label="Scrub the timeline">
   </div>
+  <div id="hint">Hold the buttons &mdash; or arrow keys / WASD to drive, SPACE to jump, T to transform</div>
 </section>
 
 <script>
@@ -452,6 +502,23 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     };
   }
 
+  // ---------- shared pose application (movie and drive modes) ----------
+  function applyPose(fold, arms, headP, wave, wag, clock) {
+    legPivot.rotation.x = -Math.PI / 2 * fold;
+    bodyPivot.rotation.x = -Math.PI / 2 * fold;
+    [armL, armR].forEach(function (arm) {
+      var side = arm.userData.side;
+      arm.position.set(side * lerp(0.86, 1.02, arms), lerp(-0.5, -0.08, arms), lerp(1.1, 1.22, arms));
+      arm.rotation.x = -0.22 * arms;
+      arm.rotation.y = -side * 0.3 * arms;
+    });
+    armR.rotation.y -= wave * 1.35 + wag;
+    head.position.z = lerp(0.95, 1.72, clamp(headP, 0, 1)) + Math.max(0, headP - 1) * 0.1;
+    eyesMat.emissiveIntensity = headP > 0.6 ? 1.6 : 0;
+    var glow = fold > 0.9 ? (0.7 + 0.5 * (0.5 + 0.5 * Math.sin(clock * 3.2))) : 0.25;
+    chestWinMats.forEach(function (m) { m.emissiveIntensity = glow; });
+  }
+
   // ---------- captions ----------
   var CAPTIONS = [
     [0, 'FULL THROTTLE — 4WD SPRINT'],
@@ -505,23 +572,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     chassis.rotation.z = clamp(turn * st.speed * 0.12, -0.13, 0.13);
 
     // transform poses — the body flip does most of the work; arms slide up to the shoulders
-    legPivot.rotation.x = -Math.PI / 2 * ps.fold;
-    bodyPivot.rotation.x = -Math.PI / 2 * ps.fold;
     var wave = seg(t, 17.8, 18.4, 0, 1) * seg(t, 19.6, 20.2, 1, 0);
     var wag = Math.sin(t * 9) * 0.25 * wave;
-    [armL, armR].forEach(function (arm) {
-      var side = arm.userData.side;
-      arm.position.set(side * lerp(0.86, 1.02, ps.arms), lerp(-0.5, -0.08, ps.arms), lerp(1.1, 1.22, ps.arms));
-      arm.rotation.x = -0.22 * ps.arms;
-      arm.rotation.y = -side * 0.3 * ps.arms;
-    });
-    armR.rotation.y -= wave * 1.35 + wag;
-    head.position.z = lerp(0.95, 1.72, clamp(ps.head, 0, 1)) + Math.max(0, ps.head - 1) * 0.1;
-
-    // lights
-    eyesMat.emissiveIntensity = ps.head > 0.6 ? 1.6 : 0;
-    var glow = ps.fold > 0.9 ? (0.7 + 0.5 * (0.5 + 0.5 * Math.sin(t * 3.2))) : 0.25;
-    chestWinMats.forEach(function (m) { m.emissiveIntensity = glow; });
+    applyPose(ps.fold, ps.arms, ps.head, wave, wag, t);
 
     // wheels roll with ground speed (foot wheels included when scooting)
     lastWheelSpin += (st.speed * dt) / 0.35;
@@ -576,9 +629,158 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     camera.position.copy(camPos); camera.lookAt(camTgt);
   }
 
+  // ---------- drive mode: the kid takes the wheel ----------
+  var mode = 'movie', tGlobal = 0;
+  var sim = { x: -14, z: 0, y: 0, vy: 0, gyPrev: 0, heading: Math.PI / 2, speed: 0, p: 0, target: 0, pitch: 0, roll: 0 };
+  var input = { left: false, right: false, gas: false, rev: false };
+  var jumpQueuedAt = -9, botQueued = false;
+  var flashMsg = '', flashUntil = -9;
+  var sparkAt = -9, sparkPos = { x: 0, y: 0, z: 0 };
+  var dustAt = -9, dustPos = { x: 0, z: 0 };
+
+  function moveToward(v, target, step) {
+    return v < target ? Math.min(target, v + step) : Math.max(target, v - step);
+  }
+  function groundY(x, z) { // the ramp is the only terrain feature
+    if (x > -2.06 && x < 2.06 && Math.abs(z) < 1.6) return (x + 2.06) / 4.12 * 1.1;
+    return 0;
+  }
+  function flash(msg, secs) { flashMsg = msg; flashUntil = tGlobal + secs; }
+
+  function stepDrive(dt) {
+    sim.p = moveToward(sim.p, sim.target, dt / 2.2);
+    var robot = sim.p > 0.5;
+    var gy0 = groundY(sim.x, sim.z);
+    var grounded = sim.y <= gy0 + 0.04;
+
+    // transform request — the IMU interlock from the real design
+    if (botQueued) {
+      botQueued = false;
+      if (!grounded) flash('IMU SAYS NO — LAND FIRST!', 1.6);
+      else {
+        sim.target = 1 - sim.target;
+        if (sim.target === 0) flash('LATCHES LOCK — CAR MODE', 1.6);
+      }
+    }
+
+    // throttle
+    var maxV = robot ? 6.5 : 16, acc = robot ? 8 : 10;
+    if (input.gas) sim.speed = Math.min(maxV, sim.speed + acc * dt);
+    else if (input.rev) sim.speed = Math.max(-5, sim.speed - acc * dt);
+    else {
+      var fr = grounded ? 7 : 0.4;
+      sim.speed = sim.speed > 0 ? Math.max(0, sim.speed - fr * dt) : Math.min(0, sim.speed + fr * dt);
+    }
+
+    // steering (reduced authority in the air)
+    var steer = (input.left ? 1 : 0) - (input.right ? 1 : 0);
+    var steerEff = (grounded ? 1 : 0.35) * (robot ? 2.2 : 1.7);
+    sim.heading += steer * steerEff * dt * clamp(Math.abs(sim.speed) / 4, 0, 1) * (sim.speed >= 0 ? 1 : -1);
+
+    // move
+    sim.x = clamp(sim.x + Math.sin(sim.heading) * sim.speed * dt, -44, 44);
+    sim.z = clamp(sim.z + Math.cos(sim.heading) * sim.speed * dt, -44, 44);
+
+    // vertical: gravity, ground clamp, ramp-lip momentum, jump
+    var gy = groundY(sim.x, sim.z);
+    sim.vy -= 16 * dt;
+    sim.y += sim.vy * dt;
+    if (sim.y <= gy) {
+      if (sim.vy < -4.5) { dustAt = tGlobal; dustPos.x = sim.x; dustPos.z = sim.z; }
+      sim.y = gy;
+      sim.vy = Math.max(0, (gy - sim.gyPrev) / Math.max(dt, 0.001) * 0.85); // climbing the ramp becomes launch speed
+      grounded = true;
+    } else grounded = false;
+    sim.gyPrev = gy;
+    if (grounded && tGlobal - jumpQueuedAt < 0.3) {  // suspension-hop button
+      sim.vy = robot ? 6.4 : 7.8;
+      sim.y += 0.06;
+      jumpQueuedAt = -9;
+      grounded = false;
+    }
+
+    // attitude
+    var ahead = groundY(sim.x + Math.sin(sim.heading) * 1.3, sim.z + Math.cos(sim.heading) * 1.3);
+    var pitchT = grounded ? -Math.atan2(ahead - gy, 1.3) : clamp(-sim.vy * 0.045, -0.32, 0.4);
+    pitchT *= (1 - sim.p * 0.8);
+    sim.pitch += (pitchT - sim.pitch) * Math.min(1, dt * 8);
+    var rollT = steer * clamp(Math.abs(sim.speed) * 0.012, 0, 0.14) * (1 - sim.p);
+    sim.roll += (rollT - sim.roll) * Math.min(1, dt * 8);
+
+    // staged transform driven by one progress value
+    var fold = easeInOut(clamp(sim.p / 0.6, 0, 1));
+    var arms = easeInOut(clamp((sim.p - 0.55) / 0.3, 0, 1));
+    var headP = clamp(easeOutBack(clamp((sim.p - 0.85) / 0.15, 0, 1)), 0, 1.2);
+    if (sim.p >= 0.999 && sim.pDone !== 1) { // head just popped: sparkle
+      sim.pDone = 1; sparkAt = tGlobal;
+      sparkPos.x = sim.x; sparkPos.y = Math.sin(fold * Math.PI / 2) * ROBOT_LIFT + 2.7; sparkPos.z = sim.z;
+    }
+    if (sim.p < 0.999) sim.pDone = 0;
+    var lift = Math.sin(fold * Math.PI / 2) * ROBOT_LIFT;
+
+    // idle robot waves at the driver
+    var wave = (robot && Math.abs(sim.speed) < 1) ? clamp(Math.sin(tGlobal * 0.8) * 1.6 - 0.7, 0, 1) : 0;
+    var wag = Math.sin(tGlobal * 9) * 0.25 * wave;
+
+    rig.position.set(sim.x, lift + sim.y, sim.z);
+    rig.rotation.y = sim.heading;
+    chassis.position.y = 0;
+    chassis.rotation.x = sim.pitch;
+    chassis.rotation.z = sim.roll;
+    applyPose(fold, arms, headP, wave, wag, tGlobal);
+
+    lastWheelSpin += (Math.abs(sim.speed) * dt) / 0.35;
+    wheels.forEach(function (w) { w.tire.rotation.x = w.hub.rotation.x = lastWheelSpin; });
+
+    // particles on the drive-mode clock
+    var spT = clamp((tGlobal - sparkAt) / 0.95, 0, 1);
+    sparkleGroup.visible = spT > 0 && spT < 1;
+    if (sparkleGroup.visible) {
+      sparkleGroup.position.set(sparkPos.x, sparkPos.y, sparkPos.z);
+      var rad = 2.1 * easeOut(spT);
+      sparkles.forEach(function (sp) {
+        sp.position.copy(sp.userData.dir).multiplyScalar(rad);
+        sp.material.opacity = 1 - spT;
+        sp.rotation.x = sp.rotation.y = spT * 6;
+      });
+    }
+    var duT = clamp((tGlobal - dustAt) / 1.0, 0, 1);
+    dustGroup.visible = duT > 0 && duT < 1;
+    if (dustGroup.visible) {
+      dustGroup.position.set(dustPos.x, 0.15, dustPos.z);
+      dust.forEach(function (du) {
+        du.position.copy(du.userData.dir).multiplyScalar(3.2 * easeOut(duT));
+        du.position.y = Math.max(0.12, du.position.y);
+        var sc = 0.7 + duT * 1.8;
+        du.scale.set(sc, sc * 0.7, sc);
+        du.material.opacity = 0.55 * (1 - duT);
+      });
+    }
+
+    // chase camera
+    var dist = 7.2 + fold * 1.8, hgt = 3.1 + fold * 1.6;
+    var camDes = new THREE.Vector3(
+      sim.x - Math.sin(sim.heading) * dist, hgt + sim.y * 0.6,
+      sim.z - Math.cos(sim.heading) * dist);
+    var tgtDes = new THREE.Vector3(sim.x, 1.0 + fold * 1.7 + sim.y * 0.6, sim.z);
+    if (!camPos) { camPos = camDes.clone(); camTgt = tgtDes.clone(); }
+    var k = 1 - Math.exp(-dt * 3.6);
+    camPos.lerp(camDes, k); camTgt.lerp(tgtDes, k);
+    camera.position.copy(camPos); camera.lookAt(camTgt);
+
+    return { robot: robot, grounded: grounded };
+  }
+
+  function driveCaption(dr) {
+    if (tGlobal < flashUntil) return flashMsg;
+    if (!dr.grounded) return 'AIR TIME!';
+    if (dr.robot) return 'ROBOT MODE — SKATING ON FOOT WHEELS';
+    return 'VROOM! FIND THE RAMP!';
+  }
+
   // ---------- boot ----------
   var playing = true, master = 0, lastFrame = null;
-  var captionEl, speedEl, scrubEl, playBtn;
+  var captionEl, speedEl, scrubEl, playBtn, modeBtn;
 
   function init() {
     var mount = document.getElementById('stage');
@@ -600,6 +802,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     speedEl = document.getElementById('speed');
     scrubEl = document.getElementById('scrub');
     playBtn = document.getElementById('play');
+    modeBtn = document.getElementById('mode');
 
     scrubEl.addEventListener('input', function () { master = parseFloat(scrubEl.value); });
     playBtn.addEventListener('click', togglePlay);
@@ -610,6 +813,36 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       });
     });
 
+    // --- drive mode wiring ---
+    modeBtn.addEventListener('click', function () { setMode(mode === 'movie' ? 'drive' : 'movie'); });
+    function hold(id, key) {
+      var el = document.getElementById(id);
+      el.addEventListener('pointerdown', function (e) {
+        e.preventDefault();
+        if (el.setPointerCapture) try { el.setPointerCapture(e.pointerId); } catch (err) { }
+        input[key] = true;
+      });
+      ['pointerup', 'pointercancel'].forEach(function (ev) {
+        el.addEventListener(ev, function () { input[key] = false; });
+      });
+      el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    }
+    hold('btnLeft', 'left'); hold('btnRight', 'right');
+    hold('btnGas', 'gas'); hold('btnRev', 'rev');
+    document.getElementById('btnJump').addEventListener('pointerdown', function (e) { e.preventDefault(); jumpQueuedAt = tGlobal; });
+    document.getElementById('btnBot').addEventListener('pointerdown', function (e) { e.preventDefault(); botQueued = true; });
+
+    var KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'gas', KeyW: 'gas', ArrowDown: 'rev', KeyS: 'rev' };
+    window.addEventListener('keydown', function (e) {
+      if (mode !== 'drive') return;
+      if (KEYMAP[e.code]) { input[KEYMAP[e.code]] = true; e.preventDefault(); }
+      else if (e.code === 'Space') { if (!e.repeat) jumpQueuedAt = tGlobal; e.preventDefault(); }
+      else if (e.code === 'KeyT' || e.code === 'Enter') { if (!e.repeat) botQueued = true; e.preventDefault(); }
+    });
+    window.addEventListener('keyup', function (e) {
+      if (KEYMAP[e.code]) input[KEYMAP[e.code]] = false;
+    });
+
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       playing = false; master = 16.6; playBtn.textContent = '▶'; playBtn.setAttribute('aria-label', 'Play');
     }
@@ -618,9 +851,29 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       seek: function (t) { master = t % LOOP; },
       snapCam: function () { camPos = null; },
       pause: function () { playing = false; },
-      play: function () { playing = true; }
+      play: function () { playing = true; },
+      drive: function () { setMode('drive'); },
+      input: input,
+      sim: sim
     };
     requestAnimationFrame(tick);
+  }
+  function setMode(m) {
+    if (m === mode) return;
+    mode = m;
+    document.body.classList.toggle('drive', m === 'drive');
+    modeBtn.innerHTML = m === 'drive' ? '&#127916; Movie' : '&#127918; You drive!';
+    if (m === 'drive') {
+      // pick the car up exactly where the movie left it
+      var st = stateAt(master), ps = pose(master);
+      sim.x = st.p.x; sim.z = st.p.z;
+      sim.heading = st.speed > 0.05 ? st.heading : Math.PI / 2;
+      sim.speed = Math.min(st.speed, 16);
+      sim.p = ps.fold; sim.target = Math.round(ps.fold); sim.pDone = sim.target;
+      sim.y = carY(master); sim.vy = 0; sim.gyPrev = groundY(sim.x, sim.z);
+      sim.pitch = 0; sim.roll = 0;
+      flash(sim.target === 1 ? 'YOU DRIVE THE ROBOT!' : 'YOU DRIVE! GAS IT!', 2.5);
+    }
   }
   function togglePlay() {
     playing = !playing;
@@ -638,12 +891,23 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     if (lastFrame === null) lastFrame = now;
     var dt = Math.min((now - lastFrame) / 1000, 0.05);
     lastFrame = now;
-    if (playing) master = (master + dt) % LOOP;
-    applyState(master, dt);
-    scrubEl.value = master.toFixed(2);
-    var cap = captionFor(master);
+    tGlobal += dt;
+    var cap, kmh;
+    if (mode === 'drive') {
+      var dr = stepDrive(dt);
+      cap = driveCaption(dr);
+      kmh = Math.round(Math.abs(sim.speed) * 3.6 * 0.35);
+      clouds.forEach(function (cl, i) {
+        cl.position.x = cl.userData.baseX + Math.sin(tGlobal / LOOP * Math.PI * 2 + i) * 1.5;
+      });
+    } else {
+      if (playing) master = (master + dt) % LOOP;
+      applyState(master, dt);
+      scrubEl.value = master.toFixed(2);
+      cap = captionFor(master);
+      kmh = Math.round(stateAt(master).speed * 3.6 * 0.35);
+    }
     if (cap !== lastCaption) { captionEl.textContent = cap; lastCaption = cap; }
-    var kmh = Math.round(stateAt(master).speed * 3.6 * 0.35);
     speedEl.textContent = kmh;
     renderer.render(scene, camera);
   }
