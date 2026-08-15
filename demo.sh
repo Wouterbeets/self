@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 # demo.sh — see the machinery with no LLM, in about ten seconds.
 #
-# This shows the kernel loop end to end WITHOUT a model: a lesson's intent
-# becomes declarations, declarations compile into scripts (here via
-# examples/mind-stub, a deterministic offline mind plugged through the same
-# seam as any real one), running a command appends an event, a projection
-# renders it, and the whole instance rebuilds from events.jsonl + .secret
-# alone — byte for byte.
+# This shows the whole loop end to end WITHOUT a model. The mind is a shell
+# process piped between two selves — here examples/mind-stub, a deterministic
+# offline filter plugged through the same seam as any real one:
+#
+#     self learn <lesson> | mind | self      # intent → declarations → scripts
+#     echo "<ask>"        | self | mind | self
+#
+# A lesson's intent becomes declarations, declarations get authored scripts
+# installed under signed receipts, running a command appends an event, a
+# projection renders it, and the whole instance rebuilds from events.jsonl +
+# .secret alone — byte for byte.
 #
 # The stub authors trivial scripts; the point here is the machinery, not the
-# intelligence. For real, LLM-generated capabilities, plug a real mind and
-# use `self learn` (see the README).
+# intelligence. For real capabilities, put a real mind in the pipe:
+#     self learn lessons/chat | claude -p | self
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")" && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-export SELF_MIND="$root/examples/mind-stub"
+mind="$root/examples/mind-stub"
 export SELF_MIND_ID="stub (no LLM)"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
@@ -26,8 +31,11 @@ go build -o "$work/self" "$root"
 self="$work/self"
 export SELF_HOME="$work/home"
 
-say "learn a lesson (the stub mind declares from its intent; the kernel compiles and signs)"
-"$self" learn "$root/lessons/journal"
+say "the strange loop: learn a lesson through the pipe (deposit, declare, author, install)"
+"$self" learn "$root/lessons/journal" | "$mind" | "$self"
+
+say "ask through the pipe (the ask and the reply both land in the log)"
+echo "what can you do now?" | "$self" | "$mind" | "$self"
 
 say "run the learned command a couple of times (each appends one event)"
 "$self" run entry water the plants

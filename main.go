@@ -1,34 +1,29 @@
-// self — a local-first, event-sourced runtime with LLM-generated capabilities.
+// self — a small, local-first runtime. One append-only event log
+// (events.jsonl) is the only truth; every view is a pure replay of it. The
+// kernel holds no model: intelligence enters through the shell pipe, where
+// `self` is a filter and the mind is whatever sits between two invocations of
+// it:
 //
-// One append-only event log (events.jsonl) is the only truth. Every view is a
-// pure replay of it, rendered as HTML that you and your agent read identically.
-// Capabilities are standalone scripts the kernel pipes events through, and code
-// is never shipped — a mind process (SELF_MIND) authors every script from a
-// declaration, for this receiver; the kernel holds no model of its own. A
-// running capability can declare new capabilities and the
-// kernel compiles them on the spot (the strange loop). Every compile is logged
-// as a script.compiled receipt signed with a per-home secret; only kernel-signed
-// receipts ever install, so `self rehydrate` rebuilds the derived instance from
-// events.jsonl + .secret alone.
+//	echo "whats going on today?" | self | claude -p | self
+//
+// The first `self` situates the ask (orientation, conversation, pending work,
+// the answer contract); the mind answers in event JSONL; the second `self`
+// hears it — events append, authored scripts install under receipts signed
+// with a per-home secret. Only kernel-signed receipts ever install, so
+// `self rehydrate` rebuilds the derived instance from events.jsonl + .secret
+// alone. A capability that declares new capabilities feeds the same loop —
+// one shell pass at a time, until quiet (the strange loop).
 package main
 
 import (
 	"fmt"
 	"os"
-	"strings"
 )
 
 func main() {
 	home := homeDir()
 	if len(os.Args) < 2 {
-		err := ensureHome(home)
-		if err == nil {
-			err = rehydrate(home)
-		}
-		if err == nil {
-			err = cmdServe(home)
-		}
-		if err != nil {
+		if err := cmdPipe(home); err != nil {
 			fmt.Fprintf(os.Stderr, "self: %s\n", err)
 			os.Exit(1)
 		}
@@ -46,6 +41,14 @@ func main() {
 	}
 
 	switch cmd {
+	case "serve":
+		err = ensureHome(home)
+		if err == nil {
+			err = rehydrate(home)
+		}
+		if err == nil {
+			err = cmdServe(home)
+		}
 	case "learn":
 		if len(args) < 1 {
 			err = fmt.Errorf("usage: self learn <account-dir>")
@@ -64,10 +67,6 @@ func main() {
 		} else {
 			err = cmdRun(home, args[0], args[1:])
 		}
-	case "think":
-		err = cmdThink(home, strings.Join(args, " "))
-	case "reflect":
-		err = cmdReflect(home)
 	case "show":
 		if len(args) < 1 {
 			err = fmt.Errorf("usage: self show <projection>")
@@ -76,12 +75,6 @@ func main() {
 		}
 	case "rehydrate":
 		err = rehydrate(home)
-	case "revise":
-		if len(args) < 2 {
-			err = fmt.Errorf("usage: self revise command/<name> <change request>")
-		} else {
-			err = cmdRevise(home, args[0], args[1:])
-		}
 	case "retire":
 		if len(args) != 1 {
 			err = fmt.Errorf("usage: self retire command/<name> | projector/<name>")

@@ -22,21 +22,22 @@ mylesson/
   manifest.json  optional — an attestation over the record (written by self give)
 ```
 
-`self learn mylesson/` does the rest:
+`self learn mylesson/ | claude -p | self` does the rest:
 
-1. It records an `intent.declared` event.
-2. It hands `intent.md` to the mind (a real mind writes real capabilities;
-   `examples/mind-stub` is a deterministic offline one that declares a
-   minimal command + projection, enough to exercise the loop). The mind reads
-   the intent, looks at what the instance already has, and decides how to
-   decompose it into **commands** (verbs that emit events) and **projections**
-   (HTML views over events).
-3. It declares each capability. The kernel compiles each one into a script,
-   installs it, and records a signed receipt.
-4. If `record.jsonl` is present, its events are deposited verbatim — this
-   instance's ids, the events' own moments — so the new views have something
-   to render from the first moment. A `lesson.learned` receipt closes the
-   learn, attesting to what was deposited.
+1. `self learn` records an `intent.declared` event, deposits `record.jsonl`
+   verbatim if present — this instance's ids, the events' own moments — and
+   writes a `lesson.learned` receipt attesting to what was deposited. All of
+   that is mechanical and needs no mind.
+2. It then prints the learning prompt on stdout. The mind you pipe it to (a
+   real mind writes real capabilities; `examples/mind-stub` is a
+   deterministic offline one that declares a minimal command + projection,
+   enough to exercise the loop) reads the intent, looks at what the instance
+   already has, and decides how to decompose it into **commands** (verbs that
+   emit events) and **projections** (HTML views over events).
+3. The mind's answer flows back into the second `self`: each declaration is
+   appended, each authored script installs under a signed receipt. A
+   declaration the mind left unauthored stays pending — the next
+   `self | claude -p | self` pass asks for it.
 
 ## The contract your capabilities must honor
 

@@ -63,10 +63,12 @@ never a trigger, and the instance stays inert between invocations.
 - Firing has no effects. A `timer.fired` event is a record, not an action:
   anything that should *happen* on firing is another capability consuming
   `timer.fired` — a projection that surfaces what fired since you last
-  looked, or an operator pairing the tick with `self reflect`.
-- No recurrence in this lesson. Repeating timers are one
-  `self revise command/timer/tick "…"` away once a real need shapes what
-  repetition should mean; do not speculate them into the first version.
+  looked, or an operator pairing the tick with a mind pass
+  (`self | claude -p | self`).
+- No recurrence in this lesson. Repeating timers are one revision away —
+  ask through the pipe (`echo "make timer/tick understand recurrence: …" |
+  self | claude -p | self`) once a real need shapes what repetition should
+  mean; do not speculate them into the first version.
 
 ## what good looks like
 

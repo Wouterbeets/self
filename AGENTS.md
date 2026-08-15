@@ -3,9 +3,7 @@
 Copy the section below into the agent instructions (`CLAUDE.md`, `AGENTS.md`,
 or system prompt) of any project whose sessions should use a self instance as
 shared persistent state. It assumes `self` is on PATH; by default the current
-working directory is the instance, or `SELF_HOME` can pin a shared one. To
-also use the agent as the instance's mind (compiler included), see "The
-mind" in the README.
+working directory is the instance, or `SELF_HOME` can pin a shared one.
 
 ---
 
@@ -20,7 +18,8 @@ ends.
 
 ```sh
 cat "$SELF_HOME/site/brief.md"      # where you are, what exists, where to look
-export SELF_MIND_ID="<who you are>"
+export SELF_CALLER="<who you are>"   # your claim, recorded on events you cause
+export SELF_MIND_ID="<who you are>"  # signed into receipts for scripts you author
 ```
 
 The brief is a wake-up card. For depth, read `site/*.html` (the rendered
@@ -28,34 +27,32 @@ state a human sees), `events.jsonl` (the raw log), `capabilities/` (the
 installed scripts, one directory per capability with the script at
 `<name>/run`).
 
-**The interface:**
+**The interface — one filter and a few verbs:**
 
 - **Read.** `self show <projection>` (or `$SELF_HOME/site/*.html`, or the
   HTTP routes when serving). Projections are deterministic replays of the
   log — they are the current state. The index page (`/`) lists every
   command and projection this instance has.
 - **Write.** `self run <command> [args…]` appends events and re-renders all
-  projections. The log is append-only; no operation is destructive. Events
-  you cause carry your `SELF_MIND_ID` as author where commands record one.
+  projections. Or pipe event JSONL straight in: `echo '{"name":"…","payload":{…}}' | self`.
+  The log is append-only; no operation is destructive.
 - **Persist.** State lives only in events. Route anything that must survive
   the session through the instance's commands. Where a `remember` command
   exists, use it for durable facts — one self-contained fact per call,
   written for a future reader with no other context; check `/memory` before
   re-learning something the instance already knows.
-- **Extend.** Declarations compile on ingestion. `self learn <account>` learns a
-  capability set from an `intent.md` (and deposits its record, if it carries one);
-  `self revise command/<name> "<change request>"` recompiles an installed
-  capability with its current script as context. `self think "<prompt>"`
-  is report-only: it returns `{response, declarations}` without ingesting —
-  a query, not a mutation. Declining to extend is a valid outcome.
-
-**If you are also the mind** (the kernel spawns you for compiles): your
-stdout is the only channel and your reply is final — you are never
-re-invoked. Explore first, then answer completely; never end on a plan.
-One caveat for Claude Code minds: the instance directory must be trusted
-once (`cd $SELF_HOME && claude`, accept the prompt) or the permission
-grants in `$SELF_HOME/.claude/settings.json` — the test bench that lets
-compiles actually run their scripts — are silently ignored.
+- **Ask / extend.** The loop is a shell pipe and you can stand on either side
+  of it. To see what a mind would be asked: `echo "<ask>" | self` (this also
+  records the ask). To BE the mind: read that prompt and pipe your answer
+  back in — event lines (`{"name":"…","payload":{…}}`), declarations
+  (`command.declared` / `projector.declared`), scripts
+  (`script.authored` with `{type, name, script}`), and always end with
+  `{"name":"self.replied","payload":{"text":"…"}}`. Only the kernel installs,
+  under a signed receipt. `self | cat` shows pending work. Declining to
+  extend is a valid outcome. `self protocol` prints the full wire contract.
+- **Learn.** `self learn <account-dir>` deposits an account's record and
+  prints its learning prompt; answer it (or pipe it to another mind) to grow
+  the capabilities it asks for.
 
 **Established instances may define conventions.** Long-lived instances often
 carry capabilities for memory (`remember` / `/memory`), work logs, or
@@ -71,6 +68,7 @@ nobody will re-read.
 ---
 
 *Design note: the runtime does not distinguish an internal mind from an
-external agent — both act through the same three primitives (commands,
-events, projections), read the same replayed state, and leave receipts
-signed by the instance carrying their author string.*
+external agent — there is no internal mind. Everything intelligent stands in
+the same shell pipe, acts through the same three primitives (commands,
+events, projections), reads the same replayed state, and leaves receipts
+signed by the instance carrying its author string.*

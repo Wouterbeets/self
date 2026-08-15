@@ -51,6 +51,9 @@ var kernelVocabulary = map[string]bool{
 	"capability.retired":            true,
 	"capability.revision.requested": true,
 	"self.reflected":                true,
+	"self.asked":                    true,
+	"self.replied":                  true,
+	"script.authored":               true,
 }
 
 const lineagePrefix = "lineage."

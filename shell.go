@@ -40,7 +40,7 @@ func renderKernelHTML(home string) {
 	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>self</title></head><body>\n")
 	b.WriteString("<h1>self</h1>\n")
 	b.WriteString("<p class=\"muted\">a local-first, event-sourced runtime with LLM-generated capabilities</p>\n")
-	b.WriteString("<p>One append-only event log is the authoritative state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log. Humans and agents read the same rendered result. Every path below is a plain file. Minds also get a short orientation brief at <code>site/brief.md</code> (stdin when spawned); this page is optional depth.</p>\n")
+	b.WriteString("<p>One append-only event log is the authoritative state. Everything here — the capabilities, the projections, this page — is a deterministic replay of that log. Humans and agents read the same rendered result. Every path below is a plain file. Minds are shell processes piped between two selves (<code>echo \"…\" | self | claude -p | self</code>); every prompt opens with the orientation brief at <code>site/brief.md</code>, and this page is optional depth.</p>\n")
 	b.WriteString(orientationHTML)
 
 	b.WriteString("<h2>commands</h2>\n")
@@ -88,9 +88,9 @@ func renderKernelHTML(home string) {
 	b.WriteString("</table>\n")
 
 	b.WriteString("<h2>compiled capability pipe</h2>\n")
-	b.WriteString("<p class=\"muted\">Contract for installed command and projector <em>scripts</em> — not the mind adapter seam. Mind answers are process stdout; see <code>self protocol</code>.</p>\n")
+	b.WriteString("<p class=\"muted\">Contract for installed command and projector <em>scripts</em> — not the mind seam. A mind speaks by printing events into the shell pipe; see <code>self protocol</code>.</p>\n")
 	b.WriteString("<pre>" + esc(pipeContract) + "</pre>\n")
-	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> compile into capabilities (at learn time and run time alike). <code>script.compiled</code> is a compile receipt signed with my <code>.secret</code> — anyone may append one, but only a kernel-signed receipt ever installs; <code>self rehydrate</code> rebuilds derived state (<code>capabilities/</code> + <code>site/</code>) from the log and that key. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it. Between instances, the Account Protocol is <code>self give</code> / <code>self learn</code>: accounts carry intent and evidence, never runnable code.</p>\n")
+	b.WriteString("<h2>the events I act on</h2>\n<p><code>command.declared</code> / <code>projector.declared</code> announce capabilities; each stays <em>pending</em> until a mind pipes back its script as <code>script.authored</code>, which installs under a <code>script.compiled</code> receipt signed with my <code>.secret</code> — anyone may append a receipt, but only a kernel-signed one ever installs; <code>self rehydrate</code> rebuilds derived state (<code>capabilities/</code> + <code>site/</code>) from the log and that key. <code>capability.retired</code> takes a capability off the derived surface — script and page — while every event stays; a later re-declaration revives it. Between instances, the Account Protocol is <code>self give</code> / <code>self learn</code>: accounts carry intent and evidence, never runnable code.</p>\n")
 	b.WriteString("</body></html>\n")
 
 	siteDir := filepath.Join(home, "site")
