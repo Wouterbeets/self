@@ -23,17 +23,6 @@ func feedEvents(stdin io.WriteCloser, events []Event) {
 	}()
 }
 
-// feedText writes a plain-text string to a process's stdin and closes it. Used
-// for the mind, which receives an orientation brief — not the raw log — so it
-// reads where to look, then explores SELF_HOME itself with its own tools
-// instead of being force-fed a firehose of events.
-func feedText(stdin io.WriteCloser, text string) {
-	go func() {
-		io.WriteString(stdin, text)
-		stdin.Close()
-	}()
-}
-
 // declaredCaps replays the log into the currently declared commands and
 // projectors, each in first-declared order. The shared walk behind both the
 // orientation brief and the kernel index — the log is the only source, so both
@@ -93,14 +82,13 @@ func declaredCaps(events []Event) (commands map[string]commandDecl, cmdOrder []s
 // philosophy. It tells the mind where it is, how write/extend work, what
 // commands and projections are installed, and where depth lives on disk.
 // Values and "open when" guidance never live here; they appear only if this
-// instance has learned projections that surface them.
+// instance has learned projections that surface them. It opens every prompt
+// the ask face of the pipe emits.
 //
-// A consequence: a mind that cannot inspect files under SELF_HOME — a plain
-// stdin/stdout API adapter with no tools — cannot do the job. The kernel's
-// process seam is still a pipe (brief on stdin; stdout parsed on exit), but a
-// real mind needs a tool loop on its side of it. How an adapter turns tools or
-// APIs into that process stdout is adapter-local (see examples/). The kernel
-// does not sandbox or supply tools.
+// A consequence: a mind that cannot inspect files under SELF_HOME — a bare
+// stdin/stdout text transform with no tools — cannot do the whole job. The
+// seam is a shell pipe; the tool loop is the mind's own concern, never the
+// kernel's. The kernel does not sandbox or supply tools.
 //
 // The kernel materializes the brief to SELF_HOME/site/brief.md (see
 // renderBriefFile) so it is explorable on disk like every other piece of
@@ -136,20 +124,19 @@ func stateBrief(home string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# self — orientation brief\n\n")
 	fmt.Fprintf(&b, "Instance: `%s`\n", home)
-	fmt.Fprintf(&b, "Log: %d events. Set `SELF_MIND_ID` when you author — receipts record it.\n\n", len(events))
+	fmt.Fprintf(&b, "Log: %d events.\n\n", len(events))
 
 	b.WriteString("## How you act\n\n")
 	b.WriteString("State that survives is only what lands in `events.jsonl`. The log is append-only.\n\n")
 	b.WriteString("- **Read** — open files under this instance: `site/*.html` (rendered state a human sees), `events.jsonl` (authoritative log), `capabilities/` (installed scripts).\n")
 	b.WriteString("- **Write (commands)** — prefer installed verbs: `self run <command> …` (or HTTP `POST /run/<command>` when serving). Args follow each command below.\n")
-	b.WriteString("- **Write (events)** — when this ask expects you to persist directly, emit domain events as this process's stdout (one compact JSON object per line: `{\"name\":\"…\",\"payload\":{…}}`). Do not edit `events.jsonl` yourself; do not install scripts yourself.\n")
-	b.WriteString("- **Extend** — emit `command.declared` / `projector.declared` the same way when this ask is learn/reflect (or declare is warranted). The kernel compiles and signs; you only author.\n")
-	b.WriteString("- **Query** — `think` is report-only: the kernel returns your reply and does not append from it.\n\n")
-	b.WriteString("When the kernel spawned you, it reads **only this process's stdout** after you exit. How your adapter turns tools or API calls into that stdout is adapter-local — see `self protocol` and `examples/`.\n\n")
+	b.WriteString("- **Write (events)** — pipe event JSONL into `self` (one compact JSON object per line: `{\"name\":\"…\",\"payload\":{…}}`); when your stdout is already piped into `self`, printing the line is the write. Do not edit `events.jsonl` yourself; do not install scripts yourself.\n")
+	b.WriteString("- **Extend** — emit `command.declared` / `projector.declared` the same way, and each script as `script.authored`. Only the kernel installs, under a receipt it signs.\n")
+	b.WriteString("- **The loop** — `echo \"<ask>\" | self | <mind> | self`: prose becomes a situated prompt, a mind's event lines become appended state. `self protocol` prints the wire contracts.\n\n")
 
 	if len(events) == 0 {
 		b.WriteString("## Empty log\n\n")
-		b.WriteString("Nothing installed yet. Learn an account: `self learn <account>` (try `lessons/journal`).\n")
+		b.WriteString("Nothing installed yet. Learn an account: `self learn lessons/journal | claude -p | self`.\n")
 		return b.String()
 	}
 
@@ -192,16 +179,16 @@ func stateBrief(home string) string {
 	b.WriteString("- `events.jsonl` — append-only log (authoritative)\n")
 	b.WriteString("- `capabilities/` — installed command and projector scripts\n")
 	b.WriteString("- `site/kernel.html` — full index, compiled-capability pipe contract, lifecycle events\n")
-	b.WriteString("- Account exchange: `self give` / `self learn` (Account Protocol) — not required for ordinary run/think\n")
+	b.WriteString("- Account exchange: `self give` / `self learn` (Account Protocol) — not required for ordinary asks\n")
 	b.WriteString("- Reconstruction: `self rehydrate` rebuilds `capabilities/` + `site/` from the log + `.secret` (no mind)\n")
 	return b.String()
 }
 
 // renderBriefFile writes the orientation brief to SELF_HOME/site/brief.md,
 // the kernel-resident surface a mind reads. Called alongside renderKernelHTML
-// whenever the log changes, and re-run immediately before every mind ask (see
-// freshBrief) so a mind never reads stale orientation. Served verbatim as
-// text/plain like any other .md file under site/.
+// whenever the log changes, and re-run immediately before every ask prompt
+// (see freshBrief) so a mind never reads stale orientation. Served verbatim
+// as text/plain like any other .md file under site/.
 func renderBriefFile(home string) {
 	siteDir := filepath.Join(home, "site")
 	os.MkdirAll(siteDir, 0755)
@@ -209,11 +196,11 @@ func renderBriefFile(home string) {
 }
 
 // freshBrief writes the orientation brief to disk and returns the exact bytes
-// the kernel just wrote. Used by pipeMind so the mind is always fed the
+// the kernel just wrote. Used by the ask face so a prompt always carries the
 // current state of the instance — never a cached file that could grow stale if
 // the log changed outside the normal refresh path (e.g. a CLI `run` between a
-// serve request and a mind call). The disk is the source; the mind can read
-// the same file itself to explore. Write then read back would be redundant —
+// serve request and an ask). The disk is the source; the mind can read the
+// same file itself to explore. Write then read back would be redundant —
 // stateBrief is deterministic, so the bytes written are the bytes returned.
 func freshBrief(home string) string {
 	brief := stateBrief(home)

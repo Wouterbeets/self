@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""mind-stub — a deterministic, offline SELF_MIND. No LLM, no network.
+"""mind-stub — a deterministic, offline mind. No LLM, no network, no state.
 
-This is the mind the tests and demo.sh plug in. It honors the same contract
-as every real mind — $SELF_ASK on the environment, the prompt as the last
-argument, an orientation brief on stdin, event JSONL on stdout — and it is
-deliberately dumb: it proves the machinery, not the intelligence. It used to
-live inside the kernel as a special case; it is a process now, because the
-kernel holds no mind, not even a fake one.
+A mind is any filter: it reads a situated prompt on stdin and prints event
+JSONL on stdout. This one is deliberately dumb — it proves the machinery, not
+the intelligence — and it plugs into the same pipe as any real mind:
 
-    export SELF_MIND="$PWD/examples/mind-stub"
+    echo "hello" | self | examples/mind-stub | self
+    self learn lessons/journal | examples/mind-stub | self
+    self | examples/mind-stub | self          # pending scripts / reflection
 
-think/reflect answer with fixed prose. learn reads the latest intent.declared
-from the instance's own log and declares one command and one projection named
-in the intent's backticks. compile answers with a trivial script that honors
-the pipe contract.
+What it does, by reading the prompt alone (a real mind would also explore
+SELF_HOME with its own tools):
+
+  - Every 'DECLARATION (<type> "<name>"):' block in the pending-work section
+    is answered with a script.authored line carrying a trivial script that
+    honors the pipe contract.
+  - An ask carrying an '--- INTENT ---' section (a learn) is answered with one
+    command.declared + one projector.declared named in the intent's backticks,
+    plus their scripts in the same pass.
+  - Anything else gets a fixed self.replied.
 """
 
 import json
-import os
 import re
 import sys
 
@@ -67,28 +71,6 @@ def first_event(intent):
     return ""
 
 
-def latest_intent(home):
-    """The stub explores like any mind: it reads the instance's own log."""
-    name = intent = ""
-    try:
-        with open(os.path.join(home, "events.jsonl")) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                if e.get("name") == "intent.declared":
-                    p = e.get("payload") or {}
-                    name = p.get("name", "")
-                    intent = p.get("intent", "")
-    except OSError:
-        pass
-    return name, intent
-
-
 def payload_field(fields):
     fields = fields or {}
     if "title" in fields:
@@ -135,58 +117,72 @@ def projector_script(decl):
     )
 
 
-def compile_ask(prompt):
-    """Parse the declaration out of the compile prompt: the kernel prints a
-    'DECLARATION (<type> "<name>"):' header with the declaration JSON on the
-    next line."""
-    m = re.search(r'DECLARATION \((command|projector) "', prompt)
-    if not m:
-        raise SystemExit("compile ask carries no DECLARATION header")
-    typ = m.group(1)
-    decl = None
-    for line in prompt[m.start():].splitlines()[1:]:
-        line = line.strip()
-        if line.startswith("{"):
-            decl = json.loads(line)
-            break
-    if decl is None:
-        raise SystemExit("compile ask carries no declaration JSON")
+def authored(typ, decl):
     script = command_script(decl) if typ == "command" else projector_script(decl)
-    print(json.dumps({"name": "script.authored", "payload": {"script": script}}))
+    return json.dumps({"name": "script.authored", "payload": {
+        "type": typ, "name": decl.get("name", ""), "script": script}})
 
 
-def learn_ask(home, prompt):
-    name, intent = latest_intent(home)
-    if not intent:
-        intent = prompt
-    command = first_command(intent) or sanitize(name) or "entry"
+def pending_declarations(prompt):
+    """Every 'DECLARATION (<type> "<name>"):' block, declaration JSON on the
+    next non-empty line — the shape the ask face renders pending work in."""
+    out = []
+    lines = prompt.splitlines()
+    for i, line in enumerate(lines):
+        m = re.match(r'DECLARATION \((command|projector) "', line.strip())
+        if not m:
+            continue
+        for rest in lines[i + 1:]:
+            rest = rest.strip()
+            if not rest:
+                continue
+            if rest.startswith("{"):
+                out.append((m.group(1), json.loads(rest)))
+            break
+    return out
+
+
+def intent_of(prompt):
+    m = re.search(r"--- INTENT ---\n(.*?)\n--- END INTENT ---", prompt, re.S)
+    return m.group(1).strip() if m else ""
+
+
+def learn(intent):
+    command = first_command(intent) or "entry"
     projector = first_projection(intent) or command + "s"
     event = first_event(intent) or command + ".recorded"
-    print(json.dumps({"name": "command.declared", "payload": {
+    cmd_decl = {
         "name": command,
-        "description": "offline stub command learned from " + name,
+        "description": "offline stub command learned from an intent",
         "params": {"text": "string"},
-        "event": {"name": event, "fields": {"text": "string"}}}}))
-    print(json.dumps({"name": "projector.declared", "payload": {
+        "event": {"name": event, "fields": {"text": "string"}}}
+    proj_decl = {
         "name": projector,
-        "description": "offline stub projection learned from " + name,
-        "consumes": [event]}}))
-    print('stub declared "%s" and "%s"' % (command, projector))
+        "description": "offline stub projection learned from an intent",
+        "consumes": [event]}
+    print(json.dumps({"name": "command.declared", "payload": cmd_decl}))
+    print(json.dumps({"name": "projector.declared", "payload": proj_decl}))
+    print(authored("command", cmd_decl))
+    print(authored("projector", proj_decl))
+    print(json.dumps({"name": "self.replied", "payload": {
+        "text": 'stub declared and authored "%s" and "%s"' % (command, projector)}}))
 
 
 def main():
-    sys.stdin.read()  # the orientation brief; the stub reads the log directly
-    ask = os.environ.get("SELF_ASK", "")
-    prompt = sys.argv[-1] if len(sys.argv) > 1 else ""
-    home = os.environ.get("SELF_HOME", ".")
-    if ask == "compile":
-        compile_ask(prompt)
-    elif ask == "learn":
-        learn_ask(home, prompt)
-    elif ask == "reflect":
-        print("stub reflection: no changes")
-    else:
-        print("stub thought about: " + prompt)
+    prompt = sys.stdin.read()
+    pending = pending_declarations(prompt)
+    intent = intent_of(prompt)
+    if intent:
+        learn(intent)
+        return
+    if pending:
+        for typ, decl in pending:
+            print(authored(typ, decl))
+        print(json.dumps({"name": "self.replied", "payload": {
+            "text": "stub authored %d pending script(s)" % len(pending)}}))
+        return
+    print(json.dumps({"name": "self.replied", "payload": {
+        "text": "stub replied: nothing to add"}}))
 
 
 if __name__ == "__main__":

@@ -146,6 +146,9 @@ func refreshProjections(home string, fresh []Event) {
 	_, _, projectors, projOrder := declaredCaps(events)
 	for _, name := range projOrder {
 		d := projectors[name]
+		if p, _ := scriptPath(home, "projector", name); !fileExists(p) {
+			continue // declared but not yet authored — pending work, not a failure
+		}
 		out := sitePagePath(home, name)
 		if fresh != nil && fileExists(out) && len(matchingEvents(fresh, d.Consumes)) == 0 {
 			now := time.Now()

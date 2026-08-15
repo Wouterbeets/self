@@ -20,17 +20,36 @@ func homeDir() string {
 	return "."
 }
 
+// ensureHome initializes an instance exactly once, under the log lock — two
+// selves starting concurrently in one pipeline must not both initialize.
 func ensureHome(home string) error {
 	if _, err := loadSecret(home); err != nil {
 		return err
 	}
-	events, err := readEvents(home)
-	if err != nil || len(events) > 0 {
+	unlock, err := lockLog(home)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	last, err := lastSeq(home)
+	if err != nil || last > 0 {
 		return err
 	}
 	e := newEvent("kernel.initialized", json.RawMessage(`{}`))
-	e.Via = "kernel"
-	if err := appendEvent(home, &e); err != nil {
+	e.Via, e.Seq = "kernel", 1
+	line, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(logPath(home), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(f, string(line)); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	renderKernelHTML(home)
@@ -44,105 +63,113 @@ func usage() {
 }
 
 func usageText() string {
-	return `self — a local-first, event-sourced runtime with LLM-generated capabilities
+	return `self — a local-first, event-sourced runtime; a filter with a memory
 
-One append-only event log + projections as deterministic replays. A minimal
-kernel; every capability is generated from a declaration and installed under
-a signed receipt.
+One append-only event log + projections as deterministic replays. The kernel
+holds no model: the mind is whatever the shell pipes between two selves.
+
+the loop:
+
+  echo "whats going on today?" | self | claude -p | self
+
+  prose in       → the situated prompt out (brief, conversation, pending
+                   work, answer contract); the ask is recorded (self.asked)
+  event JSONL in → heard: events append to the log, script.authored installs
+                   under a signed receipt, the reply passes through
+  nothing in     → at a terminal, the orientation brief; in a pipe, the work
+                   prompt (pending scripts, else one reflection) — so bare
+                   'self | claude -p | self' is a self-improvement cycle
 
 usage: self [command] [args]
 
-  self                 rehydrate the instance from the log, then serve it (the default)
-  self learn <account> learn an account's intent into capabilities and deposit its
-                       record verbatim, moments preserved (needs a mind)
+  self                 the filter (see the loop above)
+  self serve           rehydrate from the log, then serve at :7777
+  self run <cmd> ...   run a capability — append events, refresh projections
+  self show <name>     render a projection to stdout
+  self learn <account> deposit an account's record (moments preserved) and
+                       print its learning prompt — pipe it to a mind:
+                       self learn <dir> | claude -p | self
   self give <sel> <dir>
                        write an account from the log — <sel> is an event-name
                        prefix ("note.") or command/<name> | projector/<name>;
                        intent + record + manifest land in <dir> for you to
                        curate before passing on
-  self run <cmd> ...   run a capability — append events, refresh projections
-  self think "..."     ask the mind; returns {response, events} JSON (report-only)
-  self reflect         one self-improvement cycle (the mind may declare)
-  self show <name>     render a projection to stdout
   self rehydrate       rebuild capabilities/ + site/ from the log's signed receipts (no LLM)
-  self revise <target> <request>
-                       edit an installed local capability with its current script as context
   self retire <target> retire a capability — its script and page leave the
                        surface; the log keeps every event, re-declaring revives
-  self protocol        print the mind + capability wire protocol
+  self protocol        print the pipe + capability wire protocol
 
 environment:
   SELF_HOME         the instance — a dir holding events.jsonl and .secret
                     (default: current working directory; set it in your shell rc
                     to pin a shared instance, e.g. export SELF_HOME=~/.self)
-
-  plug a mind (one seam; think, reflect, learn, and compile all pass through it):
-  SELF_MIND        a tool-capable executable, e.g. "claude -p" or
-                    examples/mind-opencode — it gets the ask's kind in
-                    $SELF_ASK, the prompt as its last argument, and an
-                    orientation brief on stdin; it answers in event JSONL,
-                    prose tolerated. The mind must inspect SELF_HOME itself
-                    (site/*.html, events.jsonl, capabilities/) with its own
-                    tools. See examples/README.md. examples/mind-stub is a
-                    deterministic offline mind for demos/tests.
-  SELF_MIND_ID     provenance by-line signed into script.compiled receipts
-                    (default: the mind executable)
-  SELF_CALLER      claimed speaker recorded verbatim as by on events your CLI
+  SELF_CALLER       claimed speaker recorded verbatim as by on events your
                     invocations append (over HTTP the X-Self-Caller header
                     carries the claim); the door (via) is stamped by the
                     kernel itself and cannot be claimed
+  SELF_MIND_ID      author by-line signed into script.compiled receipts when
+                    the pipe installs an authored script (default: SELF_CALLER,
+                    else "pipe")
 `
 }
 
 func protocolText() string {
 	return `self protocol — the wire contracts
 
-Mind process contract
+The pipe (the one seam)
 
-  The same seam handles think, reflect, learn, and compile.
+  self is a filter; the mind is whatever process the shell puts between two
+  invocations of it:
 
-  SELF_MIND   executable to spawn, optionally with args. A mind MUST be able to
-              inspect files under SELF_HOME (site/*.html, events.jsonl,
-              capabilities/) with its own tools — a plain stdin/stdout adapter
-              with no file access cannot do the job. Coding-agent minds
-              (opencode run, claude -p) already have such tools.
-  SELF_ASK     request kind: think | reflect | learn | compile
-  argv         the prompt is passed as the last argument
-  stdin        an orientation brief (plain text, also at site/brief.md): where
-               the mind is, how write/extend work, what commands and
-               projections exist, and where depth lives. The mind explores
-               SELF_HOME itself for depth — this is a wake-up card, not a
-               context dump. How an adapter produces stdout is adapter-local.
-  stdout       what the kernel receives: event JSONL; non-JSON lines are
-               prose reply text. think is report-only (nothing appended).
+      echo "<ask>" | self | <mind> | self
 
-Mind reply events
+  ask face     stdin is prose. self records it (self.asked) and writes the
+               situated prompt to stdout: the orientation brief (also at
+               site/brief.md), the recent conversation, any pending work
+               (declarations awaiting scripts), the ask, and the answer
+               contract. A mind MUST be able to inspect files under SELF_HOME
+               (site/*.html, events.jsonl, capabilities/) with its own tools —
+               the prompt is a wake-up card, not a context dump. Coding-agent
+               minds (claude -p, opencode run) plug in with no adapter.
+  hear face    stdin carries event JSONL. Event lines append to the log (the
+               kernel stamps id, seq, occurred_at, via "pipe", and by from
+               SELF_CALLER); script.authored lines install under a locally
+               signed receipt; every other line — and the text of
+               self.replied — passes through to stdout as the reply.
+  work face    stdin is empty (or a terminal with stdout piped). self emits
+               the pending-compile prompt if declarations await scripts, else
+               one reflection ask — bare 'self | <mind> | self' converges.
 
-  chat.message        prose reply for think:
-                      {"name":"chat.message","payload":{"role":"assistant","content":"..."}}
+Wire events (what a mind prints)
 
-  command.declared    declare a command capability; the kernel compiles it:
+  self.replied        the reply, as memory and message — always end with one:
+                      {"name":"self.replied","payload":{"text":"..."}}
+
+  command.declared    declare a command capability (pending until authored):
                       {"name":"command.declared","payload":{"name":"note","description":"...","params":{"text":"string"},"event":{"name":"note.added","fields":{"text":"string"}}}}
 
-  projector.declared  declare a projection; the kernel compiles it:
+  projector.declared  declare a projection (pending until authored):
                       {"name":"projector.declared","payload":{"name":"notes","description":"...","consumes":["note.added"]}}
 
-  script.authored     answer to SELF_ASK=compile only:
-                      {"name":"script.authored","payload":{"script":"#!/bin/sh\n..."}}
+  script.authored     the script for a declared capability; installs under a
+                      signed receipt, never lands in the log raw:
+                      {"name":"script.authored","payload":{"type":"command","name":"note","script":"#!/bin/sh\n..."}}
 
   capability.retired  retire a capability: its script and page leave the derived
                       surface; the log keeps all history and a re-declaration
                       revives it:
                       {"name":"capability.retired","payload":{"type":"projector","name":"notes"}}
 
+  anything else       a domain event, appended verbatim.
+
 Compiled capability contract
 
   command script      argv are command args; stdin is the current event log JSONL;
                       stdout is new event JSONL: {"name":"event.name","payload":{...}}
                       the kernel assigns id, seq, occurred_at, and provenance —
-                      via, the door the events entered through (cli, http:<addr>,
-                      mind:<id>, learn:<account>, kernel), stamped from what the
-                      kernel witnessed and never accepted from a script; and by,
+                      via, the door the events entered through (cli, pipe,
+                      http:<addr>, learn:<account>, kernel), stamped from what
+                      the kernel witnessed and never accepted from a script; and by,
                       the caller's claimed identity (SELF_CALLER locally, the
                       X-Self-Caller header over HTTP), recorded verbatim as a
                       claim — then appends the events and re-renders the
@@ -180,30 +207,27 @@ Accounts (give / learn)
   intervention) is visible in both logs. Curation is file editing — the
   account is plain text.
 
-Declarations — not code — are what cross every boundary. A generated script
-installs only after the local kernel signs a script.compiled receipt with
-SELF_HOME/.secret and the current SELF_MIND_ID.
+Declarations — not code — are what cross every boundary between instances. A
+script installs only after the local kernel signs a script.compiled receipt
+with SELF_HOME/.secret; the author by-line inside it is SELF_MIND_ID (else
+SELF_CALLER, else "pipe"), a claim covered by the signature.
 `
 }
 
 func commandHelp(cmd string) (string, bool) {
 	switch cmd {
+	case "serve":
+		return "usage: self serve\n\nRehydrate from the log, then serve the instance at 127.0.0.1:7777 (SELF_BIND overrides): every projection a live replay, every action a plain HTML form.\n", true
 	case "learn":
-		return "usage: self learn <account-dir>\n\nRead <account-dir>/intent.md, ask the mind to declare capabilities fitted to this instance, compile them under signed receipts, then deposit the account's record.jsonl verbatim (moments preserved). The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
+		return "usage: self learn <account-dir>\n       self learn <account-dir> | claude -p | self\n\nDeposit <account-dir>/record.jsonl verbatim (moments and speakers preserved), record the intent, and print the learning prompt on stdout — pipe it to a mind to grow capabilities fitted to this instance. The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
 	case "give":
 		return "usage: self give <event-prefix> <dir>\n       self give command/<name> <dir>\n       self give projector/<name> <dir>\n\nWrite an account from this log: the selected events verbatim in record.jsonl, a manifest with their count and sha256, and an intent.md stub to edit — who you are, what this means, what you hope it becomes. Kernel-vocabulary events are renamed lineage.* so they arrive as evidence, never as installables. The giving is remembered as an account.given event.\n", true
 	case "run":
 		return "usage: self run <command> [args...]\n\nRun an installed command capability. Its emitted events are appended, then the projections consuming them re-render.\n", true
-	case "think":
-		return "usage: self think <prompt>\n       self think < prompt.txt\n\nAsk the mind through the SELF_MIND protocol. Prints {response, events} JSON and appends nothing.\n", true
-	case "reflect":
-		return "usage: self reflect\n\nAppend a self.reflected event, ask the mind for one small improvement, and compile any declarations it emits.\n", true
 	case "show":
 		return "usage: self show <projection>\n\nRender a projection to stdout by replaying the current log. Use 'kernel' for the instance index.\n", true
 	case "rehydrate":
 		return "usage: self rehydrate\n\nRebuild capabilities/ and site/ from events.jsonl + .secret without a mind.\n", true
-	case "revise":
-		return "usage: self revise command/<name> <change request>\n       self revise projector/<name> <change request>\n\nRecord a local revision request, then recompile the installed capability with its latest declaration and verified script as context.\n", true
 	case "retire":
 		return "usage: self retire command/<name>\n       self retire projector/<name>\n\nAppend a capability.retired tombstone: the installed script (and a projector's page) come off disk, the brief and kernel index stop listing it, and rehydrate honors the tombstone. Events are never deleted — re-declaring the capability revives it.\n", true
 	case "protocol":
