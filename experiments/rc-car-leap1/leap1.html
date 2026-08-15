@@ -122,9 +122,35 @@
   }
   .pad button small { display: block; font-size: 10px; letter-spacing: 0.08em; }
   #btnGas { background: var(--red); color: #fff; height: 80px; font-size: 17px; }
-  #btnJump { background: #ffc23d; font-size: 17px; }
+  #btnJump { background: #ffc23d; font-size: 16px; }
   #btnBot { background: var(--blue); color: #fff; }
+  #btnFire { background: #22c8e8; font-size: 16px; }
   #btnRev { width: 58px; height: 80px; font-size: 13px; }
+
+  /* score HUD */
+  .hud {
+    position: fixed; top: 18px; right: 18px;
+    display: none; gap: 8px; z-index: 5;
+  }
+  body.drive .hud { display: flex; }
+  .hud .stat {
+    background: var(--paper);
+    border: 3px solid var(--ink);
+    border-radius: 12px;
+    box-shadow: 0 3px 0 rgba(27, 36, 64, 0.35);
+    padding: 6px 10px 5px;
+    text-align: center; min-width: 62px;
+  }
+  .hud b {
+    display: block; font-size: 19px; line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .hud small {
+    display: block; font-size: 9px; font-weight: 800;
+    letter-spacing: 0.12em; opacity: 0.6;
+  }
+  .hud .coin b { color: #d99400; }
+  .hud .zap b { color: var(--blue); }
   body.drive .pad { display: flex; }
   body.drive #play, body.drive #movieBtns, body.drive #scrubRow { display: none; }
   #hint { display: none; font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; opacity: 0.75; text-align: center; }
@@ -135,9 +161,13 @@
     button { font-size: 12px; padding: 7px 10px; }
     .speedo { display: none; }
     .pad { bottom: 118px; }
-    .pad button { width: 64px; height: 60px; font-size: 20px; }
-    #btnGas, #btnRev { height: 70px; }
+    .pad button { width: 60px; height: 58px; font-size: 18px; }
+    #btnGas, #btnRev { height: 66px; }
+    #btnFire, #btnJump { font-size: 12px; }
     #hint { display: none !important; }
+    .hud { top: 12px; right: 12px; gap: 5px; }
+    .hud .stat { min-width: 48px; padding: 4px 6px 3px; }
+    .hud b { font-size: 15px; }
   }
 </style>
 
@@ -152,8 +182,9 @@
   <button id="btnLeft" aria-label="Steer left">&#9664;</button>
   <button id="btnRight" aria-label="Steer right">&#9654;</button>
 </div>
-<div class="pad right" aria-label="Gas, jump and transform">
+<div class="pad right" aria-label="Gas, jump, fire and transform">
   <div class="row2">
+    <button id="btnFire" aria-label="Fire lasers">&#128165; FIRE</button>
     <button id="btnJump" aria-label="Jump">&#11014; JUMP</button>
     <button id="btnBot" aria-label="Transform">&#129302;</button>
   </div>
@@ -161,6 +192,13 @@
     <button id="btnRev" aria-label="Reverse">REV</button>
     <button id="btnGas" aria-label="Gas">&#9889; GAS</button>
   </div>
+</div>
+
+<div class="hud" aria-label="Score">
+  <div class="stat coin"><b id="hudCoins">0</b><small>COINS</small></div>
+  <div class="stat zap"><b id="hudZap">0</b><small>DINOS</small></div>
+  <div class="stat"><b id="hudLap">--</b><small>LAP</small></div>
+  <div class="stat"><b id="hudBest">--</b><small>BEST</small></div>
 </div>
 
 <section class="dock" aria-label="Animation controls">
@@ -178,7 +216,7 @@
   <div class="row" id="scrubRow">
     <input id="scrub" type="range" min="0" max="30" step="0.01" value="0" aria-label="Scrub the timeline">
   </div>
-  <div id="hint">Hold the buttons &mdash; or arrow keys / WASD to drive, SPACE to jump, T to transform</div>
+  <div id="hint">Hold the buttons &mdash; or arrows / WASD to drive, SPACE jump, F fire, T transform</div>
 </section>
 
 <script>
@@ -226,7 +264,8 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   };
 
   var scene, camera, renderer;
-  var rig, chassis, bodyPivot, legPivot, armL, armR, head, headBase;
+  var rig, chassis, bodyPivot, legPivot, armL, armR, head, headBase, gunL, gunR;
+  var gunMuzzles = [];
   var wheels = [];            // {mesh, radius}
   var eyesMat, chestWinMats = [], headlightMats = [];
   var sparkles = [], dust = [];
@@ -291,6 +330,23 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     box(0.38, 0.06, 0.46, w1, -0.3, 0.45, 0.97, cab);
     box(0.38, 0.06, 0.46, w2, 0.3, 0.45, 0.97, cab);
     box(1.0, 0.05, 0.3, M(C.chrome, { metalness: 0.7, roughness: 0.3 }), 0, 0.46, 0.42, cab); // belt grille
+
+    // == laser cannons: on the cab roof in car mode, on the shoulders as a robot.
+    // The cab flip maps cab-local +z to world up, so a gun that counter-rotates
+    // +90° about x keeps its barrel pointing forward in BOTH shapes.
+    function buildGun(side) {
+      var g = new THREE.Group(); g.userData.side = side; cab.add(g);
+      var barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 0.95, 10),
+        M(C.steel, { metalness: 0.75, roughness: 0.25 }));
+      barrel.rotation.x = Math.PI / 2; barrel.position.z = 0.32; barrel.castShadow = true;
+      g.add(barrel);
+      box(0.28, 0.26, 0.42, M(C.blueDark), 0, 0, -0.18, g);         // breech
+      box(0.34, 0.1, 0.16, M(C.yellow), 0, 0.16, -0.1, g);          // sight rail
+      var tip = box(0.17, 0.17, 0.14, M(C.eye, { emissive: C.eye, emissiveIntensity: 0.7 }), 0, 0, 0.82, g);
+      gunMuzzles.push(tip);
+      return g;
+    }
+    gunL = buildGun(-1); gunR = buildGun(1);
 
     // == head — slides along car-forward axis (= up, once the body has flipped) ==
     headBase = new THREE.Group(); headBase.position.set(0, 0, 0); bodyPivot.add(headBase);
@@ -392,12 +448,13 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     box(0.9, 0.85, 2.7, M(C.steel), 1.55, 0.42, 0, ramp);
 
     // start gate over the runway
+    // start gate — banner sits above the chase camera so driving through it stays clear
     var gate = new THREE.Group(); gate.position.set(-12, 0, 0); scene.add(gate);
-    box(0.18, 3.0, 0.18, M(C.steel), 0, 1.5, -2.1, gate);
-    box(0.18, 3.0, 0.18, M(C.steel), 0, 1.5, 2.1, gate);
+    box(0.18, 4.8, 0.18, M(C.steel), 0, 2.4, -2.6, gate);
+    box(0.18, 4.8, 0.18, M(C.steel), 0, 2.4, 2.6, gate);
     var bannerM = new THREE.MeshBasicMaterial({ map: checkerTexture(), side: THREE.DoubleSide });
-    var banner = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 0.55), bannerM);
-    banner.rotation.y = Math.PI / 2; banner.position.set(0, 2.9, 0); gate.add(banner);
+    var banner = new THREE.Mesh(new THREE.PlaneGeometry(5.2, 0.7), bannerM);
+    banner.rotation.y = Math.PI / 2; banner.position.set(0, 4.5, 0); gate.add(banner);
 
     // trees
     var spots = [[-26, 6], [-4, 8], [10, -13], [24, 6], [-22, -22], [8, -24], [26, -16], [-2, -9]];
@@ -513,6 +570,12 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       arm.rotation.y = -side * 0.3 * arms;
     });
     armR.rotation.y -= wave * 1.35 + wag;
+    // cannons ride the fold: roof → shoulders, counter-rotating to stay level
+    [gunL, gunR].forEach(function (g) {
+      var s = g.userData.side;
+      g.position.set(s * lerp(0.5, 0.95, fold), lerp(1.72, 0.95, fold), lerp(0.5, 1.05, fold));
+      g.rotation.x = (Math.PI / 2) * fold;
+    });
     head.position.z = lerp(0.95, 1.72, clamp(headP, 0, 1)) + Math.max(0, headP - 1) * 0.1;
     eyesMat.emissiveIntensity = headP > 0.6 ? 1.6 : 0;
     var glow = fold > 0.9 ? (0.7 + 0.5 * (0.5 + 0.5 * Math.sin(clock * 3.2))) : 0.25;
@@ -632,7 +695,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // ---------- drive mode: the kid takes the wheel ----------
   var mode = 'movie', tGlobal = 0;
   var sim = { x: -14, z: 0, y: 0, vy: 0, gyPrev: 0, heading: Math.PI / 2, speed: 0, p: 0, target: 0, pitch: 0, roll: 0 };
-  var input = { left: false, right: false, gas: false, rev: false };
+  var input = { left: false, right: false, gas: false, rev: false, fire: false };
   var jumpQueuedAt = -9, botQueued = false;
   var flashMsg = '', flashUntil = -9;
   var sparkAt = -9, sparkPos = { x: 0, y: 0, z: 0 };
@@ -646,6 +709,265 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     return 0;
   }
   function flash(msg, secs) { flashMsg = msg; flashUntil = tGlobal + secs; }
+
+  // ---------- the game layer: coins, laps, lasers, dinosaurs ----------
+  // Built once, shown only in drive mode so the movie stays clean.
+  var gameGroup, coins = [], dinos = [], bolts = [], cpMarks = [];
+  var coinsGot = 0, dinoScore = 0, nextCP = 0, lapStart = -1, lapArmed = false;
+  var lastLap = 0, bestLap = 0, fireCool = 0;
+  var CP = [{ x: -12, z: 0 }, { x: 26.5, z: -9 }, { x: 1.75, z: -18 }, { x: -23, z: -9 }];
+
+  function lapPoint(u) { // a point at fraction u around the circuit
+    var LS = 31.5, LR = Math.PI * RA, LT = LS * 2 + LR * 2;
+    var d = ((u % 1) + 1) % 1 * LT;
+    if (d < LS) return { x: -14 + d, z: 0 };
+    d -= LS;
+    if (d < LR) return circlePos(C2.x, C2.z, Math.PI / 2 - (d / LR) * Math.PI);
+    d -= LR;
+    if (d < LS) return { x: 17.5 - d, z: -18 };
+    d -= LS;
+    return circlePos(C1.x, C1.z, -Math.PI / 2 - (d / LR) * Math.PI);
+  }
+
+  function buildDino(i) {
+    var g = new THREE.Group();
+    var skin = M(i % 2 ? 0x4f9e58 : 0x63a06b, { roughness: 0.85 });
+    var belly = M(0xd8cb96, { roughness: 0.95 });
+    var spot = M(C.orange, { roughness: 0.8 });
+    box(0.92, 0.88, 1.5, skin, 0, 1.15, 0, g);
+    box(0.72, 0.36, 1.2, belly, 0, 0.86, 0.1, g);
+    box(0.22, 0.12, 0.22, spot, -0.26, 1.56, -0.2, g);
+    box(0.22, 0.12, 0.22, spot, 0.28, 1.56, 0.24, g);
+    box(0.17, 0.42, 0.17, skin, -0.52, 1.3, 0.5, g);   // tiny arms
+    box(0.17, 0.42, 0.17, skin, 0.52, 1.3, 0.5, g);
+    var hd = new THREE.Group(); hd.position.set(0, 1.66, 0.86); g.add(hd);
+    box(0.56, 0.52, 0.52, skin, 0, 0.1, 0, hd);
+    box(0.5, 0.32, 0.66, skin, 0, -0.08, 0.42, hd);
+    box(0.44, 0.09, 0.62, M(0xffffff), 0, -0.23, 0.45, hd);
+    var eye = M(0xff2a2a, { emissive: 0xff2a2a, emissiveIntensity: 0.9 });
+    box(0.11, 0.11, 0.11, eye, -0.18, 0.22, 0.26, hd);
+    box(0.11, 0.11, 0.11, eye, 0.18, 0.22, 0.26, hd);
+    var tl = new THREE.Group(); tl.position.set(0, 1.16, -0.76); g.add(tl);
+    box(0.52, 0.52, 0.8, skin, 0, 0, -0.4, tl);
+    box(0.32, 0.32, 0.7, skin, 0, -0.06, -1.0, tl);
+    box(0.17, 0.17, 0.5, spot, 0, -0.12, -1.5, tl);
+    function leg(sx) {
+      var L = new THREE.Group(); L.position.set(sx, 0.86, 0); g.add(L);
+      box(0.32, 0.82, 0.34, skin, 0, -0.4, 0, L);
+      box(0.34, 0.19, 0.62, skin, 0, -0.76, 0.18, L);
+      return L;
+    }
+    return { g: g, head: hd, tail: tl, legL: leg(-0.33), legR: leg(0.33) };
+  }
+
+  function spawnDinoAt(d, i, k) {
+    var a = hash01(i, k) * Math.PI * 2, r = 26 + hash01(i, k + 11) * 9;
+    d.x = clamp(Math.cos(a) * r, -40, 40);
+    d.z = clamp(Math.sin(a) * r - 9, -40, 40);
+    d.heading = a + Math.PI; d.speed = 0; d.state = 'alive'; d.st = 0;
+    d.parts.g.visible = true;
+    d.parts.g.scale.set(1, 1, 1);
+    d.parts.g.rotation.set(0, 0, 0);
+  }
+
+  function buildGame() {
+    gameGroup = new THREE.Group(); gameGroup.visible = false; scene.add(gameGroup);
+
+    // coins along the racing line, plus a few in the infield
+    var coinM = M(C.yellow, { emissive: 0xffae00, emissiveIntensity: 0.55, metalness: 0.6, roughness: 0.3 });
+    var coinG = new THREE.CylinderGeometry(0.36, 0.36, 0.08, 16);
+    function addCoin(x, z) {
+      var m = new THREE.Mesh(coinG, coinM);
+      m.rotation.x = Math.PI / 2; m.position.set(x, 0.85, z);
+      var holder = new THREE.Group(); holder.position.set(x, 0, z);
+      m.position.set(0, 0.85, 0); holder.add(m);
+      gameGroup.add(holder);
+      coins.push({ g: holder, got: false, gotAt: -9 });
+    }
+    for (var i = 0; i < 18; i++) { var p = lapPoint(i / 18 + 0.012); addCoin(p.x, p.z); }
+    [[-14, -9], [17.5, -9], [1.5, -9], [8, -4]].forEach(function (p) { addCoin(p[0], p[1]); });
+
+    // checkpoint gates — the next one glows
+    CP.forEach(function (c, i) {
+      var grp = new THREE.Group(); grp.position.set(c.x, 0, c.z); gameGroup.add(grp);
+      var ringM = M(C.eye, { emissive: C.eye, emissiveIntensity: 0.35, roughness: 0.5 });
+      var ring = new THREE.Mesh(new THREE.RingGeometry(3.0, 3.5, 28), ringM);
+      ring.rotation.x = -Math.PI / 2; ring.position.y = 0.06; grp.add(ring);
+      if (i > 0) { // CP0 already has the checkered start gate
+        var poleM = M(C.steel);
+        box(0.16, 4.6, 0.16, poleM, 0, 2.3, -3.2, grp);
+        box(0.16, 4.6, 0.16, poleM, 0, 2.3, 3.2, grp);
+        box(0.16, 0.34, 6.4, ringM, 0, 4.4, 0, grp);
+      }
+      grp.userData.ring = ringM;
+      cpMarks.push(grp);
+    });
+
+    // laser bolts (pooled)
+    var boltG = new THREE.BoxGeometry(0.16, 0.16, 1.1);
+    for (var b = 0; b < 26; b++) {
+      var bm = new THREE.Mesh(boltG, new THREE.MeshBasicMaterial({ color: C.eye }));
+      bm.visible = false; gameGroup.add(bm);
+      bolts.push({ m: bm, alive: false, x: 0, y: 0, z: 0, dx: 0, dz: 0, life: 0 });
+    }
+
+    // dinosaurs
+    for (var d = 0; d < 5; d++) {
+      var parts = buildDino(d);
+      gameGroup.add(parts.g);
+      var dino = { parts: parts, x: 0, z: 0, heading: 0, speed: 0, state: 'alive', st: 0, i: d };
+      spawnDinoAt(dino, d, 0);
+      dinos.push(dino);
+    }
+  }
+
+  function fireLasers(robot) {
+    if (fireCool > 0) return;
+    fireCool = 0.2;
+    var fwd = new THREE.Vector3(Math.sin(sim.heading), 0, Math.cos(sim.heading));
+    gunMuzzles.forEach(function (tip) {
+      var b = null;
+      for (var i = 0; i < bolts.length; i++) if (!bolts[i].alive) { b = bolts[i]; break; }
+      if (!b) return;
+      var w = tip.getWorldPosition(new THREE.Vector3());
+      b.alive = true; b.x = w.x; b.y = w.y; b.z = w.z;
+      b.dx = fwd.x; b.dz = fwd.z; b.life = 1.3;
+      b.m.visible = true;
+      b.m.position.copy(w);
+      b.m.rotation.set(0, sim.heading, 0);
+    });
+  }
+
+  function fmtTime(s) { return s.toFixed(1) + 's'; }
+
+  function stepGame(dt, robot) {
+    fireCool = Math.max(0, fireCool - dt);
+    if (input.fire) fireLasers(robot);
+
+    // ---- coins ----
+    coins.forEach(function (c) {
+      if (c.got) {
+        var u = (tGlobal - c.gotAt) / 0.45;
+        if (u >= 1) { c.g.visible = false; return; }
+        c.g.children[0].position.y = 0.85 + u * 1.6;
+        c.g.scale.setScalar(1 - u);
+        return;
+      }
+      c.g.rotation.y = tGlobal * 2.4;
+      c.g.children[0].position.y = 0.85 + Math.sin(tGlobal * 3 + c.g.position.x) * 0.12;
+      var dx = c.g.position.x - sim.x, dz = c.g.position.z - sim.z;
+      if (dx * dx + dz * dz < 3.4) {
+        c.got = true; c.gotAt = tGlobal; coinsGot++;
+        if (coins.every(function (k) { return k.got; })) {
+          flash('ALL COINS! HERE COME MORE!', 2.2);
+          setTimeout(function () {
+            coins.forEach(function (k) {
+              k.got = false; k.g.visible = true; k.g.scale.setScalar(1);
+              k.g.children[0].position.y = 0.85;
+            });
+          }, 1200);
+        } else flash('COIN! ' + coinsGot, 0.7);
+      }
+    });
+
+    // ---- laps ----
+    var c0 = CP[nextCP];
+    var ddx = sim.x - c0.x, ddz = sim.z - c0.z;
+    if (ddx * ddx + ddz * ddz < 25) {
+      if (nextCP === 0) {
+        if (lapArmed) {
+          lastLap = tGlobal - lapStart;
+          if (!bestLap || lastLap < bestLap) { bestLap = lastLap; flash('NEW BEST LAP! ' + fmtTime(lastLap), 2.4); }
+          else flash('LAP! ' + fmtTime(lastLap), 2.0);
+        } else flash('GO! LAP STARTED', 1.6);
+        lapStart = tGlobal; lapArmed = false; nextCP = 1;
+      } else {
+        nextCP = (nextCP + 1) % CP.length;
+        if (nextCP === 0) { lapArmed = true; flash('LAST GATE — GO GO GO!', 1.4); }
+      }
+    }
+    cpMarks.forEach(function (g, i) {
+      var on = i === nextCP;
+      g.userData.ring.emissiveIntensity = on ? 0.9 + 0.4 * Math.sin(tGlobal * 5) : 0.12;
+      g.userData.ring.color.setHex(on ? C.yellow : C.eye);
+      g.userData.ring.emissive.setHex(on ? C.yellow : C.eye);
+    });
+
+    // ---- bolts ----
+    bolts.forEach(function (b) {
+      if (!b.alive) return;
+      b.life -= dt;
+      b.x += b.dx * 38 * dt; b.z += b.dz * 38 * dt;
+      b.m.position.set(b.x, b.y, b.z);
+      if (b.life <= 0 || Math.abs(b.x) > 48 || Math.abs(b.z) > 48) { b.alive = false; b.m.visible = false; return; }
+      for (var i = 0; i < dinos.length; i++) {
+        var d = dinos[i];
+        if (d.state !== 'alive') continue;
+        var hx = d.x - b.x, hz = d.z - b.z;
+        if (hx * hx + hz * hz < 2.6) {
+          d.state = 'hit'; d.st = 0;
+          dinoScore++;
+          b.alive = false; b.m.visible = false;
+          flash('ZAP! DINO ' + dinoScore, 1.2);
+          break;
+        }
+      }
+    });
+
+    // ---- dinosaurs ----
+    dinos.forEach(function (d) {
+      var p = d.parts;
+      d.st += dt;
+      if (d.state === 'hit') {
+        var u = clamp(d.st / 0.9, 0, 1);
+        p.g.position.y = Math.sin(u * Math.PI) * 2.2;
+        p.g.rotation.z = u * 7; p.g.rotation.x = u * 3;
+        p.g.scale.setScalar(Math.max(0.01, 1 - u));
+        if (u >= 1) { d.state = 'gone'; d.st = 0; p.g.visible = false; p.g.position.y = 0; }
+        return;
+      }
+      if (d.state === 'gone') {
+        if (d.st > 2.6) spawnDinoAt(d, d.i, Math.floor(tGlobal) + d.i);
+        return;
+      }
+      // alive: charge the player, or wander
+      var dx = sim.x - d.x, dz = sim.z - d.z;
+      var dist = Math.sqrt(dx * dx + dz * dz);
+      var want;
+      if (d.state === 'recoil') {
+        want = Math.atan2(-dx, -dz); d.speed = 6;
+        if (d.st > 1.3) { d.state = 'alive'; d.st = 0; }
+      } else if (dist < 26) {
+        want = Math.atan2(dx, dz);
+        d.speed = 5.4;
+      } else {
+        want = d.heading + Math.sin(tGlobal * 0.4 + d.i) * 0.02;
+        d.speed = 1.8;
+      }
+      var diff = want - d.heading;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      d.heading += clamp(diff, -2.2 * dt, 2.2 * dt);
+      d.x = clamp(d.x + Math.sin(d.heading) * d.speed * dt, -42, 42);
+      d.z = clamp(d.z + Math.cos(d.heading) * d.speed * dt, -42, 42);
+
+      // bonk: no damage, just a scare and a shove
+      if (dist < 2.6 && d.state !== 'recoil') {
+        d.state = 'recoil'; d.st = 0;
+        sim.speed = -sim.speed * 0.3 - 2;
+        sim.heading += (hash01(d.i, 3) - 0.5) * 0.8;
+        flash('BONK! ZAP HIM BACK!', 1.6);
+      }
+
+      var run = d.speed * 1.3;
+      p.g.position.set(d.x, Math.abs(Math.sin(tGlobal * run)) * 0.12, d.z);
+      p.g.rotation.y = d.heading;
+      p.legL.rotation.x = Math.sin(tGlobal * run) * 0.8;
+      p.legR.rotation.x = -Math.sin(tGlobal * run) * 0.8;
+      p.tail.rotation.y = Math.sin(tGlobal * run * 0.5) * 0.3;
+      p.head.rotation.x = Math.sin(tGlobal * run * 0.5) * 0.1;
+    });
+  }
 
   function stepDrive(dt) {
     sim.p = moveToward(sim.p, sim.target, dt / 2.2);
@@ -732,6 +1054,8 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     lastWheelSpin += (Math.abs(sim.speed) * dt) / 0.35;
     wheels.forEach(function (w) { w.tire.rotation.x = w.hub.rotation.x = lastWheelSpin; });
 
+    stepGame(dt, robot);
+
     // particles on the drive-mode clock
     var spT = clamp((tGlobal - sparkAt) / 0.95, 0, 1);
     sparkleGroup.visible = spT > 0 && spT < 1;
@@ -781,6 +1105,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
   // ---------- boot ----------
   var playing = true, master = 0, lastFrame = null;
   var captionEl, speedEl, scrubEl, playBtn, modeBtn;
+  var hudCoins, hudZap, hudLap, hudBest;
 
   function init() {
     var mount = document.getElementById('stage');
@@ -795,6 +1120,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
 
     buildWorld();
     buildCar();
+    buildGame();
     resize();
     window.addEventListener('resize', resize);
 
@@ -803,6 +1129,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     scrubEl = document.getElementById('scrub');
     playBtn = document.getElementById('play');
     modeBtn = document.getElementById('mode');
+    hudCoins = document.getElementById('hudCoins');
+    hudZap = document.getElementById('hudZap');
+    hudLap = document.getElementById('hudLap');
+    hudBest = document.getElementById('hudBest');
 
     scrubEl.addEventListener('input', function () { master = parseFloat(scrubEl.value); });
     playBtn.addEventListener('click', togglePlay);
@@ -828,7 +1158,7 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     }
     hold('btnLeft', 'left'); hold('btnRight', 'right');
-    hold('btnGas', 'gas'); hold('btnRev', 'rev');
+    hold('btnGas', 'gas'); hold('btnRev', 'rev'); hold('btnFire', 'fire');
     document.getElementById('btnJump').addEventListener('pointerdown', function (e) { e.preventDefault(); jumpQueuedAt = tGlobal; });
     document.getElementById('btnBot').addEventListener('pointerdown', function (e) { e.preventDefault(); botQueued = true; });
 
@@ -838,9 +1168,11 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       if (KEYMAP[e.code]) { input[KEYMAP[e.code]] = true; e.preventDefault(); }
       else if (e.code === 'Space') { if (!e.repeat) jumpQueuedAt = tGlobal; e.preventDefault(); }
       else if (e.code === 'KeyT' || e.code === 'Enter') { if (!e.repeat) botQueued = true; e.preventDefault(); }
+      else if (e.code === 'KeyF' || e.code === 'ShiftLeft') { input.fire = true; e.preventDefault(); }
     });
     window.addEventListener('keyup', function (e) {
       if (KEYMAP[e.code]) input[KEYMAP[e.code]] = false;
+      else if (e.code === 'KeyF' || e.code === 'ShiftLeft') input.fire = false;
     });
 
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -854,7 +1186,9 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       play: function () { playing = true; },
       drive: function () { setMode('drive'); },
       input: input,
-      sim: sim
+      sim: sim,
+      stats: function () { return { coins: coinsGot, dinos: dinoScore, nextCP: nextCP, best: bestLap, bolts: bolts.filter(function (b) { return b.alive; }).length }; },
+      dinos: dinos
     };
     requestAnimationFrame(tick);
   }
@@ -863,6 +1197,8 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
     mode = m;
     document.body.classList.toggle('drive', m === 'drive');
     modeBtn.innerHTML = m === 'drive' ? '&#127916; Movie' : '&#127918; You drive!';
+    gameGroup.visible = m === 'drive';
+    if (m === 'movie') { input.left = input.right = input.gas = input.rev = input.fire = false; }
     if (m === 'drive') {
       // pick the car up exactly where the movie left it
       var st = stateAt(master), ps = pose(master);
@@ -872,7 +1208,8 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       sim.p = ps.fold; sim.target = Math.round(ps.fold); sim.pDone = sim.target;
       sim.y = carY(master); sim.vy = 0; sim.gyPrev = groundY(sim.x, sim.z);
       sim.pitch = 0; sim.roll = 0;
-      flash(sim.target === 1 ? 'YOU DRIVE THE ROBOT!' : 'YOU DRIVE! GAS IT!', 2.5);
+      nextCP = 0; lapArmed = false; lapStart = -1;
+      flash(sim.target === 1 ? 'YOU DRIVE THE ROBOT!' : 'GAS IT! GRAB COINS, ZAP DINOS!', 2.8);
     }
   }
   function togglePlay() {
@@ -897,6 +1234,10 @@ function(t,e){"object"==typeof exports&&"undefined"!=typeof module?e(exports):"f
       var dr = stepDrive(dt);
       cap = driveCaption(dr);
       kmh = Math.round(Math.abs(sim.speed) * 3.6 * 0.35);
+      hudCoins.textContent = coinsGot;
+      hudZap.textContent = dinoScore;
+      hudLap.textContent = lapStart < 0 ? '--' : fmtTime(tGlobal - lapStart);
+      hudBest.textContent = bestLap ? fmtTime(bestLap) : '--';
       clouds.forEach(function (cl, i) {
         cl.position.x = cl.userData.baseX + Math.sin(tGlobal / LOOP * Math.PI * 2 + i) * 1.5;
       });

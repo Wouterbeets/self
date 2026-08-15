@@ -95,7 +95,19 @@ drives the whole timeline (the show is a pure function of time).
 
 **You drive!** mode hands the driver the controls: hold-to-steer left/right,
 gas and reverse, a jump button (a suspension hop — and much bigger air off
-the ramp), and a transform toggle that works in both shapes. Big touch pads
-for small thumbs, or arrows/WASD, SPACE to jump, T to transform. The
-transform button refuses mid-air, exactly like the real car's IMU interlock
-will.
+the ramp), a fire button, and a transform toggle that works in both shapes.
+Big touch pads for small thumbs, or arrows/WASD, SPACE to jump, F to fire,
+T to transform. The transform button refuses mid-air, exactly like the real
+car's IMU interlock will.
+
+And a playground on top of it: 22 coins along the racing line, a four-gate
+lap timer that keeps a best lap, twin laser cannons — on the cab roof as a
+car, swinging onto the shoulders as a robot — and five dinosaurs that charge
+and have to be zapped. There is deliberately **no way to lose**: dinos bonk
+and shove but never damage, coins and dinos always respawn, and the only
+number that can get worse is the lap time.
+
+The cannons are the same trick as the rest of the transform: the body flip
+maps the cab's forward axis to world up, so a gun that counter-rotates 90°
+about its own hinge keeps its barrel level in both shapes — one hinge, one
+rotation, exactly the kind of mechanism that can be built in plastic.
