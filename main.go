@@ -73,6 +73,12 @@ func main() {
 		} else {
 			err = cmdShow(home, args[0])
 		}
+	case "log":
+		prefix := ""
+		if len(args) > 0 {
+			prefix = args[0]
+		}
+		err = cmdLog(home, prefix, os.Stdout)
 	case "rehydrate":
 		err = rehydrate(home)
 	case "retire":
@@ -92,9 +98,14 @@ func main() {
 			err = fmt.Errorf("unknown help topic %q", args[0])
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "self: unknown command %q\n", cmd)
-		usage()
-		os.Exit(1)
+		// grown vocabulary: an installed capability answers to its own name
+		handled, derr := dispatchVerb(home, cmd, args)
+		if !handled {
+			fmt.Fprintf(os.Stderr, "self: %q is neither a built-in verb nor an installed capability\n", cmd)
+			usage()
+			os.Exit(1)
+		}
+		err = derr
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "self: %s\n", err)

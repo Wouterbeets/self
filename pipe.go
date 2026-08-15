@@ -60,30 +60,55 @@ You are expected to have tools: explore SELF_HOME yourself — site/*.html (rend
 // ─────────────────────────────── the dispatcher ─────────────────────────────
 
 // cmdPipe is bare `self`: the filter. Its face is chosen by the shape of
-// stdin, so the same word composes on either side of a mind.
+// stdin AND where stdout goes, under one law: a prompt is only ever written
+// into a pipe. A terminal gets orientation, replies, and acknowledgements —
+// never a wall of prompt. That law is what makes the trio compose:
+//
+//	producer | self                    remember this (recorded, no prompt)
+//	producer | self | mind             give the mind this, situated
+//	producer | self | mind | self      think about this, remember the outcome
 func cmdPipe(home string) error {
 	if err := ensureHome(home); err != nil {
 		return err
 	}
-	if stdinIsTTY() {
-		if stdoutIsTTY() {
-			// A human at a terminal: orientation, not a prompt.
-			fmt.Print(freshBrief(home))
-			fmt.Print(pipeStatus(home))
-			return nil
+	toPipe := !stdoutIsTTY()
+	var input string
+	if !stdinIsTTY() {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
 		}
-		// `self | mind | self` with no piped question: emit the work prompt.
+		input = string(data)
+	}
+	evs, scripts, reply := parseWire(input)
+	if len(evs) > 0 || len(scripts) > 0 {
+		return hear(home, evs, scripts, reply, os.Stdout)
+	}
+	question := strings.TrimSpace(input)
+	switch {
+	case question != "" && toPipe:
+		return emitAsk(home, question, os.Stdout)
+	case question != "":
+		// prose at a terminal: the pipe remembers, a mind answers later.
+		e, err := recordAsk(home, question)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "self: remembered (self.asked, seq %d) — a mind sees it next pass:  self | claude -p | self\n", e.Seq)
+		return nil
+	case toPipe:
 		return emitWork(home, os.Stdout)
+	default:
+		// A human at a terminal: orientation, not a prompt.
+		fmt.Print(freshBrief(home))
+		fmt.Print(pipeStatus(home))
+		return nil
 	}
-	input, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return err
-	}
-	return pipeFilter(home, string(input), os.Stdout)
 }
 
-// pipeFilter routes one stdin body to a face. Split from cmdPipe so tests
-// drive the seam without a terminal.
+// pipeFilter routes one stdin body to a face with stdout already known to be
+// a pipe — the shell's normal case, and how tests drive the seam without a
+// terminal.
 func pipeFilter(home, input string, out io.Writer) error {
 	evs, scripts, reply := parseWire(input)
 	if len(evs) == 0 && len(scripts) == 0 {
@@ -113,7 +138,8 @@ func pipeStatus(home string) string {
 	if pending := pendingDecls(home); len(pending) > 0 {
 		fmt.Fprintf(&b, "\n%d declaration(s) pending scripts — run:  self | claude -p | self\n", len(pending))
 	}
-	b.WriteString("\nthe loop:  echo \"<ask>\" | self | claude -p | self      serve:  self serve\n")
+	b.WriteString("\nthe loop:  echo \"<ask>\" | self | claude -p | self\n")
+	b.WriteString("memory:    self log | grep …        serve:  self serve\n")
 	return b.String()
 }
 
@@ -289,20 +315,29 @@ func installAuthored(home string, a authored) error {
 
 // ──────────────────────────────── ask ───────────────────────────────────────
 
-// emitAsk records the question — hearing an ask is an experience, and the log
-// is the only memory — then emits the situated prompt for whatever mind sits
-// downstream.
-func emitAsk(home, question string, out io.Writer) error {
+// recordAsk lands the question in the log — hearing an ask is an experience,
+// and the log is the only memory. `producer | self` at a terminal ends here:
+// remembered, unanswered, waiting for the next mind pass.
+func recordAsk(home, question string) (Event, error) {
 	if err := ensureHome(home); err != nil {
-		return err
+		return Event{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"text": question})
 	e := newEvent("self.asked", payload)
 	e.Via, e.By = "pipe", callerClaim()
 	if err := appendEvent(home, &e); err != nil {
-		return err
+		return Event{}, err
 	}
 	refreshSiteAfter(home, []Event{e})
+	return e, nil
+}
+
+// emitAsk records the question, then emits the situated prompt for whatever
+// mind sits downstream.
+func emitAsk(home, question string, out io.Writer) error {
+	if _, err := recordAsk(home, question); err != nil {
+		return err
+	}
 	_, err := io.WriteString(out, situatedPrompt(home, question))
 	return err
 }

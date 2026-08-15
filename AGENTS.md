@@ -29,21 +29,24 @@ installed scripts, one directory per capability with the script at
 
 **The interface — one filter and a few verbs:**
 
-- **Read.** `self show <projection>` (or `$SELF_HOME/site/*.html`, or the
-  HTTP routes when serving). Projections are deterministic replays of the
-  log — they are the current state. The index page (`/`) lists every
-  command and projection this instance has.
-- **Write.** `self run <command> [args…]` appends events and re-renders all
-  projections. Or pipe event JSONL straight in: `echo '{"name":"…","payload":{…}}' | self`.
-  The log is append-only; no operation is destructive.
+- **Read.** `self show <projection>` — or just `self <projection>` (or
+  `$SELF_HOME/site/*.html`, or the HTTP routes when serving). Projections are
+  deterministic replays of the log — they are the current state. The index
+  page (`/`) lists every command and projection this instance has. The raw
+  log is a stream: `self log [prefix]` composes with grep and jq.
+- **Write.** `self <command> [args…]` (or `self run <command> …`) appends
+  events and re-renders all projections. Or pipe event JSONL straight in:
+  `echo '{"name":"…","payload":{…}}' | self`. The log is append-only; no
+  operation is destructive.
 - **Persist.** State lives only in events. Route anything that must survive
   the session through the instance's commands. Where a `remember` command
   exists, use it for durable facts — one self-contained fact per call,
   written for a future reader with no other context; check `/memory` before
   re-learning something the instance already knows.
 - **Ask / extend.** The loop is a shell pipe and you can stand on either side
-  of it. To see what a mind would be asked: `echo "<ask>" | self` (this also
-  records the ask). To BE the mind: read that prompt and pipe your answer
+  of it. To see what a mind would be asked: `echo "<ask>" | self | cat` (this
+  also records the ask; prompts are only ever written into pipes, so the
+  `cat` matters). To BE the mind: read that prompt and pipe your answer
   back in — event lines (`{"name":"…","payload":{…}}`), declarations
   (`command.declared` / `projector.declared`), scripts
   (`script.authored` with `{type, name, script}`), and always end with

@@ -117,6 +117,27 @@ func learnAsk(ref, intent string, deposited int) string {
 	return ask + "\n\n--- INTENT ---\n" + intent + "\n--- END INTENT ---"
 }
 
+// dispatchVerb makes grown capabilities native vocabulary: `self <name> …`
+// runs the installed command of that name, and `self <name>` alone renders
+// the projection if one exists — so an instance that learned a journal
+// speaks `self entry "…"` and `self journal`, no ceremony. Built-in verbs
+// win first (main's switch); `self run <name>` / `self show <name>` always
+// disambiguate. Returns false when nothing installed answers to the name.
+func dispatchVerb(home, name string, args []string) (bool, error) {
+	if !validCapabilityName(name) {
+		return false, nil
+	}
+	if len(args) == 0 {
+		if p, _ := scriptPath(home, "projector", name); fileExists(p) {
+			return true, cmdShow(home, name)
+		}
+	}
+	if p, _ := scriptPath(home, "command", name); fileExists(p) {
+		return true, cmdRun(home, name, args)
+	}
+	return false, nil
+}
+
 func cmdRun(home, command string, args []string) error {
 	if p, _ := scriptPath(home, "command", command); !fileExists(p) {
 		return fmt.Errorf("command %q not found (learn a lesson that declares it)", command)

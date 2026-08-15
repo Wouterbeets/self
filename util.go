@@ -68,24 +68,35 @@ func usageText() string {
 One append-only event log + projections as deterministic replays. The kernel
 holds no model: the mind is whatever the shell pipes between two selves.
 
-the loop:
+the loop — one law: a prompt is only ever written into a pipe:
 
   echo "whats going on today?" | self | claude -p | self
 
-  prose in       → the situated prompt out (brief, conversation, pending
-                   work, answer contract); the ask is recorded (self.asked)
-  event JSONL in → heard: events append to the log, script.authored installs
-                   under a signed receipt, the reply passes through
-  nothing in     → at a terminal, the orientation brief; in a pipe, the work
-                   prompt (pending scripts, else one reflection) — so bare
-                   'self | claude -p | self' is a self-improvement cycle
+  producer | self                remember this (recorded as self.asked; no prompt at a terminal)
+  producer | self | mind         give the mind this, situated (brief, conversation,
+                                 pending work, answer contract)
+  producer | self | mind | self  think about this, remember what came back
+  self | mind | self             author pending scripts, else one reflection —
+                                 a self-improvement cycle that converges
+  event JSONL | self             heard: events append, script.authored installs
+                                 under a signed receipt, the reply passes through
+  self                           at a terminal: the orientation brief
+
+memory is a stream:
+
+  self log | grep -i plitvice        search it
+  self log note. | jq .payload       no query language — the shell is one
+  echo "…" | self | claude -p        query without ingesting (drop the second self)
 
 usage: self [command] [args]
 
   self                 the filter (see the loop above)
+  self log [prefix]    stream the log verbatim, optionally by event-name prefix
   self serve           rehydrate from the log, then serve at :7777
   self run <cmd> ...   run a capability — append events, refresh projections
   self show <name>     render a projection to stdout
+  self <name> [args]   grown vocabulary: an installed command by its own name;
+                       with no args, the projection of that name if one exists
   self learn <account> deposit an account's record (moments preserved) and
                        print its learning prompt — pipe it to a mind:
                        self learn <dir> | claude -p | self
@@ -123,14 +134,16 @@ The pipe (the one seam)
 
       echo "<ask>" | self | <mind> | self
 
-  ask face     stdin is prose. self records it (self.asked) and writes the
-               situated prompt to stdout: the orientation brief (also at
-               site/brief.md), the recent conversation, any pending work
-               (declarations awaiting scripts), the ask, and the answer
-               contract. A mind MUST be able to inspect files under SELF_HOME
-               (site/*.html, events.jsonl, capabilities/) with its own tools —
-               the prompt is a wake-up card, not a context dump. Coding-agent
-               minds (claude -p, opencode run) plug in with no adapter.
+  ask face     stdin is prose. self records it (self.asked) and — when stdout
+               is a pipe — writes the situated prompt: the orientation brief
+               (also at site/brief.md), the recent conversation, any pending
+               work (declarations awaiting scripts), the ask, and the answer
+               contract. When stdout is a terminal the prose is only
+               remembered: a prompt is never written at a human. A mind MUST
+               be able to inspect files under SELF_HOME (site/*.html,
+               events.jsonl, capabilities/) with its own tools — the prompt
+               is a wake-up card, not a context dump. Coding-agent minds
+               (claude -p, opencode run) plug in with no adapter.
   hear face    stdin carries event JSONL. Event lines append to the log (the
                kernel stamps id, seq, occurred_at, via "pipe", and by from
                SELF_CALLER); script.authored lines install under a locally
@@ -218,6 +231,8 @@ func commandHelp(cmd string) (string, bool) {
 	switch cmd {
 	case "serve":
 		return "usage: self serve\n\nRehydrate from the log, then serve the instance at 127.0.0.1:7777 (SELF_BIND overrides): every projection a live replay, every action a plain HTML form.\n", true
+	case "log":
+		return "usage: self log [event-name-prefix]\n\nStream events.jsonl to stdout, verbatim — memory as a Unix stream. A prefix narrows it by event name (self log note.), and the shell is the query language: self log | grep, self log | jq, self log | claude -p.\n", true
 	case "learn":
 		return "usage: self learn <account-dir>\n       self learn <account-dir> | claude -p | self\n\nDeposit <account-dir>/record.jsonl verbatim (moments and speakers preserved), record the intent, and print the learning prompt on stdout — pipe it to a mind to grow capabilities fitted to this instance. The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
 	case "give":

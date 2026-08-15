@@ -337,6 +337,110 @@ func TestPendingDeclarationsSurfaceAndConverge(t *testing.T) {
 	}
 }
 
+// TestBareProseIsRemembered pins the terminal half of the prompt law: prose
+// arriving with stdout unpiped is recorded and nothing else — `producer |
+// self` means "remember this", and no prompt is ever written at a human.
+func TestBareProseIsRemembered(t *testing.T) {
+	home := t.TempDir()
+	e, err := recordAsk(home, "the kids loved Plitvice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Seq == 0 || e.Via != "pipe" {
+		t.Fatalf("recorded ask seq/via = %d/%q", e.Seq, e.Via)
+	}
+	events, _ := readEvents(home)
+	found := false
+	for _, ev := range events {
+		if ev.Name == "self.asked" {
+			var p struct{ Text string }
+			if json.Unmarshal(ev.Payload, &p) == nil && p.Text == "the kids loved Plitvice" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the prose was not remembered")
+	}
+	// and the memory surfaces on the next pass, in the conversation tail
+	if _, err := recordAsk(home, "what did the kids love?"); err != nil {
+		t.Fatal(err)
+	}
+	if tail := conversationTail(home); !strings.Contains(tail, "Plitvice") {
+		t.Fatalf("a remembered line did not surface in the tail:\n%s", tail)
+	}
+}
+
+// TestLogStreamsVerbatim pins memory-as-a-stream: self log emits the log's
+// exact bytes, and a prefix narrows by event name — the shell is the query
+// language, so the lines must stay bit-identical to events.jsonl.
+func TestLogStreamsVerbatim(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"note.taken", "journal.entry", "note.taken"} {
+		e := newEvent(name, json.RawMessage(`{"title":"x"}`))
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var all bytes.Buffer
+	if err := cmdLog(home, "", &all); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(logPath(home))
+	if !bytes.Equal(all.Bytes(), raw) {
+		t.Fatal("self log did not stream the log verbatim")
+	}
+	var notes bytes.Buffer
+	if err := cmdLog(home, "note.", &notes); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(notes.String(), "\n"); got != 2 {
+		t.Fatalf("prefix filter kept %d lines, want 2", got)
+	}
+	if strings.Contains(notes.String(), "journal.entry") {
+		t.Fatal("prefix filter leaked another event name")
+	}
+	// an empty self streams nothing and is not an error
+	if err := cmdLog(t.TempDir(), "", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGrownVocabularyDispatch pins the native spelling: an installed command
+// answers to its own name (self entry …), a projection answers to its bare
+// name (self journal), and an unknown name is nobody.
+func TestGrownVocabularyDispatch(t *testing.T) {
+	home := t.TempDir()
+	growNoteBoard(t, home)
+
+	handled, err := dispatchVerb(home, "note", []string{"water", "the", "plants"})
+	if !handled || err != nil {
+		t.Fatalf("command dispatch = %v, %v", handled, err)
+	}
+	events, _ := readEvents(home)
+	landed := false
+	for _, e := range events {
+		if e.Name == "note.taken" && strings.Contains(string(e.Payload), "water the plants") {
+			landed = true
+		}
+	}
+	if !landed {
+		t.Fatal("dispatched command's event did not land")
+	}
+
+	handled, err = dispatchVerb(home, "board", nil)
+	if !handled || err != nil {
+		t.Fatalf("projection dispatch = %v, %v", handled, err)
+	}
+
+	if handled, _ := dispatchVerb(home, "ghost", nil); handled {
+		t.Fatal("an unknown name was dispatched")
+	}
+	if handled, _ := dispatchVerb(home, "../escape", nil); handled {
+		t.Fatal("a traversal name was dispatched")
+	}
+}
+
 // TestWorkFaceReflectsWhenQuiet pins the idle loop: with nothing pending,
 // bare `self | mind | self` is one reflection — recorded in the log like
 // everything else.

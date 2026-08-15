@@ -37,12 +37,15 @@ say "the strange loop: learn a lesson through the pipe (deposit, declare, author
 say "ask through the pipe (the ask and the reply both land in the log)"
 echo "what can you do now?" | "$self" | "$mind" | "$self"
 
-say "run the learned command a couple of times (each appends one event)"
-"$self" run entry water the plants
-"$self" run entry call mum
+say "the learned command answers to its own name (each run appends one event)"
+"$self" entry water the plants
+"$self" entry call mum
 
-say "the projection is a pure replay of the log"
-"$self" show journal
+say "so does the learned view — a pure replay of the log"
+"$self" journal
+
+say "memory is a stream: grep it, no query language"
+"$self" log journal.entry | grep --color=never plants
 
 say "rebuild a fresh copy from events.jsonl + .secret alone (no LLM, no network)"
 mirror="$work/mirror"

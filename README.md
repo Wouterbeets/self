@@ -1,15 +1,21 @@
 # self
 
-`self` is a small, local-first runtime — and, to the shell, a filter with a
-memory. It keeps one append-only event log as its authoritative state, and
-rebuilds every view — and every capability — from that log. The kernel holds
-no model: intelligence enters through the pipe, where the mind is whatever
-process you put between two invocations of `self`:
+`self` is a persistent Unix pipe. It has the one thing ordinary pipes don't:
+**the pipe remembers.**
 
 ```sh
-echo "whats going on today?" | self | claude -p | self
+echo "whats going on today?" | self | claude -p | self   # think, and remember
+echo "the kids loved Plitvice" | self                    # just remember
+self log | grep -i plitvice                              # memory is a stream
+self log note. | jq .payload                             # the shell is the query language
+self entry "water the plants"                            # a grown verb, by its own name
+self journal                                             # a grown view, by its own name
 ```
 
+Underneath: a small, local-first runtime. One append-only event log is the
+authoritative state, and every view — and every capability — rebuilds from
+that log. The kernel holds no model: intelligence enters through the pipe,
+where the mind is whatever process you put between two invocations of `self`.
 The first `self` turns your prose into a situated prompt — where the instance
 is, what it can do, what work is pending, and how to answer. The mind (any
 agent CLI, any model wrapper, any script) answers in event JSONL. The second
@@ -61,11 +67,21 @@ Everything intelligent this system does is one shell idiom:
 echo "<ask>" | self | <mind> | self
 ```
 
-`self` has three faces, chosen by what arrives on stdin:
+`self` chooses its face from what arrives on stdin and where stdout goes,
+under one law: **a prompt is only ever written into a pipe** — a terminal
+gets orientation, replies, and acknowledgements, never a wall of context.
+That law is what makes the trio compose:
 
-- **prose** → the *ask* face: the question is recorded (`self.asked`) and a
-  situated prompt goes to stdout — orientation brief, recent conversation,
-  pending work, the ask, the answer contract.
+```sh
+producer | self                    # remember this (recorded; no prompt at a terminal)
+producer | self | mind             # give the mind this, situated
+producer | self | mind | self      # think about this, remember what came back
+```
+
+- **prose** → the *ask* face: the question is recorded (`self.asked`); when
+  stdout is a pipe, a situated prompt follows — orientation brief, recent
+  conversation, pending work, the ask, the answer contract. At a terminal
+  the prose is simply remembered; the next mind pass sees it.
 - **event JSONL** → the *hear* face: event lines append to the log, each
   `script.authored` installs under a locally signed receipt, and the reply
   (prose plus the text of `self.replied`) passes through to stdout.
@@ -78,10 +94,17 @@ self | claude -p | self        # author pending work, or reflect once
 ```
 
 The composability is the point. Stop before the second `self` and nothing is
-ingested — `echo "…" | self | claude -p` is a pure query. Skip the mind and
-`self` is `tee` into the log — `echo '{"name":"note.taken","payload":{…}}' | self`
-appends an event raw. Loop it and capabilities grow until the mind has
-nothing left to author.
+ingested — `echo "…" | self | claude -p` is a pure query (pipe through `cat`
+to preview the prompt itself). Skip the mind and `self` is `tee` into the
+log — `echo '{"name":"note.taken","payload":{…}}' | self` appends an event
+raw. Loop it and capabilities grow until the mind has nothing left to author.
+And the memory side needs no interface at all, because the log is a stream:
+
+```sh
+self log | grep -i plitvice        # search memory
+self log journal. | jq .payload    # no query language — the shell is one
+self log | claude -p               # hand a mind the whole history, deliberately
+```
 
 ## Quick start
 
@@ -246,12 +269,15 @@ the receiver's keeps `lesson.learned` — both sides remember.
 ## CLI
 
 ```
-self                 the filter: prose in → situated prompt out; events in →
-                     appended, reply out; empty pipe → pending work or one
-                     reflection (the loop: echo "…" | self | claude -p | self)
+self                 the filter: prose in → remembered (and, into a pipe, the
+                     situated prompt); events in → appended, reply out; empty
+                     pipe → pending work or one reflection
+self log [prefix]    stream the log verbatim, optionally by event-name prefix
 self serve           rehydrate from the log, then serve at :7777
 self run <cmd> ...   run a command: append its events, re-render projections
 self show <name>     render a projection to stdout
+self <name> [args]   grown vocabulary: an installed command by its own name;
+                     with no args, the projection of that name if one exists
 self learn <account> deposit an account's record (moments preserved) and print
                      its learning prompt — pipe it to a mind
 self give <sel> <dir>
@@ -262,6 +288,9 @@ self retire <t>/<n>  retire a capability: script + page leave the surface, the
                      log keeps every event, re-declaring revives it
 self protocol        print the pipe and capability wire contracts
 ```
+
+Built-in verbs win over grown ones; `self run <name>` and `self show <name>`
+always reach a capability whatever it is called.
 
 The old verbs dissolved into the pipe: *think* is the loop without the second
 `self` (nothing ingested), *reflect* is the bare loop with nothing pending,

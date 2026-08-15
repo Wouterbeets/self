@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,40 @@ func newEvent(name string, payload json.RawMessage) Event {
 }
 
 func logPath(home string) string { return filepath.Join(home, "events.jsonl") }
+
+// cmdLog streams the log to a writer, verbatim — memory as a Unix stream, so
+// the shell is the query language: `self log | grep`, `self log | jq`,
+// `self log | claude -p`. An optional event-name prefix narrows it (the same
+// selector give uses); the lines themselves are the log's exact bytes.
+func cmdLog(home, prefix string, w io.Writer) error {
+	f, err := os.Open(logPath(home))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // an empty self streams nothing
+		}
+		return err
+	}
+	defer f.Close()
+	if prefix == "" {
+		_, err := io.Copy(w, f)
+		return err
+	}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		var e struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil || !strings.HasPrefix(e.Name, prefix) {
+			continue
+		}
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+	}
+	return sc.Err()
+}
 
 func readEvents(home string) ([]Event, error) {
 	f, err := os.Open(logPath(home))
