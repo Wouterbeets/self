@@ -50,6 +50,19 @@ func sign(secret []byte, typ, name, script, by string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
+// signLegacy is the pre-v2 scheme: (type, name, script) with no by-line and
+// no domain separator. Kept only so homes grown under the old kernel keep
+// their receipts — and their capabilities — after the cutover.
+func signLegacy(secret []byte, typ, name, script string) string {
+	m := hmac.New(sha256.New, secret)
+	m.Write([]byte(typ))
+	m.Write([]byte{0})
+	m.Write([]byte(name))
+	m.Write([]byte{0})
+	m.Write([]byte(script))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
 func appendReceipt(home, typ, name, script, by string) error {
 	secret, err := loadSecret(home)
 	if err != nil {
@@ -66,7 +79,15 @@ func verifiedReceipt(secret []byte, payload json.RawMessage) (receipt, bool) {
 	if json.Unmarshal(payload, &r) != nil || r.Sig == "" || r.Script == "" || r.Name == "" {
 		return r, false
 	}
-	return r, hmac.Equal([]byte(sign(secret, r.Type, r.Name, r.Script, r.By)), []byte(r.Sig))
+	if hmac.Equal([]byte(sign(secret, r.Type, r.Name, r.Script, r.By)), []byte(r.Sig)) {
+		return r, true
+	}
+	// Legacy homes: pre-v2 receipts bound no by-line, so a legacy signature
+	// is accepted only when nothing claims authorship it does not cover.
+	if r.By == "" && hmac.Equal([]byte(signLegacy(secret, r.Type, r.Name, r.Script)), []byte(r.Sig)) {
+		return r, true
+	}
+	return r, false
 }
 
 func scriptPath(home, typ, name string) (string, error) {

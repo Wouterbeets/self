@@ -320,6 +320,16 @@ func emitWork(home string, out io.Writer) error {
 			"Author the pending scripts listed above. Emit one script.authored line per declaration; add nothing else unless something is plainly broken."))
 		return err
 	}
+	if seq, content, ok := unansweredChat(home); ok {
+		e := newEvent("self.reflected", json.RawMessage(`{}`))
+		e.Via, e.By = "pipe", callerClaim()
+		if err := appendEvent(home, &e); err != nil {
+			return err
+		}
+		_, err := io.WriteString(out, situatedPrompt(home, fmt.Sprintf(
+			"A user message on /chat (seq %d) is still waiting for a reply:\n\"%s\"\nAnswer it: emit one chat.message event with payload role \"assistant\" and content your reply. That reply is the work of this pass — explore the instance if you need context, but do not let any other improvement displace it.", seq, content)))
+		return err
+	}
 	e := newEvent("self.reflected", json.RawMessage(`{}`))
 	e.Via, e.By = "pipe", callerClaim()
 	if err := appendEvent(home, &e); err != nil {
@@ -360,18 +370,25 @@ func conversationTail(home string) string {
 	type turn struct{ who, text string }
 	var turns []turn
 	for _, e := range events {
-		if e.Via != "pipe" {
-			continue
-		}
-		var p struct{ Text string }
 		switch e.Name {
-		case "self.asked":
-			if json.Unmarshal(e.Payload, &p) == nil && p.Text != "" {
-				turns = append(turns, turn{"asked", p.Text})
+		case "self.asked", "self.replied":
+			if e.Via != "pipe" {
+				continue
 			}
-		case "self.replied":
+			var p struct{ Text string }
 			if json.Unmarshal(e.Payload, &p) == nil && p.Text != "" {
-				turns = append(turns, turn{"replied", p.Text})
+				turns = append(turns, turn{e.Name[len("self."):], p.Text})
+			}
+		case "chat.message":
+			// the chat surface is the door users talk through; its turns
+			// surface in the tail no matter which CLI door carried them
+			var p struct{ Role, Content string }
+			if json.Unmarshal(e.Payload, &p) == nil && p.Content != "" {
+				who := "self"
+				if p.Role == "user" {
+					who = "you"
+				}
+				turns = append(turns, turn{who, p.Content})
 			}
 		}
 	}
@@ -452,6 +469,40 @@ func pendingDecls(home string) []pendingDecl {
 		pending = append(pending, pendingDecl{typ, name, declPayload[key]})
 	}
 	return pending
+}
+
+// unansweredChat replays the log for the newest user chat.message with no
+// assistant chat.message after it. A user waiting on a reply is work: the
+// work face must surface it, because the conversation tail alone cannot
+// outrank a model's inclination to report "nothing pending" and stop.
+func unansweredChat(home string) (seq int, content string, ok bool) {
+	events, err := readEvents(home)
+	if err != nil {
+		return 0, "", false
+	}
+	var lastUser *Event
+	for i := range events {
+		e := &events[i]
+		if e.Name != "chat.message" {
+			continue
+		}
+		var p struct{ Role, Content string }
+		if json.Unmarshal(e.Payload, &p) != nil {
+			continue
+		}
+		switch p.Role {
+		case "user":
+			lastUser = e
+		case "assistant":
+			lastUser = nil
+		}
+	}
+	if lastUser == nil {
+		return 0, "", false
+	}
+	var p struct{ Content string }
+	json.Unmarshal(lastUser.Payload, &p)
+	return lastUser.Seq, p.Content, true
 }
 
 // pendingSection renders the compile asks: one DECLARATION block per pending

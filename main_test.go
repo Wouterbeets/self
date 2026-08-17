@@ -361,6 +361,76 @@ func TestWorkFaceReflectsWhenQuiet(t *testing.T) {
 	}
 }
 
+// TestWorkFaceAnswersWaitingChat pins the metronome's top priority: a user
+// chat.message with no assistant reply after it is pending work, and the work
+// face must ask for it to be answered — the bare "nothing pending" reflection
+// is exactly the failure this prevents.
+func TestWorkFaceAnswersWaitingChat(t *testing.T) {
+	home := t.TempDir()
+	p, _ := json.Marshal(map[string]string{"role": "user", "content": "are you there?"})
+	e := newEvent("chat.message", p)
+	e.Via = "cli"
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := emitWork(home, &out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "waiting for a reply") || !strings.Contains(s, "are you there?") {
+		t.Fatalf("work face did not surface the unanswered chat message:\n%s", s)
+	}
+	if !strings.Contains(s, `role "assistant"`) {
+		t.Fatalf("work face did not tell the mind to answer with an assistant chat.message:\n%s", s)
+	}
+}
+
+// TestWorkFaceReflectsOnceChatAnswered pins the convergence: once an assistant
+// reply lands after the user message, the work face goes back to reflection.
+func TestWorkFaceReflectsOnceChatAnswered(t *testing.T) {
+	home := t.TempDir()
+	for _, m := range []map[string]string{
+		{"role": "user", "content": "are you there?"},
+		{"role": "assistant", "content": "I am."},
+	} {
+		p, _ := json.Marshal(m)
+		e := newEvent("chat.message", p)
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	if err := emitWork(home, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "self-improvement reflection") {
+		t.Fatalf("answered chat should return the work face to reflection:\n%s", out.String())
+	}
+}
+
+// TestConversationTailIncludesChat pins that chat turns surface in the prompt's
+// conversation tail regardless of the CLI door they came through — the tail is
+// how the mind sees the conversation.
+func TestConversationTailIncludesChat(t *testing.T) {
+	home := t.TempDir()
+	for _, m := range []map[string]string{
+		{"role": "user", "content": "hello from the chat"},
+		{"role": "assistant", "content": "hello back"},
+	} {
+		p, _ := json.Marshal(m)
+		e := newEvent("chat.message", p)
+		e.Via = "cli"
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tail := conversationTail(home)
+	if !strings.Contains(tail, "you: hello from the chat") || !strings.Contains(tail, "self: hello back") {
+		t.Fatalf("tail missing chat turns:\n%s", tail)
+	}
+}
+
 // TestHearRefusesUndeclaredScripts pins the install gate on the pipe: a
 // script.authored for a capability this log never declared installs nothing —
 // declaring is the only door in.
@@ -976,6 +1046,65 @@ func TestReceiptProvenance(t *testing.T) {
 	folded := receipt{good.Type, good.Name, good.Script + "\x00" + good.By, "", good.Sig}
 	if _, ok := verifiedReceipt(secret, mint(folded)); ok {
 		t.Fatal("by-line folded into script verified — field boundaries are ambiguous")
+	}
+}
+
+// TestLegacyReceiptSurvivesTheV2Cutover pins the migration: homes grown under
+// the pre-v2 kernel signed receipts over (type, name, script) with no by-line;
+// those receipts must still verify, or every old home loses its capabilities.
+func TestLegacyReceiptSurvivesTheV2Cutover(t *testing.T) {
+	home := t.TempDir()
+	secret, err := loadSecret(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := receipt{Type: "command", Name: "capture", Script: "#!/bin/sh\necho hi"}
+	legacy.Sig = signLegacy(secret, legacy.Type, legacy.Name, legacy.Script)
+	p, _ := json.Marshal(legacy)
+	if r, ok := verifiedReceipt(secret, p); !ok || r.By != "" {
+		t.Fatal("legacy (pre-v2) receipt did not verify")
+	}
+
+	// a by-line cannot be grafted onto a legacy signature
+	spoofed := legacy
+	spoofed.By = "someone"
+	p, _ = json.Marshal(spoofed)
+	if _, ok := verifiedReceipt(secret, p); ok {
+		t.Fatal("by-line grafted onto a legacy signature verified")
+	}
+}
+
+// TestLegacyHomeRehydrates pins the migration end-to-end: a log grown under
+// the pre-v2 kernel rebuilds its scripts and pages under the new kernel.
+func TestLegacyHomeRehydrates(t *testing.T) {
+	home := t.TempDir()
+	secret, err := loadSecret(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendLegacy := func(typ, name, script string) {
+		r := receipt{typ, name, script, "", ""}
+		r.Sig = signLegacy(secret, typ, name, script)
+		p, _ := json.Marshal(r)
+		e := newEvent("script.compiled", p)
+		if err := appendEvent(home, &e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendLegacy("command", "note", "#!/bin/sh\necho x")
+	appendLegacy("projector", "notes", "#!/bin/sh\necho '<html><body><h1>notes</h1></body></html>'")
+	e := newEvent("projector.declared", json.RawMessage(`{"name":"notes","description":"d","consumes":["note.added"]}`))
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	if err := rehydrate(home); err != nil {
+		t.Fatal(err)
+	}
+	if !fileExists(filepath.Join(home, "capabilities", "commands", "note", "run")) {
+		t.Fatal("legacy command did not reinstall")
+	}
+	if !fileExists(filepath.Join(home, "site", "notes.html")) {
+		t.Fatal("legacy projector page did not rebuild")
 	}
 }
 
