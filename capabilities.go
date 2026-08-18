@@ -88,18 +88,15 @@ func declaredCaps(events []Event) (commands map[string]commandDecl, cmdOrder []s
 	return commands, cmdOrder, projectors, projOrder
 }
 
-// stateBrief is the kernel's wake-up card for a mind: Layer 0 orientation —
-// mechanism + a generated catalog of what exists — not a log digest and not
-// philosophy. It tells the mind where it is, how write/extend work, what
-// commands and projections are installed, and where depth lives on disk.
-// Values and "open when" guidance never live here; they appear only if this
-// instance has learned projections that surface them.
+// stateBrief is the kernel's wake-up card for a mind. Two constants, then a
+// generated catalog: Standing (who you are here), Contract (what stdout is),
+// then the commands and pages this body already has. Not a log digest. Instance
+// values and "open when" guidance still belong on learned projections, not here.
 //
 // A consequence: a mind that cannot inspect files under SELF_HOME — a plain
-// stdin/stdout API adapter with no tools — cannot do the job. The kernel's
-// process seam is still a pipe (brief on stdin; stdout parsed on exit), but a
-// real mind needs a tool loop on its side of it. How an adapter turns tools or
-// APIs into that process stdout is adapter-local (see examples/). The kernel
+// stdin/stdout API adapter with no tools — cannot do the job. Bare `self`
+// prints an ask that points here; stdout is for self. How an adapter turns
+// tools or APIs into that stdout is adapter-local (see examples/). The kernel
 // does not sandbox or supply tools.
 //
 // The kernel materializes the brief to SELF_HOME/site/brief.md (see
@@ -138,14 +135,21 @@ func stateBrief(home string) string {
 	fmt.Fprintf(&b, "Instance: `%s`\n", home)
 	fmt.Fprintf(&b, "Log: %d events. Set `SELF_MIND_ID` when you author — receipts record it.\n\n", len(events))
 
-	b.WriteString("## How you act\n\n")
-	b.WriteString("State that survives is only what lands in `events.jsonl`. The log is append-only.\n\n")
-	b.WriteString("- **Read** — open files under this instance: `site/*.html` (rendered state a human sees), `events.jsonl` (authoritative log), `capabilities/` (installed scripts).\n")
-	b.WriteString("- **Write (commands)** — prefer installed verbs: `self run <command> …` (or HTTP `POST /run/<command>` when serving). Args follow each command below.\n")
-	b.WriteString("- **Write (events)** — when this ask expects you to persist directly, emit domain events as this process's stdout (one compact JSON object per line: `{\"name\":\"…\",\"payload\":{…}}`). Do not edit `events.jsonl` yourself; do not install scripts yourself.\n")
-	b.WriteString("- **Extend** — emit `command.declared` / `projector.declared` the same way when this ask is learn/reflect (or declare is warranted). The kernel compiles and signs; you only author.\n")
-	b.WriteString("- **Query** — `think` is report-only: the kernel returns your reply and does not append from it.\n\n")
-	b.WriteString("When the kernel spawned you, it reads **only this process's stdout** after you exit. How your adapter turns tools or API calls into that stdout is adapter-local — see `self protocol` and `examples/`.\n\n")
+	b.WriteString("## Standing\n\n")
+	b.WriteString("You run once and exit. This directory remains. The only memory that survives is the append-only log (`events.jsonl`); files under `site/` are that log, replayed. A later process — you or someone else — will read what you leave and nothing else.\n\n")
+	b.WriteString("What you print on stdout can become lasting state: ordinary events, and new commands or pages if you declare them and attach the script. You cannot edit the log or install scripts yourself. You propose; this instance accepts, signs, and keeps what it accepts, attributed to `SELF_MIND_ID`.\n\n")
+	b.WriteString("You do not have to add anything. If you choose not to, say so in prose — otherwise a later reader cannot tell a choice from a miss. Look at what already exists before you add more.\n\n")
+
+	b.WriteString("## Contract\n\n")
+	b.WriteString("Stdout is for `self`. Emit JSON objects with `name` and `payload`. Other lines are prose — a reply, not the log. Fenced or pretty-printed objects are fine.\n\n")
+	b.WriteString("- Do not edit `events.jsonl`. Do not install under `capabilities/`.\n")
+	b.WriteString("- The kernel stamps `via` (the door it witnessed; `stdin` on this pipe). `by` is your claim (`SELF_MIND_ID`).\n")
+	b.WriteString("- **Read** — `site/*.html`, `events.jsonl`, `capabilities/`. Optional depth: `site/kernel.html`.\n")
+	b.WriteString("- **Act** — prefer installed verbs: `self run <command> …` (listed below).\n")
+	b.WriteString("- **Grow** — emit `command.declared` or `projector.declared`, then `script.authored` for it in the same answer. Pairing installs. A declaration alone stays unsigned.\n")
+	b.WriteString("- Do not emit `script.compiled`. The kernel signs that. Forged receipts are inert.\n")
+	b.WriteString("- After it eats, `self` reports `ate` / `dropped` / `ignored` / `unsigned` on stderr.\n")
+	b.WriteString("- The pipe: `echo question | self | $SELF_MIND | self`. `$SELF_MIND` is a stdin-filter.\n\n")
 
 	if len(events) == 0 {
 		b.WriteString("## Empty log\n\n")

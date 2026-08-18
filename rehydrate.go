@@ -1,12 +1,20 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
 
 func rehydrate(home string) error {
+	return rehydrateOpt(home, false)
+}
+
+func rehydrateOpt(home string, quietUnlessChanged bool) error {
+	before := derivedFingerprint(home)
 	events, err := readEvents(home)
 	if err != nil {
 		return err
@@ -74,8 +82,39 @@ func rehydrate(home string) error {
 	// Kernel-authored pages name the real home, not the temporary staging path.
 	renderKernelHTML(home)
 	renderBriefFile(home)
-	fmt.Fprintf(os.Stderr, "self: rehydrated %d capabilit(ies) from the log\n", installed)
+	after := derivedFingerprint(home)
+	if !quietUnlessChanged || after != before {
+		fmt.Fprintf(os.Stderr, "self: rehydrated %d capabilit(ies) from the log\n", installed)
+	}
 	return nil
+}
+
+// derivedFingerprint is content of capabilities/ + site/, so a no-op rebuild
+// can stay silent. Paths are relative; order is Walk's.
+func derivedFingerprint(home string) string {
+	h := sha256.New()
+	for _, dir := range []string{"capabilities", "site"} {
+		root := filepath.Join(home, dir)
+		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info == nil || info.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(home, path)
+			if err != nil {
+				return nil
+			}
+			io.WriteString(h, rel)
+			h.Write([]byte{0})
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			h.Write(data)
+			h.Write([]byte{0})
+			return nil
+		})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func copyDerivedFile(src, dst string, mode os.FileMode) error {

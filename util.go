@@ -52,7 +52,9 @@ a signed receipt.
 
 usage: self [command] [args]
 
-  self                 rehydrate the instance from the log, then serve it (the default)
+  self                 the mind pipe — print an ask or eat a reply (see below)
+  self serve           rehydrate the instance from the log, then serve it
+  self compile         print the next unsigned declaration's compile ask
   self learn <account> learn an account's intent into capabilities and deposit its
                        record verbatim, moments preserved (needs a mind)
   self give <sel> <dir>
@@ -76,15 +78,18 @@ environment:
                     (default: current working directory; set it in your shell rc
                     to pin a shared instance, e.g. export SELF_HOME=~/.self)
 
-  plug a mind (one seam; think, reflect, learn, and compile all pass through it):
-  SELF_MIND        a tool-capable executable, e.g. "claude -p" or
-                    examples/mind-opencode — it gets the ask's kind in
-                    $SELF_ASK, the prompt as its last argument, and an
-                    orientation brief on stdin; it answers in event JSONL,
-                    prose tolerated. The mind must inspect SELF_HOME itself
-                    (site/*.html, events.jsonl, capabilities/) with its own
-                    tools. See examples/README.md. examples/mind-stub is a
-                    deterministic offline mind for demos/tests.
+  the pipe (bare self; fds choose the face):
+    echo hello | self | examples/mind-claude | self
+                    first self turns prose into an explore ask; last self
+                    eats event objects (one-line, fenced, or pretty-printed)
+                    and script.authored. a tty with SELF_MIND set pumps the
+                    same loop. SELF_MIND must be a stdin-filter.
+
+  plug a mind for think/reflect/learn/compile (the spawned seam, still):
+  SELF_MIND        a tool-capable executable. On the spawned seam it gets
+                    $SELF_ASK, the prompt as last argv, and a brief on stdin.
+                    On the pipe pump it is a filter: the ask on stdin. The
+                    mind must inspect SELF_HOME itself. See examples/README.md.
   SELF_MIND_ID     provenance by-line signed into script.compiled receipts
                     (default: the mind executable)
   SELF_CALLER      claimed speaker recorded verbatim as by on events your CLI
@@ -96,6 +101,17 @@ environment:
 
 func protocolText() string {
 	return `self protocol — the wire contracts
+
+Mind pipe (bare self)
+
+  Fds choose the face. Prose on stdin is a question (woven into an explore
+  ask on stdout). Event objects — one-line, pretty-printed, or fenced — and
+  script.authored are food: appended with via=stdin, by=SELF_MIND_ID or
+  SELF_CALLER. script.compiled and the rest of the kernel vocabulary are
+  refused (reported on stderr: ate/dropped/ignored/unsigned). A declaration
+  without a matching script.authored stays unsigned; stdout then carries the
+  compile ask (or silence). SELF_MIND, when the process is a tty, must be a
+  stdin-filter (examples/mind-claude, examples/mind-grok). Serve is self serve.
 
 Mind process contract
 
@@ -188,6 +204,10 @@ SELF_HOME/.secret and the current SELF_MIND_ID.
 
 func commandHelp(cmd string) (string, bool) {
 	switch cmd {
+	case "serve":
+		return "usage: self serve\n\nRehydrate capabilities/ and site/ from the log, then serve the instance at SELF_BIND (default 127.0.0.1:7777). Bare `self` is the mind pipe, not the server.\n", true
+	case "compile":
+		return "usage: self compile\n\nPrint the compile ask for the next unsigned declaration (declared, no live signed receipt). Pipe it to a mind and pipe the mind back to self. Silence (exit 1) means nothing is pending.\n", true
 	case "learn":
 		return "usage: self learn <account-dir>\n\nRead <account-dir>/intent.md, ask the mind to declare capabilities fitted to this instance, compile them under signed receipts, then deposit the account's record.jsonl verbatim (moments preserved). The kernel's own vocabulary is refused in a record — it travels only as lineage.* events, which land inert.\n", true
 	case "give":

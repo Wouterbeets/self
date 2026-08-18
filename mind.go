@@ -251,7 +251,7 @@ func pipeMind(home, kind, prompt string) (*mindResult, error) {
 	return res, nil
 }
 
-const mindHint = `plug a mind: SELF_MIND=<a tool-capable executable, e.g. "claude -p" or examples/mind-opencode>; the mind must inspect SELF_HOME itself. See examples/README.md. For offline demos/tests, examples/mind-stub is a deterministic no-LLM mind.`
+const mindHint = `plug a mind: SELF_MIND=examples/mind-claude (or mind-grok, mind-opencode); the mind must inspect SELF_HOME itself. See examples/README.md. For offline demos/tests, examples/mind-stub is a deterministic no-LLM mind.`
 
 // mindCommand splits a configured executable into command and args, appending
 // the prompt as the last argument.

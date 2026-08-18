@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""mind-opencode - a SELF_MIND adapter backed by `opencode run`.
+"""mind-opencode — SELF_MIND adapter backed by `opencode run`.
 
-The self kernel expects a mind process to print self event JSONL (or prose).
-OpenCode's `--format json` prints its own event stream instead. This adapter
-extracts the assistant text from that stream and passes it through unchanged;
-the kernel prompt remains the single source of protocol instructions.
+Two faces, same script:
 
-Usage:
+  filter (the pipe):  echo hello | self | examples/mind-opencode | self
+      stdin is the ask; no extra argv. Assistant text is printed as-is.
+
+  spawn (think/learn): SELF_MIND=examples/mind-opencode self think "…"
+      last argv is the prompt; stdin is the orientation brief.
+
+OpenCode's `--format json` is its own event stream. This adapter unwraps the
+assistant text so the kernel sees ordinary prose + event objects.
 
     export SELF_MIND="$PWD/examples/mind-opencode"
-    export SELF_OPENCODE_MODEL=github-copilot/gpt-5.5  # optional
-    self learn lessons/chat
+    export SELF_OPENCODE_AUTO=1          # non-interactive tool use
+    export SELF_OPENCODE_MODEL=…         # optional
 """
 
 import json
@@ -69,9 +73,18 @@ def collect_text(stream):
 
 
 def main():
-    prompt = sys.argv[-1] if len(sys.argv) > 1 else ""
-    brief = sys.stdin.read()  # orientation brief — opencode explores SELF_HOME itself
-    print(run_opencode(prompt, brief))
+    stdin = sys.stdin.read()
+    # filter: spawned with no extra argv, ask on stdin.
+    # spawn: last argv is the prompt, stdin is the brief.
+    extra = sys.argv[1:]
+    if extra:
+        message, brief = extra[-1], stdin
+    else:
+        message, brief = stdin, ""
+    if not message.strip():
+        sys.stderr.write("mind-opencode: empty ask\n")
+        raise SystemExit(1)
+    print(run_opencode(message, brief))
 
 
 if __name__ == "__main__":

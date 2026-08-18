@@ -14,6 +14,16 @@ import (
 // every affordance a plain HTML form. The injected shell layers feel on top —
 // a skin and a nav — but carries no state and grants no power: strip it and
 // every page still works, because the forms do.
+func cmdServeHome(home string) error {
+	if err := ensureHome(home); err != nil {
+		return err
+	}
+	if err := rehydrate(home); err != nil {
+		return err
+	}
+	return cmdServe(home)
+}
+
 func cmdServe(home string) error {
 	refreshSite(home)
 	mux := serveMux(home)

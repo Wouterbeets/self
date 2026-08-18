@@ -6,10 +6,13 @@
 // is never shipped — a mind process (SELF_MIND) authors every script from a
 // declaration, for this receiver; the kernel holds no model of its own. A
 // running capability can declare new capabilities and the
-// kernel compiles them on the spot (the strange loop). Every compile is logged
-// as a script.compiled receipt signed with a per-home secret; only kernel-signed
-// receipts ever install, so `self rehydrate` rebuilds the derived instance from
-// events.jsonl + .secret alone.
+// kernel installs each authored script under a signed receipt (the strange
+// loop). Every compile is logged as a script.compiled receipt signed with a
+// per-home secret; only kernel-signed receipts ever install, so `self rehydrate`
+// rebuilds the derived instance from events.jsonl + .secret alone.
+//
+// Bare `self` is the mind pipe: it prints an ask or eats a reply, depending
+// on the fds. `self serve` binds the HTTP surface.
 package main
 
 import (
@@ -21,14 +24,7 @@ import (
 func main() {
 	home := homeDir()
 	if len(os.Args) < 2 {
-		err := ensureHome(home)
-		if err == nil {
-			err = rehydrate(home)
-		}
-		if err == nil {
-			err = cmdServe(home)
-		}
-		if err != nil {
+		if err := cmdDefault(home); err != nil {
 			fmt.Fprintf(os.Stderr, "self: %s\n", err)
 			os.Exit(1)
 		}
@@ -74,6 +70,10 @@ func main() {
 		} else {
 			err = cmdShow(home, args[0])
 		}
+	case "serve":
+		err = cmdServeHome(home)
+	case "compile":
+		err = cmdCompile(home)
 	case "rehydrate":
 		err = rehydrate(home)
 	case "revise":

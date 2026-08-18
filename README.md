@@ -44,6 +44,11 @@ This runtime is the reference implementation of a larger idea:
 
 It is experimental. See [Limits](#limits-and-threat-model) before you rely on it.
 
+The [`exploration/chosen-bodies`](https://github.com/wouterbeets/self/tree/exploration/chosen-bodies)
+fork asks the opposite social question: what changes when sovereign bodies have
+deliberately chosen one another? [`HERESIES.md`](HERESIES.md) carries the
+Chesterton ledger and `lessons/covenant` is its executable first probe.
+
 ## Quick start
 
 **Already living in a coding agent?** The fastest path is the
@@ -72,7 +77,7 @@ stub writes trivial scripts; this shows the machinery, not the intelligence.
 
 ```sh
 go install .                        # `self` on PATH (via GOBIN)
-make run                            # or: self
+make run                            # or: self serve
 ```
 
 Open <http://127.0.0.1:7777>. By default the current working directory is the
@@ -96,7 +101,7 @@ The same flow works from the CLI:
 cd ~/my-project
 export SELF_MIND="claude -p"        # any executable can be the mind (see below)
 self learn lessons/chat              # generate a capability set from its intent
-self                                 # rebuild from the log, then serve at :7777
+self serve                           # rebuild from the log, then serve at :7777
 ```
 
 `learn` needs a mind; `examples/mind-stub` supplies a deterministic offline
@@ -202,7 +207,9 @@ the receiver's keeps `lesson.learned` — both sides remember.
 ## CLI
 
 ```
-self                 rehydrate from the log, then serve (default)
+self                 the mind pipe: print an ask or eat a reply (fds decide)
+self serve           rehydrate from the log, then serve
+self compile         print the next unsigned declaration's compile ask
 self learn <account> learn an account: capabilities from its intent.md (needs a
                      mind), its record deposited verbatim, moments preserved
 self give <sel> <dir>
@@ -218,6 +225,15 @@ self revise <t>/<name> <request>
 self protocol        print the mind and capability wire contracts
 self retire <t>/<n>  retire a capability: script + page leave the surface, the
                      log keeps every event, re-declaring revives it
+```
+
+The pipe is the default mind seam. Prose on stdin becomes a question inside
+an explore ask; event JSONL and `script.authored` are ingested (`via=stdin`);
+everything else is ignored. A declaration without a matching
+`script.authored` stays unsigned and the next ask is the compile prompt:
+
+```
+echo hello | self | examples/mind-claude | self
 ```
 
 Server routes: `/` (instance self-description), `/<projection>`,

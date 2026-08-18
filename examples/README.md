@@ -5,28 +5,33 @@ and no network client; a mind is a process you supply through `SELF_MIND`
 (see [the mind](../README.md#the-mind)). These adapters illustrate the
 contract's wire shape — copy one, point `SELF_MIND` at it, adapt it to taste.
 
-**The contract the kernel enforces, in one sentence:** the kernel gives the
-mind an orientation brief on stdin (where the mind is, what capabilities
-exist, where to look for the rest); the mind MUST inspect `SELF_HOME` itself
-— `site/*.html`, `events.jsonl`, `capabilities/` — with its own tools to do
-its job. A process without that exploration ability is not a complete mind.
+**The contract the kernel enforces, in one sentence:** the kernel prints an
+ask (and keeps the brief at `site/brief.md`); the mind MUST inspect
+`SELF_HOME` itself — `site/*.html`, `events.jsonl`, `capabilities/` — with
+its own tools. A process without that exploration ability is not a complete
+mind. On the default pipe, the mind is a **stdin-filter**: ask on stdin,
+events on stdout.
 
-## `claude -p` — no adapter
+## `mind-claude` / `mind-grok` — argv minds as filters
 
-A coding-agent CLI that already explores with its own tools and prints to
-stdout plugs straight into the pipe; there is nothing here to install for it:
+`claude -p` and `grok --single` take the prompt as an argument, not stdin.
+These two-line adapters are the missing filter:
 
 ```sh
-export SELF_MIND="claude -p"
-self learn lessons/chat
+export SELF_MIND="$PWD/examples/mind-claude"   # or mind-grok
+echo hello | self | $SELF_MIND | self
+# or, on a tty: just `self`
 ```
+
+Each reads the ask on stdin, `cd`s to `$SELF_HOME` (so a kernel-repo
+`CLAUDE.md` is not loaded as context), and execs the CLI. `mind-claude`
+passes `--dangerously-skip-permissions` because a non-interactive explore
+will not read the instance without it.
 
 Stateless on purpose: each ask starts cold and orients from the brief and the
 rendered state. Resist wiring the harness's session store in as memory
 (`--continue`): it accumulates mind state outside the log — unreplayable,
-unauditable, absent from every account. An instance's memory is its events and
-projections; a mind that needs to remember something should write it to the
-log through a capability, where `rehydrate` can reach it.
+unauditable, absent from every account.
 
 ## `mind-stub`
 
@@ -82,14 +87,13 @@ of `mind-http-server` for the environment knobs (`MIND_MODEL_URL`,
 
 ## `mind-opencode`
 
-A working tool-capable mind that delegates to `opencode run`, which can
-inspect `SELF_HOME` itself. This is the adapter the contract actually asks for:
-the mind reads the orientation brief, then uses its own tools to explore
-`site/*.html`, `events.jsonl`, `capabilities/` before answering. Directionally
-correct — point `SELF_MIND` at this for real capabilities.
+A filter (and still a spawn adapter) around `opencode run`. OpenCode prints
+its own JSON event stream; this unwraps the assistant text. On the pipe,
+stdin is the ask and there is no extra argv. For a non-interactive explore
+you almost always need `SELF_OPENCODE_AUTO=1`.
 
 ```sh
 export SELF_MIND="$PWD/examples/mind-opencode"
-export SELF_OPENCODE_MODEL=github-copilot/gpt-5.5  # optional
-self learn lessons/chat
+export SELF_OPENCODE_AUTO=1
+echo hello | self | $SELF_MIND | self
 ```
