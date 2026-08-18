@@ -1,0 +1,17 @@
+#!/bin/sh
+# mind-claude — stdin-filter around `claude -p`.
+#
+#   export SELF_MIND="$PWD/examples/mind-claude"
+#   echo hello | self | $SELF_MIND | self
+#
+# Runs in SELF_HOME so a kernel-repo CLAUDE.md is not loaded as context.
+# --dangerously-skip-permissions is required for a non-interactive explore.
+set -e
+ask=$(cat)
+if [ -z "$ask" ]; then
+	echo "mind-claude: empty ask on stdin" >&2
+	exit 1
+fi
+home=${SELF_HOME:-.}
+cd "$home" || exit 1
+exec "${CLAUDE:-claude}" -p --dangerously-skip-permissions "$ask"

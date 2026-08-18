@@ -1,0 +1,20 @@
+#!/bin/sh
+# mind-grok — stdin-filter around `grok --prompt-file`.
+#
+#   export SELF_MIND="$PWD/examples/mind-grok"
+#   echo hello | self | $SELF_MIND | self
+#
+# grok -p / --single wants argv; this adapter is the filter the pipe needs.
+# Runs in SELF_HOME so a kernel-repo instruction file is not loaded as context.
+set -e
+ask=$(cat)
+if [ -z "$ask" ]; then
+	echo "mind-grok: empty ask on stdin" >&2
+	exit 1
+fi
+home=${SELF_HOME:-.}
+cd "$home" || exit 1
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+printf '%s\n' "$ask" > "$tmp"
+exec "${GROK:-grok}" --prompt-file "$tmp"
