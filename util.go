@@ -76,8 +76,10 @@ the loop:
                    work, answer contract); the ask is recorded (self.asked)
   event JSONL in → heard: events append to the log, script.authored installs
                    under a signed receipt, the reply passes through
-  nothing in     → at a terminal, the orientation brief; in a pipe, the work
-                   prompt (pending scripts, else one reflection) — so bare
+  nothing in     → at a terminal, the orientation brief plus what is in
+                   flight (pending scripts, unresolved rejections, waiting
+                   chat); in a pipe, the work prompt (pending scripts, else
+                   unresolved rejections, else one reflection) — so bare
                    'self | claude -p | self' is a self-improvement cycle
 
 usage: self [command] [args]
@@ -135,10 +137,20 @@ The pipe (the one seam)
                kernel stamps id, seq, occurred_at, via "pipe", and by from
                SELF_CALLER); script.authored lines install under a locally
                signed receipt; every other line — and the text of
-               self.replied — passes through to stdout as the reply.
+               self.replied — passes through to stdout as the reply. A
+               script.authored the kernel refuses (empty script, undeclared or
+               unknown capability) is recorded as a kernel-stamped
+               script.rejected event — the failure is memory, not a terminal
+               incident. A rejection stays open until a verified receipt or a
+               capability.retired for that capability postdates it; open
+               rejections ride the pending section (when the declaration still
+               stands), become the work prompt (when it does not), and show
+               under bare 'self' at a terminal.
   work face    stdin is empty (or a terminal with stdout piped). self emits
-               the pending-compile prompt if declarations await scripts, else
-               one reflection ask — bare 'self | <mind> | self' converges.
+               the pending-compile prompt if declarations await scripts (each
+               carrying the reason for any rejected previous attempt), else
+               the unresolved-rejection prompt, else the waiting-chat ask,
+               else one reflection — bare 'self | <mind> | self' converges.
 
 Wire events (what a mind prints)
 

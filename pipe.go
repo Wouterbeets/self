@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -107,11 +108,29 @@ func isTTY(f *os.File) bool {
 	return st.Mode()&os.ModeCharDevice != 0
 }
 
-// pipeStatus is the one-glance state a human gets under the brief.
+// pipeStatus is the one-glance state a human gets under the brief: what is in
+// flight (pending scripts, a waiting chat message) and what just broke (open
+// rejections) — all derived from the log, all continuable through the same
+// pipe. The brief itself stays pure orientation; this is the live margin.
 func pipeStatus(home string) string {
 	var b strings.Builder
 	if pending := pendingDecls(home); len(pending) > 0 {
 		fmt.Fprintf(&b, "\n%d declaration(s) pending scripts — run:  self | claude -p | self\n", len(pending))
+	}
+	if rejs := openRejections(home); len(rejs) > 0 {
+		last := rejs[len(rejs)-1]
+		where := strings.Trim(last.Type+"/"+last.Name, "/")
+		if where == "" {
+			where = "a script"
+		}
+		fmt.Fprintf(&b, "\n%d rejected script(s) unresolved — latest, %s: %s — run:  self | claude -p | self\n", len(rejs), where, last.Reason)
+	}
+	if seq, content, ok := unansweredChat(home); ok {
+		content = strings.ReplaceAll(content, "\n", " ")
+		if len(content) > 120 {
+			content = content[:120] + "…"
+		}
+		fmt.Fprintf(&b, "\na chat message (seq %d) is waiting for a reply: %q — run:  self | claude -p | self\n", seq, content)
 	}
 	b.WriteString("\nthe loop:  echo \"<ask>\" | self | claude -p | self      serve:  self serve\n")
 	return b.String()
@@ -154,12 +173,12 @@ func parseWire(input string) (evs []Event, scripts []authored, reply []string) {
 			continue
 		}
 		if e.Name == "script.authored" {
+			// Kept even when malformed (empty script, unparseable payload):
+			// the hear face rejects it with a recorded reason — a bad authored
+			// line is a failure the log must remember, not a line to drop.
 			var a authored
-			if json.Unmarshal(e.Payload, &a) == nil && strings.TrimSpace(a.Script) != "" {
-				scripts = append(scripts, a)
-			} else {
-				fmt.Fprintf(os.Stderr, "self: script.authored without a script — dropped\n")
-			}
+			json.Unmarshal(e.Payload, &a)
+			scripts = append(scripts, a)
 			continue
 		}
 		if e.Name == "self.replied" {
@@ -223,9 +242,16 @@ func hear(home string, evs []Event, scripts []authored, reply []string, out io.W
 		fmt.Fprintf(os.Stderr, "self: retired %d capabilit(ies)\n", n)
 	}
 	installed := 0
+	var rejected []Event
 	for _, a := range scripts {
-		if err := installAuthored(home, a); err != nil {
+		typ, name, err := installAuthored(home, a)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "self: %s\n", err)
+			if rej, rerr := recordRejection(home, typ, name, err.Error(), a.Script); rerr != nil {
+				fmt.Fprintf(os.Stderr, "self: recording the rejection: %s\n", rerr)
+			} else {
+				rejected = append(rejected, rej)
+			}
 			continue
 		}
 		installed++
@@ -233,12 +259,12 @@ func hear(home string, evs []Event, scripts []authored, reply []string, out io.W
 	if installed > 0 {
 		refreshSite(home)
 	} else {
-		refreshSiteAfter(home, evs)
+		refreshSiteAfter(home, append(evs, rejected...))
 	}
 	for _, line := range reply {
 		fmt.Fprintln(out, line)
 	}
-	fmt.Fprintf(os.Stderr, "self: heard %d event(s), installed %d script(s)\n", len(evs), installed)
+	fmt.Fprintf(os.Stderr, "self: heard %d event(s), installed %d script(s), rejected %d\n", len(evs), installed, len(rejected))
 	if pending := pendingDecls(home); len(pending) > 0 {
 		fmt.Fprintf(os.Stderr, "self: %d declaration(s) pending scripts — run:  self | claude -p | self\n", len(pending))
 	}
@@ -249,22 +275,27 @@ func hear(home string, evs []Event, scripts []authored, reply []string, out io.W
 // installs: the capability must be declared in this log (and not retired),
 // and the kernel signs a script.compiled receipt over the bytes. An authored
 // script whose type/name are blank matches the single pending declaration if
-// exactly one exists — tolerance for a terse mind, never ambiguity.
-func installAuthored(home string, a authored) error {
-	typ, name := strings.TrimSpace(a.Type), strings.TrimSpace(a.Name)
+// exactly one exists — tolerance for a terse mind, never ambiguity. The
+// resolved type/name come back even on failure, so the caller can record the
+// rejection against the right capability.
+func installAuthored(home string, a authored) (typ, name string, err error) {
+	typ, name = strings.TrimSpace(a.Type), strings.TrimSpace(a.Name)
 	if typ == "" || name == "" {
 		pending := pendingDecls(home)
 		if len(pending) != 1 {
-			return fmt.Errorf("script.authored without type/name matches nothing (pending: %d)", len(pending))
+			return typ, name, fmt.Errorf("script.authored without type/name matches nothing (pending: %d)", len(pending))
 		}
 		typ, name = pending[0].Type, pending[0].Name
 	}
+	if strings.TrimSpace(a.Script) == "" {
+		return typ, name, fmt.Errorf("script.authored without a script")
+	}
 	if typ != "command" && typ != "projector" {
-		return fmt.Errorf("script.authored for unknown type %q", typ)
+		return typ, name, fmt.Errorf("script.authored for unknown type %q", typ)
 	}
 	events, err := readEvents(home)
 	if err != nil {
-		return err
+		return typ, name, err
 	}
 	commands, _, projectors, _ := declaredCaps(events)
 	declared := false
@@ -275,16 +306,141 @@ func installAuthored(home string, a authored) error {
 		_, declared = projectors[name]
 	}
 	if !declared {
-		return fmt.Errorf("script.authored for undeclared %s/%s — declare it first", typ, name)
+		return typ, name, fmt.Errorf("script.authored for undeclared %s/%s — declare it first", typ, name)
 	}
 	if err := installScript(home, typ, name, a.Script); err != nil {
-		return err
+		return typ, name, err
 	}
 	if err := appendReceipt(home, typ, name, a.Script, authorClaim()); err != nil {
-		return err
+		return typ, name, err
 	}
 	fmt.Fprintf(os.Stderr, "self: installed %s/%s under a signed receipt\n", typ, name)
-	return nil
+	return typ, name, nil
+}
+
+// ─────────────────────────────── rejections ─────────────────────────────────
+//
+// A script.authored the kernel refuses used to die in stderr — invisible to
+// the next pass of a stateless mind, outside the log→projections model
+// everything else lives in. Now the failure is an event: the kernel records
+// what it refused and why, and "is it still open" is derived by replay, like
+// pending declarations — there is no repair-state file and no repair
+// lifecycle. A rejection closes structurally: a verified receipt for the same
+// capability postdates it (the work got done), or a capability.retired
+// tombstone does (the work was dismissed).
+
+// rejectionExcerptCap bounds the rejected bytes carried in the log. Rejected
+// scripts never install, so replay never needs them whole — the excerpt is
+// for diagnosis, and the log is already unbounded enough.
+const rejectionExcerptCap = 1024
+
+// rejectionRecord is the payload of a script.rejected event — the kernel's
+// own testimony (via "kernel", never accepted from the pipe) about a
+// script.authored it refused to install.
+type rejectionRecord struct {
+	Type    string `json:"type,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Reason  string `json:"reason"`
+	Excerpt string `json:"excerpt,omitempty"`
+}
+
+// recordRejection appends the kernel's testimony that an authored script was
+// refused. Type/name may be empty when the wire line could not be resolved to
+// a capability; the reason always survives.
+func recordRejection(home, typ, name, reason, script string) (Event, error) {
+	excerpt := script
+	if len(excerpt) > rejectionExcerptCap {
+		excerpt = excerpt[:rejectionExcerptCap] + "…"
+	}
+	payload, _ := json.Marshal(rejectionRecord{Type: typ, Name: name, Reason: reason, Excerpt: excerpt})
+	e := newEvent("script.rejected", payload)
+	e.Via = "kernel" // the refusal is the kernel's own act, like a receipt
+	err := appendEvent(home, &e)
+	return e, err
+}
+
+// openRejection is a recorded refusal nothing has resolved yet — derived
+// state, never stored.
+type openRejection struct {
+	Seq    int
+	Type   string
+	Name   string
+	Reason string
+}
+
+// keyedRejection reports whether a rejection names a real capability — one a
+// declaration, receipt, or retirement could ever match.
+func keyedRejection(r openRejection) bool {
+	return (r.Type == "command" || r.Type == "projector") && validCapabilityName(r.Name)
+}
+
+// openRejections replays the log into the refusals still standing: the latest
+// kernel-stamped script.rejected per capability, open until a verified
+// receipt or a retirement for that capability postdates it. A rejection that
+// names no resolvable capability cannot be closed by either, so it closes on
+// any later successful install — it means "the last authoring pass failed",
+// and a later pass that installs anything supersedes it. Only via "kernel"
+// counts: doors are this log's facts, so a rejection arriving through the
+// pipe or a learned account is inert data here.
+func openRejections(home string) []openRejection {
+	events, err := readEvents(home)
+	if err != nil {
+		return nil
+	}
+	secret, err := loadSecret(home)
+	if err != nil {
+		return nil
+	}
+	open := map[string]openRejection{}
+	for _, e := range events {
+		switch e.Name {
+		case "script.rejected":
+			if e.Via != "kernel" {
+				continue
+			}
+			var r rejectionRecord
+			if json.Unmarshal(e.Payload, &r) != nil || r.Reason == "" {
+				continue
+			}
+			open[r.Type+"/"+r.Name] = openRejection{e.Seq, r.Type, r.Name, r.Reason}
+		case "script.compiled":
+			if rec, ok := verifiedReceipt(secret, e.Payload); ok {
+				delete(open, rec.Type+"/"+rec.Name)
+				for key, rej := range open {
+					if !keyedRejection(rej) {
+						delete(open, key)
+					}
+				}
+			}
+		case "capability.retired":
+			if d, ok := parseRetirement(e.Payload); ok {
+				delete(open, d.Type+"/"+d.Name)
+			}
+		}
+	}
+	out := make([]openRejection, 0, len(open))
+	for _, rej := range open {
+		out = append(out, rej)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out
+}
+
+// orphanRejections are the open rejections no pending declaration will carry:
+// the capability was never declared (or its declaration is gone), so the
+// pending section cannot surface the failure — the work face must.
+func orphanRejections(home string) []openRejection {
+	pendingKeys := map[string]bool{}
+	for _, p := range pendingDecls(home) {
+		pendingKeys[p.Type+"/"+p.Name] = true
+	}
+	var out []openRejection
+	for _, r := range openRejections(home) {
+		if keyedRejection(r) && !pendingKeys[r.Type+"/"+r.Name] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // ──────────────────────────────── ask ───────────────────────────────────────
@@ -318,6 +474,16 @@ func emitWork(home string, out io.Writer) error {
 	if len(pendingDecls(home)) > 0 {
 		_, err := io.WriteString(out, situatedPrompt(home,
 			"Author the pending scripts listed above. Emit one script.authored line per declaration; add nothing else unless something is plainly broken."))
+		return err
+	}
+	if orphans := orphanRejections(home); len(orphans) > 0 {
+		var ask strings.Builder
+		ask.WriteString("A previous pass authored script(s) the kernel rejected, and no matching declaration is pending:\n")
+		for _, r := range orphans {
+			fmt.Fprintf(&ask, "- %s/%s — rejected: %s\n", r.Type, r.Name, r.Reason)
+		}
+		ask.WriteString("For each one: if the capability is worth having, declare it (command.declared / projector.declared) and author its script (script.authored) in this answer; if it is not, dismiss the rejection by emitting {\"name\":\"capability.retired\",\"payload\":{\"type\":\"<type>\",\"name\":\"<name>\"}}. Resolve every line — an unresolved rejection is asked again on the next pass.")
+		_, err := io.WriteString(out, situatedPrompt(home, ask.String()))
 		return err
 	}
 	if seq, content, ok := unansweredChat(home); ok {
@@ -518,8 +684,15 @@ func pendingSection(home string) string {
 	b.WriteString("For each declaration below, author a complete executable script (any language with a shebang, standard libraries only) honoring this contract, test it by execution with your own tools, and emit one script.authored line (see HOW TO ANSWER). If a declaration carries an \"implementation\", it is a reference: verify and adapt it — never copy it blindly.\n\n")
 	b.WriteString(pipeContract)
 	b.WriteString("\n")
+	rejections := map[string]string{}
+	for _, r := range openRejections(home) {
+		rejections[r.Type+"/"+r.Name] = r.Reason
+	}
 	for _, p := range pending {
 		fmt.Fprintf(&b, "\nDECLARATION (%s %q):\n%s\n", p.Type, p.Name, compactJSON(p.Decl))
+		if reason, ok := rejections[p.Type+"/"+p.Name]; ok {
+			fmt.Fprintf(&b, "Your previous attempt was REJECTED: %s. Author it again without repeating that mistake.\n", reason)
+		}
 	}
 	skip := map[string]bool{}
 	for _, p := range pending {

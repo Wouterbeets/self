@@ -69,9 +69,11 @@ echo "<ask>" | self | <mind> | self
 - **event JSONL** → the *hear* face: event lines append to the log, each
   `script.authored` installs under a locally signed receipt, and the reply
   (prose plus the text of `self.replied`) passes through to stdout.
-- **nothing** → at a terminal, the orientation brief for you; in a pipe, the
-  *work* prompt — pending scripts if declarations await authoring, else one
-  self-improvement reflection. So the bare loop always means something:
+- **nothing** → at a terminal, the orientation brief plus a live margin —
+  pending scripts, unresolved script rejections, a chat message waiting for a
+  reply; in a pipe, the *work* prompt — pending scripts if declarations await
+  authoring, else unresolved rejections, else one self-improvement
+  reflection. So the bare loop always means something:
 
 ```sh
 self | claude -p | self        # author pending work, or reflect once
@@ -303,6 +305,17 @@ second `self`, it prints lines:
 | `{"name":"command.declared"/"projector.declared",…}` | appended; pending until authored |
 | `{"name":"script.authored","payload":{"type":…,"name":…,"script":…}}` | installed + signed receipt |
 | anything else                                     | passed through as prose           |
+
+A `script.authored` the kernel refuses — empty script, undeclared or unknown
+capability — is not lost to stderr: the kernel records a `script.rejected`
+event (via `kernel`, with the reason and a capped excerpt), so the failure is
+part of the log like everything else. Whether a rejection is still *open* is
+derived by replay, never stored: it closes when a verified receipt or a
+`capability.retired` for that capability postdates it. While open it rides
+the pending section of every prompt (when its declaration still stands),
+becomes the work prompt itself (when it does not), and shows under bare
+`self` at a terminal — so `self | mind | self` continues from a failure the
+same way it continues from anything else.
 
 The prompt is a wake-up card, not a context dump: a complete mind inspects
 `SELF_HOME` itself with its own tools — `site/*.html`, `events.jsonl`,
