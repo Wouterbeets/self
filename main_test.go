@@ -449,6 +449,126 @@ func TestHearRefusesUndeclaredScripts(t *testing.T) {
 	}
 }
 
+// TestRejectionBecomesStateAndResolves pins failure-as-state: a
+// script.authored the kernel refuses lands in the log as a kernel-stamped
+// script.rejected event (reason and all), surfaces as work — the work face
+// when no declaration matches, the naked-self status margin for a human —
+// and closes structurally, here by retirement. Errors are progressive state,
+// not terminal incidents.
+func TestRejectionBecomesStateAndResolves(t *testing.T) {
+	home := t.TempDir()
+	pipeIn(t, home, eventLine(t, "script.authored", map[string]any{
+		"type": "command", "name": "ghost", "script": "#!/bin/sh\necho '{\"name\":\"x\",\"payload\":{}}'\n"}))
+
+	events, _ := readEvents(home)
+	var rej *Event
+	for i := range events {
+		if events[i].Name == "script.rejected" {
+			rej = &events[i]
+		}
+	}
+	if rej == nil {
+		t.Fatal("the refused script left no script.rejected event")
+	}
+	if rej.Via != "kernel" {
+		t.Fatalf("rejection via = %q, want kernel", rej.Via)
+	}
+	var r rejectionRecord
+	if err := json.Unmarshal(rej.Payload, &r); err != nil || r.Type != "command" || r.Name != "ghost" || !strings.Contains(r.Reason, "undeclared") {
+		t.Fatalf("rejection payload = %s", rej.Payload)
+	}
+
+	open := openRejections(home)
+	if len(open) != 1 || open[0].Type != "command" || open[0].Name != "ghost" {
+		t.Fatalf("openRejections = %+v, want command/ghost", open)
+	}
+
+	// no declaration matches, so the work face makes the rejection the work
+	var work bytes.Buffer
+	if err := emitWork(home, &work); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(work.String(), "command/ghost") || !strings.Contains(work.String(), "rejected") {
+		t.Fatalf("work face did not surface the orphan rejection:\n%s", work.String())
+	}
+	if !strings.Contains(work.String(), "capability.retired") {
+		t.Fatalf("work face did not teach the dismissal path:\n%s", work.String())
+	}
+	if s := pipeStatus(home); !strings.Contains(s, "rejected script(s) unresolved") || !strings.Contains(s, "command/ghost") {
+		t.Fatalf("pipeStatus does not show the rejection:\n%s", s)
+	}
+
+	// dismissal: a retirement tombstone closes it, and the loop goes quiet
+	pipeIn(t, home, eventLine(t, "capability.retired", map[string]any{"type": "command", "name": "ghost"}))
+	if open := openRejections(home); len(open) != 0 {
+		t.Fatalf("retirement did not close the rejection: %+v", open)
+	}
+	var quiet bytes.Buffer
+	if err := emitWork(home, &quiet); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(quiet.String(), "self-improvement reflection") {
+		t.Fatalf("resolved rejection should return the work face to reflection:\n%s", quiet.String())
+	}
+}
+
+// TestRejectionReasonRidesPendingWork pins the targeted surfacing: while the
+// rejected capability's declaration is still pending, the reason rides beside
+// its DECLARATION block in every prompt — the error appears exactly where the
+// mind is asked to redo the work — and a good script closes it with no
+// dismissal ceremony.
+func TestRejectionReasonRidesPendingWork(t *testing.T) {
+	home := t.TempDir()
+	pipeIn(t, home, eventLine(t, "command.declared", map[string]any{
+		"name": "memo", "description": "record a memo",
+		"event": map[string]any{"name": "memo.added", "fields": map[string]string{"text": "string"}}}))
+	// the classic empty-script failure, resolved to the one pending declaration
+	pipeIn(t, home, eventLine(t, "script.authored", map[string]any{"script": ""}))
+
+	open := openRejections(home)
+	if len(open) != 1 || open[0].Type != "command" || open[0].Name != "memo" {
+		t.Fatalf("openRejections = %+v, want command/memo", open)
+	}
+	prompt := pipeIn(t, home, "how is it going?\n")
+	if !strings.Contains(prompt, "REJECTED") || !strings.Contains(prompt, "without a script") {
+		t.Fatalf("pending section does not carry the rejection reason:\n%s", prompt)
+	}
+	// authoring properly is the resolution
+	script := "#!/bin/sh\nprintf '{\"name\":\"memo.added\",\"payload\":{\"text\":\"%s\"}}\\n' \"$*\"\n"
+	pipeIn(t, home, eventLine(t, "script.authored", map[string]any{"type": "command", "name": "memo", "script": script}))
+	if open := openRejections(home); len(open) != 0 {
+		t.Fatalf("a verified receipt did not close the rejection: %+v", open)
+	}
+}
+
+// TestForgedRejectionIsInert pins the door: script.rejected is the kernel's
+// own testimony, so one arriving through the pipe appends like any event but
+// never counts as repair state — a mind (or a learned record, whose door is
+// learn:<account>) cannot manufacture failures for the loop to chase.
+func TestForgedRejectionIsInert(t *testing.T) {
+	home := t.TempDir()
+	pipeIn(t, home, eventLine(t, "script.rejected", map[string]any{
+		"type": "command", "name": "fake", "reason": "made up"}))
+	if open := openRejections(home); len(open) != 0 {
+		t.Fatalf("a pipe-door rejection counted as the kernel's testimony: %+v", open)
+	}
+}
+
+// TestPipeStatusShowsWaitingChat pins the terminal margin: naked self tells a
+// human about the same waiting chat message the work face would answer —
+// what is in flight is visible from the same surface that shows what broke.
+func TestPipeStatusShowsWaitingChat(t *testing.T) {
+	home := t.TempDir()
+	p, _ := json.Marshal(map[string]string{"role": "user", "content": "anyone home?"})
+	e := newEvent("chat.message", p)
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	if s := pipeStatus(home); !strings.Contains(s, "waiting for a reply") || !strings.Contains(s, "anyone home?") {
+		t.Fatalf("pipeStatus does not show the waiting chat:\n%s", s)
+	}
+}
+
 // TestPipeProvenance pins the new door: events heard from the pipe carry
 // via "pipe" and the caller's claim as by; receipts carry the author claim.
 func TestPipeProvenance(t *testing.T) {
@@ -1554,7 +1674,7 @@ func TestLearnRefusesKernelVocabulary(t *testing.T) {
 
 	// the pipe's own vocabulary is kernel vocabulary too: a record cannot
 	// deposit raw conversation turns or authored scripts
-	for _, name := range []string{"self.replied", "script.authored"} {
+	for _, name := range []string{"self.replied", "script.authored", "script.rejected"} {
 		if err := os.WriteFile(filepath.Join(dir, "record.jsonl"),
 			[]byte(`{"name":"`+name+`","payload":{}}`+"\n"), 0644); err != nil {
 			t.Fatal(err)
