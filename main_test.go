@@ -409,6 +409,48 @@ func TestWorkFaceReflectsOnceChatAnswered(t *testing.T) {
 	}
 }
 
+// TestWorkFaceHonorsWorkHint pins the metronome charter: SELF_WORK_HINT rides
+// on the idle reflection so a cron beat can name a focus and a scoreboard
+// without displacing the kernel's compile/chat priorities.
+func TestWorkFaceHonorsWorkHint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SELF_WORK_HINT", "Focus this beat: memory")
+	var out bytes.Buffer
+	if err := emitWork(home, &out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "self-improvement reflection") {
+		t.Fatalf("hint must not replace the reflection:\n%s", s)
+	}
+	if !strings.Contains(s, "Focus this beat: memory") {
+		t.Fatalf("work face dropped SELF_WORK_HINT:\n%s", s)
+	}
+}
+
+// TestWorkFaceHintDoesNotDisplaceChat pins that a waiting user message still
+// outranks the metronome charter — the hint is idle-only.
+func TestWorkFaceHintDoesNotDisplaceChat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SELF_WORK_HINT", "Focus this beat: memory")
+	p, _ := json.Marshal(map[string]string{"role": "user", "content": "are you there?"})
+	e := newEvent("chat.message", p)
+	if err := appendEvent(home, &e); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := emitWork(home, &out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "waiting for a reply") || !strings.Contains(s, "are you there?") {
+		t.Fatalf("hint displaced unanswered chat:\n%s", s)
+	}
+	if strings.Contains(s, "Focus this beat: memory") {
+		t.Fatalf("hint leaked onto a chat-priority pass:\n%s", s)
+	}
+}
+
 // TestConversationTailIncludesChat pins that chat turns surface in the prompt's
 // conversation tail regardless of the CLI door they came through — the tail is
 // how the mind sees the conversation.

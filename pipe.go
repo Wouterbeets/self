@@ -335,8 +335,14 @@ func emitWork(home string, out io.Writer) error {
 	if err := appendEvent(home, &e); err != nil {
 		return err
 	}
-	_, err := io.WriteString(out, situatedPrompt(home,
-		"This is a self-improvement reflection. Explore this instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (command.declared / projector.declared) and author its script (script.authored); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal."))
+	ask := "This is a self-improvement reflection. Explore this instance — capabilities, recent events, projections, /pulse when it exists — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix, or the oldest open aim. If warranted, declare it (command.declared / projector.declared) and author its script (script.authored); if nothing is worth changing, say so plainly in self.replied and declare nothing. Verify any ship against events.jsonl and site/*.html, never the beat log. Keep it minimal."
+	// SELF_WORK_HINT is the metronome's charter — a rotating focus and the
+	// latest scoreboard — appended only on the idle reflection, never over
+	// pending compiles or unanswered chat.
+	if hint := strings.TrimSpace(os.Getenv("SELF_WORK_HINT")); hint != "" {
+		ask = ask + "\n\n" + hint
+	}
+	_, err := io.WriteString(out, situatedPrompt(home, ask))
 	return err
 }
 

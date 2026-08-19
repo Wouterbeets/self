@@ -377,6 +377,9 @@ SELF_MIND_ID      author string signed into script.compiled receipts when the
   external tick (cron, a session, a human) fires due timers as events, so
   replay sees history and never a trigger. What the kernel's ticker used to do,
   relearned as a lesson.
+- `lessons/pulse` — the metronome's scoreboard: aims to chase, `beat.closed`
+  receipts, and `/pulse` metrics so a cron loop can tell whether it is
+  improving the instance.
 
 ## Limits and threat model
 
