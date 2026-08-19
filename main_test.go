@@ -198,30 +198,47 @@ func TestStrangeLoop(t *testing.T) {
 	}
 }
 
-// TestPipeReplyPassesThrough pins the hear face's stdout: prose lines and the
-// text of self.replied reach the caller, so the answer surfaces at the end of
-// the pipeline.
-func TestPipeReplyPassesThrough(t *testing.T) {
+// TestReplyIsRecordedWhole pins the final face: a mind speaks ordinary prose;
+// the final self records one reply and echoes the same bytes.
+func TestReplyIsRecordedWhole(t *testing.T) {
 	home := t.TempDir()
-	out := pipeIn(t, home, strings.Join([]string{
-		"some prose the mind narrated",
-		eventLine(t, "note.taken", map[string]any{"title": "hello"}),
-		eventLine(t, "self.replied", map[string]any{"text": "noted: hello"}),
-	}, "\n"))
-	if !strings.Contains(out, "some prose the mind narrated") {
-		t.Fatalf("prose did not pass through: %q", out)
+	input := "Changed the thing.\n\nEvidence: tests pass.\n"
+	var out bytes.Buffer
+	if err := recordReply(home, input, &out); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(out, "noted: hello") {
-		t.Fatalf("the reply text did not pass through: %q", out)
+	if out.String() != input {
+		t.Fatalf("reply changed in transit: got %q want %q", out.String(), input)
 	}
 	events, _ := readEvents(home)
-	var names []string
+	var replies []Event
 	for _, e := range events {
-		names = append(names, e.Name)
+		if e.Name == "self.replied" {
+			replies = append(replies, e)
+		}
 	}
-	joined := strings.Join(names, " ")
-	if !strings.Contains(joined, "note.taken") || !strings.Contains(joined, "self.replied") {
-		t.Fatalf("heard events did not land: %v", names)
+	if len(replies) != 1 {
+		t.Fatalf("got %d replies, want one", len(replies))
+	}
+	var payload struct{ Text string }
+	json.Unmarshal(replies[0].Payload, &payload)
+	if payload.Text != strings.TrimSpace(input) {
+		t.Fatalf("recorded reply = %q", payload.Text)
+	}
+}
+
+func TestMixedProseAndEventsAreNeverPartiallyIngested(t *testing.T) {
+	home := t.TempDir()
+	input := "narration\n" + eventLine(t, "note.taken", map[string]any{"title": "must stay prose"})
+	if _, _, _, ok := parseMachineWire(input); ok {
+		t.Fatal("mixed stream classified as machine wire")
+	}
+	pipeIn(t, home, input)
+	events, _ := readEvents(home)
+	for _, e := range events {
+		if e.Name == "note.taken" {
+			t.Fatal("JSON-looking prose was partially ingested")
+		}
 	}
 }
 
@@ -657,9 +674,9 @@ func TestConversationTailTrustsDoors(t *testing.T) {
 }
 
 // TestMarkdownFencedWireStillHeard pins the tolerance for chat-shaped minds:
-// claude -p and its kin wrap JSON in fences and backticks; the wire parse
-// still finds the events and the fences never leak into the reply.
-func TestMarkdownFencedWireStillHeard(t *testing.T) {
+// Fenced or narrated JSON is prose, never a machine wire. Capability authoring
+// must be pure JSONL so ingestion cannot guess across mixed output.
+func TestMarkdownFencedWireIsNotHeard(t *testing.T) {
 	if _, fence := unfence("```json"); !fence {
 		t.Fatal("```json should be a fence marker")
 	}
@@ -689,15 +706,11 @@ func TestMarkdownFencedWireStillHeard(t *testing.T) {
 		"```",
 		"Declared and authored the `note` command.",
 	}, "\n")
-	out := pipeIn(t, home, input)
-	if !strings.Contains(out, "declare the note command") {
-		t.Fatalf("prose lost: %q", out)
-	}
-	if strings.Contains(out, "```") {
-		t.Fatalf("fence markers leaked into the reply: %q", out)
-	}
+	pipeIn(t, home, input)
 	if p := filepath.Join(home, "capabilities", "commands", "note", "run"); !fileExists(p) {
-		t.Fatal("the fenced mind's capability did not install")
+		// expected
+	} else {
+		t.Fatal("fenced mixed output installed a capability")
 	}
 }
 
@@ -709,8 +722,8 @@ func TestPromptsCarryTheContract(t *testing.T) {
 	home := t.TempDir()
 	prompt := strings.ToLower(situatedPrompt(home, "an ask"))
 	for _, n := range []string{
-		"stdout", "no markdown", "no code fences",
-		"self.replied", "script.authored", "command.declared",
+		"stdout is communication only", "plain-text final summary",
+		"final `self` records", "script.authored", "pure event jsonl",
 		"do not edit events.jsonl", "reply is final", "not re-invoked",
 	} {
 		if !strings.Contains(prompt, n) {

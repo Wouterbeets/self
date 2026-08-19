@@ -130,9 +130,9 @@ func stateBrief(home string) string {
 	b.WriteString("State that survives is only what lands in `events.jsonl`. The log is append-only.\n\n")
 	b.WriteString("- **Read** — open files under this instance: `site/*.html` (rendered state a human sees), `events.jsonl` (authoritative log), `capabilities/` (installed scripts).\n")
 	b.WriteString("- **Write (commands)** — prefer installed verbs: `self run <command> …` (or HTTP `POST /run/<command>` when serving). Args follow each command below.\n")
-	b.WriteString("- **Write (events)** — pipe event JSONL into `self` (one compact JSON object per line: `{\"name\":\"…\",\"payload\":{…}}`); when your stdout is already piped into `self`, printing the line is the write. Do not edit `events.jsonl` yourself; do not install scripts yourself.\n")
+	b.WriteString("- **Write** — use installed verbs: `self run <command> …`. A mind's stdout is prose only; the final `self` records it as one `self.replied`. Pure event JSONL is reserved for explicit low-level capability authoring. Do not edit `events.jsonl` yourself.\n")
 	b.WriteString("- **Extend** — emit `command.declared` / `projector.declared` the same way, and each script as `script.authored`. Only the kernel installs, under a receipt it signs.\n")
-	b.WriteString("- **The loop** — `echo \"<ask>\" | self | <mind> | self`: prose becomes a situated prompt, a mind's event lines become appended state. `self protocol` prints the wire contracts.\n\n")
+	b.WriteString("- **The loop** — `echo \"<ask>\" | self | <mind> | self`: prose becomes a situated prompt; the mind uses commands for durable work; the final self records its prose summary. `self protocol` prints the contracts.\n\n")
 
 	if len(events) == 0 {
 		b.WriteString("## Empty log\n\n")

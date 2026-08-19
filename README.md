@@ -12,11 +12,11 @@ echo "whats going on today?" | self | claude -p | self
 
 The first `self` turns your prose into a situated prompt — where the instance
 is, what it can do, what work is pending, and how to answer. The mind (any
-agent CLI, any model wrapper, any script) answers in event JSONL. The second
-`self` hears it: events append to the log, authored scripts install under a
-signature made with a key that never leaves the instance, and the reply
-passes through to you. The whole system can be rebuilt from the log alone,
-with no model and no network.
+agent CLI, model wrapper, or script) performs durable work through installed
+commands and prints ordinary prose. The second `self` records that complete
+summary as one `self.replied` event and echoes it to you. Pure event JSONL is
+reserved for explicit low-level capability authoring. The whole system can be
+rebuilt from the log alone, with no model and no network.
 
 The point is durable, inspectable state for an LLM agent: one log, replayed
 into every view, with a record of who generated each script and the ability
@@ -61,14 +61,16 @@ Everything intelligent this system does is one shell idiom:
 echo "<ask>" | self | <mind> | self
 ```
 
-`self` has three faces, chosen by what arrives on stdin:
+`self` infers its faces from stdin and pipe direction:
 
 - **prose** → the *ask* face: the question is recorded (`self.asked`) and a
   situated prompt goes to stdout — orientation brief, recent conversation,
   pending work, the ask, the answer contract.
-- **event JSONL** → the *hear* face: event lines append to the log, each
-  `script.authored` installs under a locally signed receipt, and the reply
-  (prose plus the text of `self.replied`) passes through to stdout.
+- **prose returning to a terminal** → the *reply* face: the complete body is
+  recorded as one `self.replied` event and echoed unchanged.
+- **pure event JSONL** → the low-level *hear* face: every nonblank line must be
+  an event; declarations append and `script.authored` installs under a locally
+  signed receipt. Mixed prose/event streams are never partially ingested.
 - **nothing** → at a terminal, the orientation brief plus a live margin —
   pending scripts, unresolved script rejections, a chat message waiting for a
   reply; in a pipe, the *work* prompt — pending scripts if declarations await
@@ -79,10 +81,10 @@ echo "<ask>" | self | <mind> | self
 self | claude -p | self        # author pending work, or reflect once
 ```
 
-The composability is the point. Stop before the second `self` and nothing is
-ingested — `echo "…" | self | claude -p` is a pure query. Skip the mind and
-`self` is `tee` into the log — `echo '{"name":"note.taken","payload":{…}}' | self`
-appends an event raw. Loop it and capabilities grow until the mind has
+The composability is the point. Stop before the second `self` and the final
+summary is not recorded — `echo "…" | self | claude -p` is a pure query. The
+mind may still perform durable work through `self run` commands. Skip the mind
+and pure JSONL remains the explicit machine wire. Loop it and capabilities grow until the mind has
 nothing left to author.
 
 ## Quick start
@@ -292,19 +294,17 @@ echo "…" | self | claude -p | self          # an agent CLI, no adapter
 echo "…" | self | examples/mind-stub | self # the offline stub (tests, demos)
 ```
 
-The wire contract is symmetrical and tiny. Downstream of the first `self`, a
+The pipe contract is symmetrical and tiny. Downstream of the first `self`, a
 mind receives one plain-text prompt on stdin: the orientation brief (also at
 `site/brief.md`), the recent conversation, any pending declarations with the
-script contract, the ask, and instructions for answering. Upstream of the
-second `self`, it prints lines:
+script contract, the ask, and instructions for answering. It writes durable
+state through installed commands (`self run …`) and prints one prose summary.
+The final `self` records that whole summary as `self.replied`.
 
-| line                                              | what the hear face does           |
-|---------------------------------------------------|-----------------------------------|
-| `{"name":"self.replied","payload":{"text":…}}`    | appended; text printed as the reply |
-| `{"name":"<domain.event>","payload":{…}}`         | appended verbatim                 |
-| `{"name":"command.declared"/"projector.declared",…}` | appended; pending until authored |
-| `{"name":"script.authored","payload":{"type":…,"name":…,"script":…}}` | installed + signed receipt |
-| anything else                                     | passed through as prose           |
+Capability authoring is the low-level exception: when explicitly asked to
+author pending work, the mind prints pure event JSONL only. Any prose line
+makes the entire body prose, so JSON-looking text cannot accidentally mutate
+state.
 
 A `script.authored` the kernel refuses — empty script, undeclared or unknown
 capability — is not lost to stderr: the kernel records a `script.rejected`
@@ -326,7 +326,7 @@ events, but cannot explore or test what it authors).
 Minds are stateless on purpose. Each pass starts cold and orients from the
 prompt and the rendered state; the instance's memory is the log, its
 projections, and nothing else — including the conversation itself, which the
-ask and hear faces record as `self.asked` / `self.replied` events. Do not
+ask and reply faces record as `self.asked` / `self.replied` events. Do not
 reach for a harness session store (`claude -p --continue` and its kin) as the
 mind's memory: it chains state outside the log — not replayed by `rehydrate`,
 invisible to audit. If a cold mind orients slowly, that is design pressure

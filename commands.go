@@ -107,7 +107,7 @@ func cmdLearn(home, ref string) error {
 // record, the mind is pointed at the deposited events — evidence is for
 // reading, and the log is right there for its tools.
 func learnAsk(ref, intent string, deposited int) string {
-	ask := "Learn this account: declare the capabilities that realize its intent on this instance (command.declared / projector.declared), author each script (script.authored), then reply in one line (self.replied)."
+	ask := "Learn this account: declare the capabilities that realize its intent on this instance (command.declared / projector.declared) and author each script (script.authored). This is explicit capability authoring: emit pure event JSONL with no prose."
 	if deposited > 0 {
 		if abs, err := filepath.Abs(ref); err == nil {
 			ref = abs
@@ -127,6 +127,14 @@ func cmdRun(home, command string, args []string) error {
 	}
 	for _, e := range evs {
 		fmt.Printf("appended seq %d %s\n", e.Seq, e.Name)
+		if e.Name == "goal.context" {
+			var context struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(e.Payload, &context) == nil && context.Text != "" {
+				fmt.Println(context.Text)
+			}
+		}
 	}
 	return nil
 }

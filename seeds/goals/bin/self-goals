@@ -1,0 +1,20 @@
+#!/bin/sh
+# Goal-oriented work instance. The former ~/.self-work remains an archive.
+export SELF_HOME="${SELF_GOALS_HOME:-$HOME/.self-goals}"
+export SELF_WORK_PROMPT="${SELF_WORK_PROMPT:-This is the self-goal work loop. Explore current goals, progress, agents, projects, and events. Do useful available work through self-goals commands, dispatch scoped agents when possible, create subgoals when needed, and record progress evidence. Print a concise final handoff with changes, evidence, blockers, and next action.}"
+case "${1:-}" in
+  "")
+    export SELF_CALLER="${SELF_CALLER:-self-goals mind}"
+    exec self
+    ;;
+  live)
+    export SELF_MIND_ID="${SELF_MIND_ID:-self-goals}"
+    export SELF_CALLER="${SELF_CALLER:-$SELF_MIND_ID}"
+    exec self serve
+    ;;
+  *)
+    export SELF_MIND_ID="${SELF_MIND_ID:-self-goals}"
+    export SELF_CALLER="${SELF_CALLER:-$SELF_MIND_ID}"
+    exec self "$@"
+    ;;
+esac

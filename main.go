@@ -7,9 +7,10 @@
 //	echo "whats going on today?" | self | claude -p | self
 //
 // The first `self` situates the ask (orientation, conversation, pending work,
-// the answer contract); the mind answers in event JSONL; the second `self`
-// hears it — events append, authored scripts install under receipts signed
-// with a per-home secret. Only kernel-signed receipts ever install, so
+// the answer contract); the mind writes durable state through commands and
+// prints prose; the second `self` records that whole reply. Pure event JSONL
+// remains the low-level capability-authoring wire. Only kernel-signed receipts
+// install, so
 // `self rehydrate` rebuilds the derived instance from events.jsonl + .secret
 // alone. A capability that declares new capabilities feeds the same loop —
 // one shell pass at a time, until quiet (the strange loop).

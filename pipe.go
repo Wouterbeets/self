@@ -8,13 +8,15 @@ package main
 // The kernel holds no model and spawns no mind — ever. The first `self` turns
 // prose into a situated prompt: the question wrapped with the orientation
 // brief, the recent conversation, any pending work, and the answer contract.
-// The mind is any process that reads that prompt and prints event JSONL. The
-// second `self` hears the mind: event lines are appended to the log, authored
-// scripts are installed under locally signed receipts, and the reply passes
-// through to the caller. Which face runs is decided by what arrives on stdin:
+// The mind is any process that reads that prompt, performs durable writes via
+// installed commands, and prints an ordinary prose summary. The second `self`
+// records that whole summary as one self.replied event and passes it through.
+// Pure event JSONL remains a low-level machine wire; mixed prose/event streams
+// are never guessed apart. Which face runs is decided by stdin and pipe direction:
 //
-//	prose            → ask   (record self.asked, emit the situated prompt)
-//	event lines      → hear  (append, install, reply)
+//	prose → pipe     → ask   (record self.asked, emit the situated prompt)
+//	prose → terminal → reply (record one self.replied, echo unchanged)
+//	event JSONL      → hear  (append/install; every nonblank line must be an event)
 //	nothing (a tty)  → the work prompt: pending compiles, else one reflection
 //
 // So the strange loop is one shell idiom, applied until quiet:
@@ -46,17 +48,15 @@ The kernel sets SELF_HOME on every script. Any language with a shebang works; us
 // answerContract closes every prompt the ask face emits. It teaches any mind —
 // claude -p, a local model, a shell script — how to speak back through the
 // pipe so the second `self` can hear it.
-const answerContract = `HOW TO ANSWER — your stdout is piped back into ` + "`self`" + `, which reads it line by line. A line that parses as {"name":"…","payload":{…}} is an event: self appends it to the log verbatim (the kernel stamps id, seq, time, and provenance — never you). Every other line passes through to the caller as prose. One compact JSON object per line; no Markdown, no code fences, no backticks around JSON.
+const answerContract = `HOW TO ANSWER — use your tools to perform durable work through installed commands: self run <command> …. Your stdout is communication only: print one plain-text final summary describing what changed, evidence, blockers, and next action. The final self in the pipeline records the complete summary as one self.replied event and echoes it to the terminal. Do not print event JSON or mix machine records into prose.
 
-ALWAYS end with your reply as one event line:
-{"name":"self.replied","payload":{"text":"<your reply>"}}
-The log is the only memory: a reply that is not an event was never said.
+The log is the only memory: state not written through a command, and a summary not returned through the final self, did not persist.
 
-To persist ordinary state, prefer installed commands (self run <command> …) or emit the domain event directly. To grow a capability, emit command.declared / projector.declared — and its script, in the same answer or a later pass, as:
+Capability authoring is the one low-level exception. When explicitly asked to author pending capabilities, stdout must be pure event JSONL with no prose. Emit declarations and scripts as:
 {"name":"script.authored","payload":{"type":"command|projector","name":"<capability>","script":"<the full script>"}}
-Only the kernel installs and signs; a declaration without a script stays pending, and self will ask again on the next pass. Declaring nothing is a valid outcome.
+Only the kernel installs and signs; a declaration without a script stays pending and is asked again.
 
-You are expected to have tools: explore SELF_HOME yourself — site/*.html (rendered state), events.jsonl (the authoritative log), capabilities/ (installed scripts) — before answering. Do not edit events.jsonl and do not install scripts yourself: print events; self does the rest. THIS REPLY IS FINAL — you are not re-invoked, and whatever you have not printed when you exit was never said.`
+You are expected to have tools: explore SELF_HOME yourself — site/*.html, events.jsonl, capabilities/ — before answering. Do not edit events.jsonl or install scripts yourself. THIS REPLY IS FINAL — you are not re-invoked.`
 
 // ─────────────────────────────── the dispatcher ─────────────────────────────
 
@@ -80,21 +80,27 @@ func cmdPipe(home string) error {
 	if err != nil {
 		return err
 	}
-	return pipeFilter(home, string(input), os.Stdout)
+	body := string(input)
+	if stdoutIsTTY() && strings.TrimSpace(body) != "" {
+		if evs, scripts, reply, ok := parseMachineWire(body); ok {
+			return hear(home, evs, scripts, reply, os.Stdout)
+		}
+		return recordReply(home, body, os.Stdout)
+	}
+	return pipeFilter(home, body, os.Stdout)
 }
 
 // pipeFilter routes one stdin body to a face. Split from cmdPipe so tests
 // drive the seam without a terminal.
 func pipeFilter(home, input string, out io.Writer) error {
-	evs, scripts, reply := parseWire(input)
-	if len(evs) == 0 && len(scripts) == 0 {
-		question := strings.TrimSpace(input)
-		if question == "" {
-			return emitWork(home, out)
-		}
-		return emitAsk(home, question, out)
+	if evs, scripts, reply, ok := parseMachineWire(input); ok {
+		return hear(home, evs, scripts, reply, out)
 	}
-	return hear(home, evs, scripts, reply, out)
+	question := strings.TrimSpace(input)
+	if question == "" {
+		return emitWork(home, out)
+	}
+	return emitAsk(home, question, out)
 }
 
 func stdinIsTTY() bool  { return isTTY(os.Stdin) }
@@ -190,6 +196,54 @@ func parseWire(input string) (evs []Event, scripts []authored, reply []string) {
 		evs = append(evs, newEvent(e.Name, e.Payload))
 	}
 	return evs, scripts, reply
+}
+
+// parseMachineWire accepts only an entirely machine-shaped stream. One prose
+// line makes the whole body prose; this prevents accidental partial ingestion
+// when a mind narrates around JSON-looking text.
+func parseMachineWire(input string) (evs []Event, scripts []authored, reply []string, ok bool) {
+	seen := false
+	sc := bufio.NewScanner(strings.NewReader(input))
+	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		seen = true
+		var envelope struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal([]byte(line), &envelope) != nil || envelope.Name == "" {
+			return nil, nil, nil, false
+		}
+	}
+	if !seen || sc.Err() != nil {
+		return nil, nil, nil, false
+	}
+	evs, scripts, reply = parseWire(input)
+	return evs, scripts, reply, true
+}
+
+// recordReply is the final face of `self | mind | self`: stdout from the mind
+// is ordinary text, recorded whole as one reply and echoed byte-for-byte.
+func recordReply(home, input string, out io.Writer) error {
+	if err := ensureHome(home); err != nil {
+		return err
+	}
+	text := strings.TrimSpace(input)
+	if text == "" {
+		return nil
+	}
+	payload, _ := json.Marshal(map[string]string{"text": text})
+	e := newEvent("self.replied", payload)
+	e.Via, e.By = "pipe", callerClaim()
+	if err := appendEvent(home, &e); err != nil {
+		return err
+	}
+	refreshSiteAfter(home, []Event{e})
+	_, err := io.WriteString(out, input)
+	return err
 }
 
 // unfence strips the Markdown a chat-shaped mind (claude -p and its kin) wraps
@@ -501,8 +555,11 @@ func emitWork(home string, out io.Writer) error {
 	if err := appendEvent(home, &e); err != nil {
 		return err
 	}
-	_, err := io.WriteString(out, situatedPrompt(home,
-		"This is a self-improvement reflection. Explore this instance — capabilities, recent events, projections — and choose ONE small, high-value improvement: a missing capability, a clearer projection, a drift to fix. If warranted, declare it (command.declared / projector.declared) and author its script (script.authored); if nothing is worth changing, say so plainly and declare nothing. Keep it minimal."))
+	ask := strings.TrimSpace(os.Getenv("SELF_WORK_PROMPT"))
+	if ask == "" {
+		ask = "This is a self-improvement reflection. Explore this instance — capabilities, recent events, projections — and choose ONE small, high-value improvement. Use installed commands for durable work; if explicit capability authoring is required, emit pure event JSONL with no prose. If nothing is worth changing, say so plainly. Keep it minimal."
+	}
+	_, err := io.WriteString(out, situatedPrompt(home, ask))
 	return err
 }
 

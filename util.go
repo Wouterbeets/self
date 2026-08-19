@@ -74,8 +74,8 @@ the loop:
 
   prose in       → the situated prompt out (brief, conversation, pending
                    work, answer contract); the ask is recorded (self.asked)
-  event JSONL in → heard: events append to the log, script.authored installs
-                   under a signed receipt, the reply passes through
+  prose returned → recorded whole as one self.replied event and echoed
+  pure JSONL in  → low-level capability wire: append/install, no mixed prose
   nothing in     → at a terminal, the orientation brief plus what is in
                    flight (pending scripts, unresolved rejections, waiting
                    chat); in a pipe, the work prompt (pending scripts, else
@@ -133,11 +133,15 @@ The pipe (the one seam)
                (site/*.html, events.jsonl, capabilities/) with its own tools —
                the prompt is a wake-up card, not a context dump. Coding-agent
                minds (claude -p, opencode run) plug in with no adapter.
-  hear face    stdin carries event JSONL. Event lines append to the log (the
+  reply face   stdin is prose returning from a mind to a terminal. self records
+               the complete body as one self.replied event and echoes it
+               unchanged. Minds perform durable work with self run commands;
+               their stdout is communication, not a multiplexed event stream.
+  hear face    stdin is entirely event JSONL. Event lines append to the log (the
                kernel stamps id, seq, occurred_at, via "pipe", and by from
                SELF_CALLER); script.authored lines install under a locally
-               signed receipt; every other line — and the text of
-               self.replied — passes through to stdout as the reply. A
+               signed receipt. Any prose line makes the whole body prose; mixed
+               streams are never partially ingested. A
                script.authored the kernel refuses (empty script, undeclared or
                unknown capability) is recorded as a kernel-stamped
                script.rejected event — the failure is memory, not a terminal
@@ -152,10 +156,7 @@ The pipe (the one seam)
                the unresolved-rejection prompt, else the waiting-chat ask,
                else one reflection — bare 'self | <mind> | self' converges.
 
-Wire events (what a mind prints)
-
-  self.replied        the reply, as memory and message — always end with one:
-                      {"name":"self.replied","payload":{"text":"..."}}
+Low-level wire events (pure JSONL only; ordinary minds use self run commands)
 
   command.declared    declare a command capability (pending until authored):
                       {"name":"command.declared","payload":{"name":"note","description":"...","params":{"text":"string"},"event":{"name":"note.added","fields":{"text":"string"}}}}
