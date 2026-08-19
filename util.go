@@ -112,6 +112,9 @@ environment:
   SELF_MIND_ID      author by-line signed into script.compiled receipts when
                     the pipe installs an authored script (default: SELF_CALLER,
                     else "pipe")
+  SELF_WORK_HINT    optional charter appended to the idle reflection only
+                    (never to pending compiles or unanswered chat). The
+                    metronome uses this to pin a focus and a scoreboard.
 `
 }
 
@@ -151,10 +154,12 @@ The pipe (the one seam)
                stands), become the work prompt (when it does not), and show
                under bare 'self' at a terminal.
   work face    stdin is empty (or a terminal with stdout piped). self emits
-               the pending-compile prompt if declarations await scripts (each
-               carrying the reason for any rejected previous attempt), else
-               the unresolved-rejection prompt, else the waiting-chat ask,
-               else one reflection — bare 'self | <mind> | self' converges.
+		       the pending-compile prompt if declarations await scripts (each
+		       carrying the reason for any rejected previous attempt), else
+		       the unresolved-rejection prompt, else the waiting-chat ask,
+		       else one reflection — bare 'self | <mind> | self' converges.
+		       SELF_WORK_HINT, when set, augments only that idle reflection
+		       with an external metronome's focus and scoreboard.
 
 Low-level wire events (pure JSONL only; ordinary minds use self run commands)
 

@@ -559,6 +559,11 @@ func emitWork(home string, out io.Writer) error {
 	if ask == "" {
 		ask = "This is a self-improvement reflection. Explore this instance — capabilities, recent events, projections — and choose ONE small, high-value improvement. Use installed commands for durable work; if explicit capability authoring is required, emit pure event JSONL with no prose. If nothing is worth changing, say so plainly. Keep it minimal."
 	}
+	// SELF_WORK_HINT is the metronome's dynamic focus and scoreboard. It
+	// augments the instance charter only on an otherwise idle work pass.
+	if hint := strings.TrimSpace(os.Getenv("SELF_WORK_HINT")); hint != "" {
+		ask += "\n\n" + hint
+	}
 	_, err := io.WriteString(out, situatedPrompt(home, ask))
 	return err
 }
