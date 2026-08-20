@@ -128,10 +128,11 @@ func stateBrief(home string) string {
 
 	b.WriteString("## How you act\n\n")
 	b.WriteString("State that survives is only what lands in `events.jsonl`. The log is append-only.\n\n")
-	b.WriteString("- **Read** — open files under this instance: `site/*.html` (rendered state a human sees), `events.jsonl` (authoritative log), `capabilities/` (installed scripts).\n")
+	b.WriteString("- **Read** — `self show <projection>` renders any projection to stdout from the current log; the same pages live at `site/*.html` and over HTTP when serving, so a mind and a human always read the identical surface. `events.jsonl` is the authoritative log; `capabilities/` holds the installed scripts. Reads go through projections. Do not implement a query as a command: a command's output is appended to the log, so routing reads through commands fills the log with render artifacts. If the view you need is missing, author a projector — it is a short script that receives events as JSONL on stdin and prints near-plain HTML.\n")
 	b.WriteString("- **Write (commands)** — prefer installed verbs: `self run <command> …` (or HTTP `POST /run/<command>` when serving). Args follow each command below.\n")
 	b.WriteString("- **Write** — use installed verbs: `self run <command> …`. A mind's stdout is prose only; the final `self` records it as one `self.replied`. Pure event JSONL is reserved for explicit low-level capability authoring. Do not edit `events.jsonl` yourself.\n")
 	b.WriteString("- **Extend** — emit `command.declared` / `projector.declared` the same way, and each script as `script.authored`. Only the kernel installs, under a receipt it signs.\n")
+	b.WriteString("- **Summarize** — when a thread's event history stops informing decisions, record an authored summary of the current state through an installed command, so projections can lead with it and readers stop paying for superseded detail. The log keeps everything; summaries are for the readers, not the record.\n")
 	b.WriteString("- **The loop** — `echo \"<ask>\" | self | <mind> | self`: prose becomes a situated prompt; the mind uses commands for durable work; the final self records its prose summary. `self protocol` prints the contracts.\n\n")
 
 	if len(events) == 0 {
@@ -300,7 +301,7 @@ func verifyInstalledScript(home, typ, name string) (string, error) {
 		return "", fmt.Errorf("%s %q not found: %w", typ, name, err)
 	}
 	if string(installed) != trusted {
-		return "", fmt.Errorf("%s %q does not match its latest verified receipt; run self rehydrate", typ, name)
+		return "", fmt.Errorf("%s %q does not match its latest verified receipt. To restore the verified script, run self rehydrate. To change the script intentionally, pipe a script.authored event into self: {\"name\":\"script.authored\",\"payload\":{\"type\":\"%s\",\"name\":\"%s\",\"script\":\"<full script>\"}} — direct file edits are never trusted", typ, name, typ, name)
 	}
 	return bin, nil
 }

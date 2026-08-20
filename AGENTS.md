@@ -32,7 +32,12 @@ installed scripts, one directory per capability with the script at
 - **Read.** `self show <projection>` (or `$SELF_HOME/site/*.html`, or the
   HTTP routes when serving). Projections are deterministic replays of the
   log — they are the current state. The index page (`/`) lists every
-  command and projection this instance has.
+  command and projection this instance has. Reads go through projections,
+  never through commands: a command's output is appended to the log, so a
+  query implemented as a command leaves a render artifact on every read.
+  If the view you need is missing, author a projector (a short script:
+  events as JSONL on stdin, near-plain HTML on stdout) rather than adding
+  a read subcommand.
 - **Write.** `self run <command> [args…]` appends events and re-renders all
   projections. Or pipe event JSONL straight in: `echo '{"name":"…","payload":{…}}' | self`.
   The log is append-only; no operation is destructive.
@@ -59,7 +64,9 @@ carry capabilities for memory (`remember` / `/memory`), work logs, or
 session hand-off. Check the index page; where such capabilities exist, use
 them: announce your session at start, record what you did before your
 context ends, and leave durable facts in memory rather than in prose
-nobody will re-read.
+nobody will re-read. When a thread's history stops informing decisions,
+record an authored summary of the current state so projections can lead
+with it; the log keeps the full record, summaries keep readers cheap.
 
 **The log is authoritative** over any rendered page, note, or this card.
 `self rehydrate` rebuilds the entire instance from `events.jsonl` +
