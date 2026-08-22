@@ -126,20 +126,35 @@ func replay(events []Event, key []byte) *state {
 			c.Decl, c.DeclSeq = d, e.Seq
 
 		case "script.installed":
-			// Only a receipt this instance signed counts. A receipt for a
-			// capability no declaration mentions still installs — rehydrate
-			// must be able to rebuild from receipts alone — but it can only
-			// exist if someone held the key.
+			// A receipt is the kernel's own testimony, so it counts only
+			// through the kernel's own door. Without this gate, echoing an old
+			// receipt payload back through `hear` re-installs it — undoing a
+			// retirement, or rolling a fixed script back to a broken one — with
+			// no key and no declaration, because the signature on a genuine
+			// receipt stays valid forever.
+			if e.Via != doorKernel {
+				continue
+			}
+			// A receipt for a capability no declaration mentions still
+			// installs: rehydrate must be able to rebuild from receipts alone.
+			// It can only exist if someone held the key.
 			r, ok := verifyReceipt(key, e.Payload)
 			if !ok {
 				continue
 			}
 			c := live(r.Type, r.Name)
 			c.Receipt, c.RcptSeq = &r, e.Seq
-			// A successful install closes the refusal it supersedes, and any
-			// refusal too vague to name a capability.
+			// A successful install closes the refusal it supersedes — and every
+			// refusal that names nothing a declaration or a retirement could
+			// ever match. Those cannot be closed on their own key, so without
+			// this the instance never reports quiet again and the documented
+			// loop spins forever.
 			delete(rejects, r.Type+"/"+r.Name)
-			delete(rejects, "/")
+			for k, rej := range rejects {
+				if !validCapability(rej.Type, rej.Name) {
+					delete(rejects, k)
+				}
+			}
 
 		case "script.rejected":
 			// The kernel's own testimony only. A refusal arriving through the
@@ -214,7 +229,7 @@ func (st *state) exemplar(skip map[string]bool) (string, string) {
 	}
 	const cap = 4096
 	if len(script) > cap {
-		script = script[:cap] + "\n… (truncated)"
+		script = trunc(script, cap) + "\n… (truncated)"
 	}
 	return name, script
 }
@@ -231,8 +246,17 @@ func validCapability(typ, name string) bool {
 	if name == "" || strings.Contains(name, `\`) {
 		return false
 	}
+	// Bounded so a receipt can never name something the filesystem cannot hold:
+	// install would accept it and every later materialization — rehydrate
+	// included — would fail on a name nothing can fix.
+	if len(name) > 200 {
+		return false
+	}
 	segs := strings.Split(name, "/")
 	for i, seg := range segs {
+		if len(seg) > 64 {
+			return false
+		}
 		if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, ".") {
 			return false
 		}
@@ -268,6 +292,14 @@ func materialize(home string, st *state, typ, name string) (string, error) {
 	c := st.cap(typ, name)
 	switch {
 	case c == nil:
+		other := kindView
+		if typ == kindView {
+			other = kindCommand
+		}
+		if st.cap(other, name) != nil {
+			return "", fmt.Errorf("no %s %q in this log — but there is a %s by that name: try `self %s %s`",
+				typ, name, other, map[string]string{kindCommand: "run", kindView: "view"}[other], name)
+		}
 		return "", fmt.Errorf("no %s %q in this log — declare it, or check `self brief`", typ, name)
 	case c.Receipt == nil && st.Key == nil && len(st.Events) > 0:
 		return "", fmt.Errorf("%s %q: no receipt verifies under this instance's key — is .secret missing next to events.jsonl?", typ, name)
@@ -334,12 +366,18 @@ func linkBlob(home, typ, name, sum string) error {
 	if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
 		return err
 	}
-	tmp := link + ".tmp"
-	os.Remove(tmp)
-	if err := os.Symlink(rel, tmp); err != nil {
+	// A unique temp name: two selves materializing the same capability at once
+	// must not collide on it.
+	tmp, err := os.MkdirTemp(filepath.Dir(link), ".link-")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, link)
+	defer os.RemoveAll(tmp)
+	staged := filepath.Join(tmp, "run")
+	if err := os.Symlink(rel, staged); err != nil {
+		return err
+	}
+	return os.Rename(staged, link)
 }
 
 // unlink removes a retired capability's readable path. Its blob stays until
@@ -361,19 +399,32 @@ func unlink(home, typ, name string) {
 // unreferenced blobs. It is the only thing allowed to delete, and it needs
 // nothing but events.jsonl and .secret — no model, no network.
 func rehydrate(home string) error {
+	// Under the log lock: rehydrate decides what to DELETE from a snapshot of
+	// the log, so a concurrent install would otherwise have its blob and link
+	// collected out from under it — leaving cap/ not matching the log, which is
+	// the one thing this verb exists to guarantee.
+	unlock, err := lockLog(home)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	st, err := loadState(home)
 	if err != nil {
 		return err
 	}
 	keepLinks := map[string]bool{}
 	keepBlobs := map[string]bool{}
-	installed := 0
+	installed, failed := 0, 0
 	for _, c := range st.Caps {
 		if c.Receipt == nil {
 			continue
 		}
 		if _, err := materialize(home, st, c.Type, c.Name); err != nil {
-			return err
+			// One capability the filesystem cannot hold must not brick the
+			// audit path: say so and keep reconciling the rest.
+			fmt.Fprintf(os.Stderr, "self: %s could not be materialized: %s\n", c.key(), err)
+			failed++
+			continue
 		}
 		sum := sha256.Sum256([]byte(c.Receipt.Script))
 		keepLinks[linkPath(home, c.Type, c.Name)] = true
@@ -385,9 +436,11 @@ func rehydrate(home string) error {
 	for _, typ := range []string{kindCommand, kindView} {
 		root := filepath.Join(capDir(home), typ)
 		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || filepath.Base(path) != "run" {
+			if err != nil || info.IsDir() {
 				return nil
 			}
+			// "Exactly" means exactly: a file under cap/<type>/ that no live
+			// receipt puts there is stale, whatever it is called.
 			if !keepLinks[path] {
 				os.Remove(path)
 				removed++
@@ -404,6 +457,9 @@ func rehydrate(home string) error {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "self: %d capabilit(ies) materialized from the log, %d stale file(s) removed\n", installed, removed)
+	if failed > 0 {
+		return fmt.Errorf("%d capabilit(ies) in the log could not be materialized (see above)", failed)
+	}
 	return nil
 }
 
@@ -479,7 +535,7 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 	var out []Event
 	var parseErr error
 	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
+	sc.Buffer(make([]byte, 1024*1024), lineLimit)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
@@ -502,6 +558,10 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 		e := newEvent(p.Name, p.Payload)
 		e.Via, e.By = via, by
 		out = append(out, e)
+	}
+	if err := sc.Err(); err != nil {
+		cmd.Wait()
+		return nil, fmt.Errorf("reading command %q output: %w (nothing appended)", name, err)
 	}
 	if err := cmd.Wait(); err != nil {
 		return nil, fmt.Errorf("command %q exited: %w (nothing appended)", name, err)

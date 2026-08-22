@@ -219,6 +219,69 @@ func TestConcurrentAppendsDoNotCollide(t *testing.T) {
 	}
 }
 
+// A crash, a full disk, or a kill mid-write leaves a line with no newline. That
+// is not a record, so it must not brick the instance — which it did: every read
+// and every write failed permanently, rehydrate included.
+func TestTornTailNeverBricksTheInstance(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	before, err := readEvents(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f, _ := os.OpenFile(logPath(h), os.O_WRONLY|os.O_APPEND, 0644)
+	f.WriteString(`{"name":"torn.wri`)
+	f.Close()
+
+	// Reads still work, and see exactly the committed records.
+	after, err := readEvents(h)
+	if err != nil {
+		t.Fatalf("a torn tail broke every read: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("the torn tail was counted as a record: %d vs %d", len(after), len(before))
+	}
+	// The next append lands cleanly, and the log stays wholly readable — the
+	// committed record above the tear must survive.
+	heard(t, h, line(t, "after.crash", map[string]string{}))
+	final, err := readEvents(h)
+	if err != nil {
+		t.Fatalf("the log did not survive the append after a tear: %v", err)
+	}
+	if len(final) != len(before)+1 {
+		t.Fatalf("want %d records, got %d", len(before)+1, len(final))
+	}
+	seen := map[int]bool{}
+	for _, e := range final {
+		if seen[e.Seq] {
+			t.Fatalf("duplicate seq %d after recovering from a tear", e.Seq)
+		}
+		seen[e.Seq] = true
+	}
+	if err := rehydrate(h); err != nil {
+		t.Fatalf("rehydrate — the documented repair path — failed after a tear: %v", err)
+	}
+}
+
+// Real corruption in the middle is not the same thing and must not be silently
+// skipped: that would change the instance's state without saying so.
+func TestCorruptMiddleLineIsAnErrorThatNamesIt(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	raw, _ := os.ReadFile(logPath(h))
+	lines := strings.SplitAfter(string(raw), "\n")
+	lines[1] = "{ this is not json }\n"
+	os.WriteFile(logPath(h), []byte(strings.Join(lines, "")), 0644)
+	_, err := readEvents(h)
+	if err == nil {
+		t.Fatal("a corrupt middle line was silently skipped")
+	}
+	if !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("the error does not name the line: %v", err)
+	}
+}
+
 func TestLastSeqScansOnlyTheTail(t *testing.T) {
 	h := home(t)
 	ensureSecret(h)
@@ -401,10 +464,13 @@ func TestReservedNamesAreRefused(t *testing.T) {
 // A line needs BOTH a dotted name and a payload key. On the name test alone, a
 // mind reporting {"name":"notes","status":"ok"} would land an event in the log.
 func TestWireDiscriminator(t *testing.T) {
-	evs, _, prose := wire(`{"name":"notes","status":"installed"}` + "\n" +
+	evs, _, prose, err := wire(`{"name":"notes","status":"installed"}` + "\n" +
 		`{"name":"Note.Added","payload":{}}` + "\n" +
 		`{"text":"no name here"}` + "\n" +
 		`{"name":"note.added","payload":{"text":"real"}}` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(evs) != 1 || evs[0].Name != "note.added" {
 		t.Fatalf("wire took %d events: %v", len(evs), evs)
 	}
@@ -449,6 +515,22 @@ func TestScriptBeforeItsDeclarationInOneBody(t *testing.T) {
 	c := replayed(t, h).cap(kindView, "n")
 	if c.Receipt == nil || len(c.Receipt.Consumes) != 1 || c.Receipt.Consumes[0] != "a.one" {
 		t.Fatalf("the receipt did not pick up the declaration's consumes: %+v", c.Receipt)
+	}
+}
+
+// An over-long line used to discard itself and every line after it, silently,
+// and still report success.
+func TestOverlongLineIsAnErrorNotSilentTruncation(t *testing.T) {
+	h := home(t)
+	body := line(t, "first.one", map[string]string{"t": "kept?"}) +
+		`{"name":"huge.one","payload":{"t":"` + strings.Repeat("x", lineLimit+16) + `"}}` + "\n" +
+		line(t, "third.one", map[string]string{"t": "kept?"})
+	var out bytes.Buffer
+	if err := cmdHear(h, []byte(body), &out); err == nil {
+		t.Fatal("an over-long line was silently swallowed")
+	}
+	if events, _ := readEvents(h); len(events) != 0 {
+		t.Fatalf("a body that could not be read whole appended %d event(s)", len(events))
 	}
 }
 
@@ -602,10 +684,20 @@ func TestRetirementLeavesTheSurfaceAndTheLogKeepsEverything(t *testing.T) {
 		t.Fatal("retirement did not append a tombstone")
 	}
 
-	// Re-declaring revives it: nothing was destroyed.
-	growJournal(t, h)
-	if replayed(t, h).cap(kindCommand, "entry") == nil {
-		t.Fatal("re-declaring did not revive the capability")
+	// Re-declaring brings the capability back as PENDING work — the retired
+	// script does not silently return. The log kept every event, so nothing was
+	// destroyed; the mind authors it fresh.
+	heard(t, h, line(t, "command.declared", decl{Name: "entry", Description: "again"}))
+	st = replayed(t, h)
+	c := st.cap(kindCommand, "entry")
+	if c == nil {
+		t.Fatal("re-declaring did not bring the capability back")
+	}
+	if !c.Pending() || c.Receipt != nil {
+		t.Fatal("a retired script came back without being re-authored")
+	}
+	if _, err := runCommand(h, st, "entry", nil, doorCLI, ""); err == nil {
+		t.Fatal("a retired script ran again after a bare re-declaration")
 	}
 }
 
@@ -626,6 +718,62 @@ func TestRetireThenRedeclareInOneBody(t *testing.T) {
 	}
 	if _, err := runCommand(h, st, "entry", []string{"alive"}, doorCLI, ""); err != nil {
 		t.Fatalf("a revived capability was unlinked: %v", err)
+	}
+}
+
+// script.authored is a wire message. No door may land it in the log — including
+// a command capability that emits one, which would leave a lie there.
+func TestScriptAuthoredNeverLandsInTheLog(t *testing.T) {
+	h := home(t)
+	ensureSecret(h)
+	if err := appendEvents(h, []Event{newEvent("script.authored", json.RawMessage(`{"type":"command"}`))}); err == nil {
+		t.Fatal("script.authored was appended")
+	}
+	if events, _ := readEvents(h); len(events) != 0 {
+		t.Fatal("it landed anyway")
+	}
+}
+
+// A receipt is the kernel's own testimony, so it counts only through the
+// kernel's door. Replaying a genuine receipt payload through the wire used to
+// re-install it — undoing a retirement, or rolling a fixed script back — with no
+// key and no declaration, because a real signature stays valid forever.
+func TestReplayedReceiptCannotUndoARetirement(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	var genuine json.RawMessage
+	for _, e := range replayed(t, h).Events {
+		if e.Name == "script.installed" {
+			genuine = e.Payload
+		}
+	}
+	if genuine == nil {
+		t.Fatal("no receipt to replay")
+	}
+	heard(t, h, line(t, "capability.retired", map[string]string{"type": "command", "name": "entry"}))
+	heard(t, h, string(mustLine("script.installed", genuine)))
+
+	st := replayed(t, h)
+	if st.cap(kindCommand, "entry") != nil {
+		t.Fatal("a replayed receipt resurrected a retired capability")
+	}
+	if _, err := runCommand(h, st, "entry", nil, doorCLI, ""); err == nil {
+		t.Fatal("the resurrected capability ran")
+	}
+}
+
+// A refusal that names nothing a declaration or retirement could ever match had
+// no way to close, so the instance never reported quiet again and the documented
+// loop spun forever.
+func TestUnkeyedRefusalDoesNotWedgeTheLoop(t *testing.T) {
+	h := home(t)
+	heard(t, h, line(t, "script.authored", authored{Type: "banana", Name: "x", Script: "#!/bin/sh\ntrue\n"}))
+	if replayed(t, h).quiet() {
+		t.Fatal("a refusal did not wake the loop")
+	}
+	growJournal(t, h)
+	if !replayed(t, h).quiet() {
+		t.Fatal("a bogus refusal wedged the loop permanently")
 	}
 }
 
@@ -754,8 +902,21 @@ func TestGiveLearnRoundTrip(t *testing.T) {
 		t.Fatalf("the door was not re-stamped: %q", events[1].Via)
 	}
 	// The intelligent half rides the pipe.
-	if !strings.Contains(out.String(), "--- INTENT ---") {
+	prompt := out.String()
+	if !strings.Contains(prompt, "--- INTENT") || !strings.Contains(prompt, "--- END INTENT ---") {
 		t.Fatal("learn did not print the learning prompt")
+	}
+	// The intent is another instance's prose riding a prompt a mind will act on,
+	// so every line of it is quoted: it must not be able to close the block or
+	// forge a section of the prompt's own structure.
+	body := prompt[strings.Index(prompt, "--- INTENT"):]
+	for _, l := range strings.Split(body, "\n")[1:] {
+		if strings.HasPrefix(l, "--- END INTENT") {
+			break
+		}
+		if l != "" && !strings.HasPrefix(l, "| ") {
+			t.Fatalf("an intent line rode the prompt unquoted: %q", l)
+		}
 	}
 	// Nothing installed: an account cannot install anything, ever.
 	if len(replayed(t, receiver).Caps) != 0 {

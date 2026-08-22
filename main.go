@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 )
 
 func main() {
@@ -69,9 +70,10 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if len(args) < 1 {
 			return fmt.Errorf("usage: self run <command> [args...]")
 		}
-		if _, err := ensureSecret(home); err != nil {
-			return err
-		}
+		// No ensureSecret here. Minting a key on this path meant `self run`
+		// dropped a .secret in whatever directory it was called from — and, on a
+		// real instance whose key went missing, forged a fresh one, hiding the
+		// only honest diagnostic there is.
 		st, err := loadState(home)
 		if err != nil {
 			return err
@@ -138,7 +140,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 // ───────────────────────────────── the brief ────────────────────────────────
 
 // brief is the state card: what this instance is, what it can do, what is
-// pending, what broke. Facts only — the contract lives in PROTOCOL.md and there
+// pending, and which authoring attempts stand refused. Facts only — the contract lives in PROTOCOL.md and there
 // is exactly one copy of it. This is the read an agent starts from, and every
 // line of it is a replay of the log.
 func brief(home string, st *state) string {
@@ -172,7 +174,9 @@ func brief(home string, st *state) string {
 		}
 		fmt.Fprintf(&b, "- **%s** — %s (consumes %s)%s\n", c.Name, oneLine(c.Decl.Description), consumes, pendingMark(c))
 	}
-	fmt.Fprintf(&b, "- **log** — every event, one line each (built in%s)\n", shadowed(st))
+	if st.cap(kindView, "log") == nil {
+		b.WriteString("- **log** — every event, one line each (built in; a declared view named `log` shadows it)\n")
+	}
 
 	if p := st.pending(); len(p) > 0 {
 		b.WriteString("\n## pending — declared, no script yet\n\n")
@@ -210,13 +214,6 @@ func pendingMark(c *capability) string {
 	return "  *(pending — no script yet)*"
 }
 
-func shadowed(st *state) string {
-	if st.cap(kindView, "log") != nil {
-		return ", shadowed by a declared view"
-	}
-	return ""
-}
-
 // ─────────────────────────────────── util ───────────────────────────────────
 
 func oneLine(s string) string {
@@ -227,11 +224,18 @@ func oneLine(s string) string {
 	return s
 }
 
+// trunc cuts to at most n bytes without splitting a rune: a prompt or a report
+// carrying half a character is invalid UTF-8, and the prompt is piped straight
+// into a model.
 func trunc(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 func compact(raw json.RawMessage) string {

@@ -36,6 +36,10 @@ cannot land an event called `notes` in your log. Every other line is ignored,
 echoed, and counted on stderr. Do not narrate on the wire; a stray line will not
 cost you the pass.
 
+The corollary: `hear` ingests **any** event-shaped line it is given, including
+one quoted inside a document. Do not pipe prose *about* events into it — this
+file, for one, is full of examples that would land.
+
 Identical in a terminal, a pipe, a script, a sandbox and cron.
 
 <!-- prompt:begin -->
@@ -59,8 +63,11 @@ An event name is lowercase dotted: `^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`.
 
 ### Growing a capability
 
-Two kinds. A **command** may append to the log; a **view** may not. That is the
-whole distinction, and it is a trust boundary, not a formatting one.
+Two kinds, and the difference is what the **kernel** does with the output: it
+appends what a command prints, and never appends what a view prints. A view has
+no path to the log through the kernel. (Nothing *stops* a script from writing to
+`events.jsonl` itself — see the limits — but then it is not a view doing it, it
+is a program you installed.)
 
 ```json
 {"name":"command.declared","payload":{"name":"entry","description":"append a journal entry. usage: entry <text…> — appends journal.entry {text}"}}
@@ -87,11 +94,13 @@ Escaping a script into JSON by hand is miserable. Don't:
 
 ```sh
 jq -nc --arg t command --arg n entry --rawfile s /tmp/entry.sh \
-  '{name:"script.authored",payload:{type:$t,name:$n,script:$s}}' | self
+  '{name:"script.authored",payload:{type:$t,name:$n,script:$s}}' | self hear
 ```
 
 Retiring is an event too — no verb, no special path. The script leaves the
-surface, every event stays, and re-declaring revives it:
+surface and every event stays; re-declaring the capability brings it back as
+**pending work**, to be authored fresh. A retired script does not silently
+return:
 
 ```json
 {"name":"capability.retired","payload":{"type":"view","name":"journal"}}
@@ -109,7 +118,8 @@ determinism is the point.
 log as JSONL. stdout is new events as JSONL. Exit non-zero and nothing is
 appended.
 
-**view** — stdin is exactly the events its receipt's `consumes` list names, as
+**view** — never ingested: whatever it prints goes to the reader, not the log.
+stdin is exactly the events its receipt's `consumes` list names, as
 JSONL, in log order (an empty list or `["*"]` means every event). stdout is
 opaque bytes: text, HTML, JSON, whatever you like. A view is a **pure function
 of those events** — same events in, same bytes out. Do not read the clock, the
@@ -238,9 +248,12 @@ Four rules keep the exchange honest, all mechanical:
 2. **Moments are preserved.** Deposited events keep their own `occurred_at` and
    their own `by`. The door is re-stamped `learn:<account>`: doors are this
    log's facts, never another body's. A record arriving is history, not news.
-3. **Interventions are visible.** `lesson.learned` records the sha256 of what
-   was deposited *beside* what the manifest claimed. Deleting a line before
-   learning is legitimate curation — and it shows, in both logs, forever.
+3. **Interventions are visible.** `lesson.learned` records the sha256 of the
+   record file **as read** beside what the manifest claimed. Deleting a line
+   before learning is legitimate curation — and it shows, in both logs, forever.
+   It is a hash of bytes, so a transport that rewrites line endings also shows
+   up as a divergence: the honest reading of a mismatch is "this file is not the
+   file that was given", not "someone removed a line".
 4. **Only the local key installs.** An account cannot install anything, ever.
    It can only be read.
 
@@ -354,3 +367,14 @@ workaround — the protocol being its own migration path is the claim.
 - **Appends are locked; operations are not transactions.** One `hear` body is
   one critical section, but a command that emits several events and a
   concurrent operation can still interleave.
+- **Nothing is timed out.** A capability script that hangs hangs the invocation,
+  and inside a `while ask=$(self)` loop it hangs the loop. Wrap it with
+  `timeout` if that matters to you; the kernel does not own that policy.
+- **A record is a line terminated by a newline.** A crash mid-write leaves
+  bytes that were never a record, and the next append drops them, saying so.
+  Real corruption further up is an error naming the line, never a silent skip:
+  the log is authoritative, so it is not the kernel's place to decide which of
+  your committed records to ignore.
+- **A command's runtime failure is not an event.** Its exit code and stderr are
+  the caller's to see; nothing is appended, so a failing command leaves no trace
+  in the log. Only a refused *authoring* attempt becomes state.

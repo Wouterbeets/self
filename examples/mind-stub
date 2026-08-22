@@ -14,7 +14,7 @@ with its own tools):
 
   - Every pending declaration block is answered with a script.authored line
     carrying a trivial script that honors the capability contract.
-  - An ask carrying an "--- INTENT ---" section (a learn) is answered with one
+  - An ask carrying an "--- INTENT" section (a learn) is answered with one
     command.declared and one view.declared, named from the intent's backticks,
     plus their scripts in the same pass.
   - Anything else gets silence, which is a valid turn.
@@ -113,8 +113,16 @@ def answer_pending(prompt):
 
 
 def answer_intent(prompt):
-    """Realize an intent as one command and one view."""
-    intent = prompt.split("--- INTENT ---", 1)[1].split("--- END INTENT ---", 1)[0]
+    """Realize an intent as one command and one view.
+
+    The intent rides the prompt quoted line by line (it is another instance's
+    prose), so unquote it before reading the names out of it.
+    """
+    body = prompt.split("--- INTENT", 1)[1].split("--- END INTENT", 1)[0]
+    body = body.split("\n", 1)[1] if "\n" in body else body
+    intent = "\n".join(
+        line[2:] if line.startswith("| ") else line for line in body.split("\n")
+    )
     command = first_command(intent) or "note"
     view = first_view(intent) or "notes"
     event = first_event(intent) or "stub.noted"
@@ -136,7 +144,7 @@ def main():
     prompt = sys.stdin.read()
     if answer_pending(prompt):
         return
-    if "--- INTENT ---" in prompt:
+    if "--- INTENT" in prompt:
         answer_intent(prompt)
         return
     # Nothing to do. Silence is a valid turn.

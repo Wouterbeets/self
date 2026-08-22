@@ -17,6 +17,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -105,7 +106,10 @@ var errQuiet = fmt.Errorf("nothing pending")
 // mistaken for. Leniency is also less code — a stray fence or a backticked line
 // is just a line that is not an event.
 func cmdHear(home string, input []byte, out io.Writer) error {
-	evs, scripts, prose := wire(string(input))
+	evs, scripts, prose, err := wire(string(input))
+	if err != nil {
+		return err
+	}
 	if len(evs) == 0 && len(scripts) == 0 {
 		if hint := wireHint(input); hint != "" {
 			fmt.Fprintf(os.Stderr, "self: heard no events — %s\n", hint)
@@ -133,8 +137,12 @@ type authored struct {
 // name AND a payload key. Both halves matter: on the name test alone, a mind
 // reporting {"name":"notes","status":"ok"} would land an event called "notes" in
 // the authoritative log.
-func wire(body string) (evs []Event, scripts []authored, prose []string) {
-	for _, line := range lines(body) {
+func wire(body string) (evs []Event, scripts []authored, prose []string, err error) {
+	all, err := lines(body)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for _, line := range all {
 		probe, ok := eventLine(line)
 		if !ok {
 			prose = append(prose, line)
@@ -150,7 +158,7 @@ func wire(body string) (evs []Event, scripts []authored, prose []string) {
 		}
 		evs = append(evs, newEvent(probe.Name, probe.Payload))
 	}
-	return evs, scripts, prose
+	return evs, scripts, prose, nil
 }
 
 // wireHint names the one wire mistake that is much likelier than any other: a
@@ -160,10 +168,20 @@ func wire(body string) (evs []Event, scripts []authored, prose []string) {
 // instead of at the formatting.
 func wireHint(input []byte) string {
 	var whole wireLine
-	if json.Unmarshal(input, &whole) != nil || whole.Name == "" {
+	if json.Unmarshal(input, &whole) != nil {
 		return ""
 	}
-	return "the body is ONE pretty-printed JSON object, and the wire is one object per line. Re-emit it compact (jq -c, or json.dumps without indent)."
+	switch {
+	case whole.Name != "" && whole.Payload == nil:
+		return `that object has a "name" but no "payload" — the wire needs both keys.`
+	case whole.Name == "":
+		return `that object has no "name" — the wire needs a lowercase dotted name and a payload.`
+	case !validEventName(whole.Name):
+		return fmt.Sprintf("%q is not a lowercase dotted event name (like note.added).", whole.Name)
+	case bytes.Contains(bytes.TrimSpace(input), []byte("\n")):
+		return "the body is ONE pretty-printed JSON object, and the wire is one object per line. Re-emit it compact (jq -c, or json.dumps without indent)."
+	}
+	return ""
 }
 
 type wireLine struct {
@@ -183,16 +201,24 @@ func eventLine(line string) (wireLine, bool) {
 	return wireLine{}, false
 }
 
-func lines(body string) []string {
+// lineLimit bounds one wire line. It is generous — a script arrives inline as
+// JSON — but it must be bounded, and crossing it must be an error rather than a
+// silent truncation of everything after it.
+const lineLimit = 64 * 1024 * 1024
+
+func lines(body string) ([]string, error) {
 	var out []string
 	sc := bufio.NewScanner(strings.NewReader(body))
-	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
+	sc.Buffer(make([]byte, 1024*1024), lineLimit)
 	for sc.Scan() {
 		if line := strings.TrimSpace(sc.Text()); line != "" {
 			out = append(out, line)
 		}
 	}
-	return out
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("reading the wire: %w (nothing was heard — a line longer than %dMB cannot be one)", err, lineLimit/(1024*1024))
+	}
+	return out, nil
 }
 
 // ────────────────────────────────── hear ────────────────────────────────────
@@ -207,12 +233,26 @@ func hear(home string, evs []Event, scripts []authored, prose []string, out io.W
 	if err != nil {
 		return err
 	}
-	unlock, err := lockLog(home)
-	if err != nil {
-		return err
+	// The report is buffered and written after the lock is released: `out` is
+	// the end of a pipeline and its reader may be arbitrarily slow, and flock
+	// has no timeout, so writing under the lock lets one slow consumer block
+	// every other writer in the home indefinitely.
+	var report bytes.Buffer
+	err = func() error {
+		unlock, lerr := lockLog(home)
+		if lerr != nil {
+			return lerr
+		}
+		defer unlock()
+		return heardLocked(home, key, evs, scripts, prose, &report)
+	}()
+	if _, werr := out.Write(report.Bytes()); werr != nil && err == nil {
+		return werr
 	}
-	defer unlock()
+	return err
+}
 
+func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose []string, out io.Writer) error {
 	by := callerClaim()
 	for i := range evs {
 		evs[i].Via, evs[i].By = doorHear, by
@@ -226,6 +266,7 @@ func hear(home string, evs []Event, scripts []authored, prose []string, out io.W
 		return err
 	}
 	st := replay(events, key)
+	warnDroppedDeclarations(st, evs)
 
 	var installed, refused []string
 	for _, a := range scripts {
@@ -305,6 +346,24 @@ func hear(home string, evs []Event, scripts []authored, prose []string, out io.W
 		return fmt.Errorf("%d authored script(s) refused", len(refused))
 	}
 	return nil
+}
+
+// warnDroppedDeclarations names a declaration that landed in the log but that
+// replay could not use — a missing or unusable name. Without this the paired
+// script is refused as "not declared" and the mind has no way to see that its
+// declaration was the problem, so it re-authors the script forever.
+func warnDroppedDeclarations(st *state, evs []Event) {
+	for _, e := range evs {
+		typ, ok := strings.CutSuffix(e.Name, ".declared")
+		if !ok || (typ != kindCommand && typ != kindView) {
+			continue
+		}
+		var d decl
+		if json.Unmarshal(e.Payload, &d) == nil && st.cap(typ, d.Name) != nil {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "self: %s at seq %d declares no usable name — it is in the log but names no capability, so any script for it will be refused as undeclared\n", e.Name, e.Seq)
+	}
 }
 
 // install is the trust gate. A mind can only ever propose: the capability must

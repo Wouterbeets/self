@@ -7,7 +7,6 @@ package main
 // itself witnessed.
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
@@ -91,30 +90,44 @@ func homeDir() string {
 
 func logPath(home string) string { return filepath.Join(home, "events.jsonl") }
 
+// readEvents replays the log from disk.
+//
+// A record is a line TERMINATED BY A NEWLINE. A trailing fragment with no
+// newline was never durably committed — a crash, a full disk, a kill mid-write,
+// or simply another process appending this instant — so it is not a record and
+// is skipped. Without that rule a single short write bricked the instance
+// permanently, rehydrate included, and every read raced every append.
+//
+// A malformed line in the MIDDLE is different: that is real corruption, and it
+// is an error naming the line, because silently skipping it would change the
+// instance's state without saying so.
 func readEvents(home string) ([]Event, error) {
-	f, err := os.Open(logPath(home))
+	data, err := os.ReadFile(logPath(home))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	defer f.Close()
 	var events []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
+	for n, line := range strings.SplitAfter(string(data), "\n") {
+		terminated := strings.HasSuffix(line, "\n")
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
+		if !terminated {
+			// The tail of the file, mid-write. Not a record.
+			fmt.Fprintf(os.Stderr, "self: ignoring an unterminated final line in events.jsonl (%d bytes) — it was never committed\n", len(line))
+			break
+		}
 		var e Event
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
-			return nil, fmt.Errorf("parse event: %w", err)
+			return nil, fmt.Errorf("events.jsonl line %d is not a readable event: %w — the log is authoritative, so fix that line (the rest of the file is intact)", n+1, err)
 		}
 		events = append(events, e)
 	}
-	return events, sc.Err()
+	return events, nil
 }
 
 // appendEvents writes a batch under one lock: sequence numbers are assigned and
@@ -146,12 +159,23 @@ func appendLocked(home string, evs []Event) error {
 		if !validEventName(evs[i].Name) {
 			return fmt.Errorf("event name %q is not lowercase dotted (see self help)", evs[i].Name)
 		}
+		// script.authored is a wire message, not an event. The protocol says it
+		// never lands in the log, so no door may land it — a command that
+		// emitted one would otherwise leave a lie there.
+		if evs[i].Name == "script.authored" {
+			return fmt.Errorf("script.authored is a wire message, not an event: it is heard by `self hear`, never appended")
+		}
 		if !utf8.Valid(evs[i].Payload) {
 			return fmt.Errorf("event %q carries a payload that is not valid UTF-8", evs[i].Name)
 		}
 	}
 	last, err := lastSeq(home)
 	if err != nil {
+		return err
+	}
+	// If the file does not end in a newline, its tail is an uncommitted
+	// fragment. Drop it before appending.
+	if err := dropFragment(home); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
@@ -176,10 +200,66 @@ func appendLocked(home string, evs []Event) error {
 	return f.Close()
 }
 
-// lastSeq reads the highest sequence number by parsing only the log's last
-// line, scanning backwards in chunks until a newline bounds it. Appends stay
-// O(1) as the log grows, and no sidecar file can drift from it: the log is the
-// only record of where it ends. Call under the lock.
+// dropFragment removes an unterminated final line before the next append.
+//
+// This is the one place the log shrinks, and it does not violate append-only: a
+// record is a line terminated by a newline, so those bytes were never a record.
+// The alternatives are both worse. Appending straight on top glues this batch to
+// the fragment and destroys the committed record above it. Merely closing the
+// fragment with a newline promotes uncommitted bytes into a permanently
+// unreadable middle line — which bricks every later read, as it did before this
+// was written this way.
+//
+// Call under the lock.
+func dropFragment(home string) error {
+	f, err := os.OpenFile(logPath(home), os.O_RDWR, 0644)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() == 0 {
+		return err
+	}
+	// How many trailing bytes follow the last newline?
+	const window = 1024 * 1024
+	size := st.Size()
+	read := int64(window)
+	if read > size {
+		read = size
+	}
+	buf := make([]byte, read)
+	if _, err := f.ReadAt(buf, size-read); err != nil {
+		return err
+	}
+	i := bytes.LastIndexByte(buf, '\n')
+	if i == int(read)-1 {
+		return nil // already ends on a record boundary
+	}
+	var keep int64
+	if i < 0 {
+		if read < size {
+			return fmt.Errorf("events.jsonl has no newline in its last %d bytes; refusing to guess where the last record ends", window)
+		}
+		keep = 0 // the whole file is one unterminated fragment
+	} else {
+		keep = size - read + int64(i) + 1
+	}
+	fmt.Fprintf(os.Stderr, "self: dropping %d uncommitted byte(s) from the end of events.jsonl — a record is a terminated line, so those bytes were never one\n", size-keep)
+	return f.Truncate(keep)
+}
+
+// lastSeq reads the sequence number to continue from, by parsing only the tail
+// of the log — appends stay O(1) as the log grows, and no sidecar file can drift
+// from it: the log is the only record of where it ends.
+//
+// It applies readEvents' rule. A final line with no newline was never committed,
+// so the batch about to be written must not inherit its sequence; the same goes
+// for a tail that is terminated but unreadable. Walk back to the last line that
+// is genuinely a record. Call under the lock.
 func lastSeq(home string) (int, error) {
 	f, err := os.Open(logPath(home))
 	if err != nil {
@@ -193,35 +273,41 @@ func lastSeq(home string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	off := st.Size()
-	var tail []byte
-	for off > 0 {
-		n := int64(64 * 1024)
-		if n > off {
-			n = off
+
+	// Grow the window backwards until a readable record turns up or the whole
+	// file has been read. In the normal case the first 64KB is one line.
+	for window := int64(64 * 1024); ; window *= 4 {
+		if window > st.Size() {
+			window = st.Size()
 		}
-		off -= n
-		chunk := make([]byte, n)
-		if _, err := f.ReadAt(chunk, off); err != nil {
-			return 0, err
+		buf := make([]byte, window)
+		if window > 0 {
+			if _, err := f.ReadAt(buf, st.Size()-window); err != nil {
+				return 0, err
+			}
 		}
-		tail = append(chunk, tail...)
-		line := bytes.TrimRight(tail, " \t\r\n")
-		if len(line) == 0 {
-			continue // trailing blank lines
+		lines := bytes.Split(buf, []byte{'\n'})
+		// The final element is whatever followed the last newline: an
+		// uncommitted fragment, or empty. Never a record.
+		lines = lines[:len(lines)-1]
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := bytes.TrimSpace(lines[i])
+			if len(line) == 0 {
+				continue
+			}
+			if i == 0 && window < st.Size() {
+				break // this line may start before the window
+			}
+			var e Event
+			if json.Unmarshal(line, &e) != nil {
+				continue // not a record; keep walking back
+			}
+			return e.Seq, nil
 		}
-		if i := bytes.LastIndexByte(line, '\n'); i >= 0 {
-			line = line[i+1:]
-		} else if off > 0 {
-			continue // the line starts in an earlier chunk
+		if window >= st.Size() {
+			return 0, nil // nothing readable anywhere: start from one
 		}
-		var e Event
-		if err := json.Unmarshal(bytes.TrimSpace(line), &e); err != nil {
-			return 0, fmt.Errorf("parse last event: %w", err)
-		}
-		return e.Seq, nil
 	}
-	return 0, nil
 }
 
 func lockLog(home string) (func(), error) {
@@ -271,7 +357,23 @@ func ensureSecret(home string) ([]byte, error) {
 	if err := os.MkdirAll(home, 0755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(secretPath(home), []byte(hex.EncodeToString(key)), 0600); err != nil {
+	// O_EXCL, so exactly one of two selves racing on a fresh home creates the
+	// key and the other reads it. Losing that race silently used to mean
+	// signing receipts under a key the instance would then throw away.
+	f, err := os.OpenFile(secretPath(home), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		if os.IsExist(err) {
+			if existing := secret(home); existing != nil {
+				return existing, nil
+			}
+		}
+		return nil, err
+	}
+	if _, err := f.WriteString(hex.EncodeToString(key)); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
 		return nil, err
 	}
 	fmt.Fprintf(os.Stderr, "self: new instance %s\n", home)
