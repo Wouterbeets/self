@@ -342,6 +342,51 @@ func TestStrangeLoop(t *testing.T) {
 	}
 }
 
+// The loop's sharpest form: a capability that declares capabilities. A command's
+// stdout is event JSONL and a declaration is an event, so the INSTANCE can ask
+// for its own growth — and the kernel deliberately does not distinguish that
+// from growth a mind asked for.
+func TestACapabilityCanDeclareCapabilities(t *testing.T) {
+	h := home(t)
+	body := line(t, "command.declared", decl{Name: "propose", Description: "declare a view"}) +
+		line(t, "script.authored", authored{Type: "command", Name: "propose",
+			Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"view.declared\",\"payload\":{\"name\":\"%s\",\"description\":\"proposed from inside\",\"consumes\":[\"*\"]}}\\n' \"$1\"\n"})
+	heard(t, h, body)
+	st := replayed(t, h)
+	if !st.quiet() {
+		t.Fatal("the instance should be quiet before it proposes anything")
+	}
+
+	if _, err := runCommand(h, st, "propose", []string{"census"}, doorCLI, ""); err != nil {
+		t.Fatal(err)
+	}
+	st = replayed(t, h)
+	pending := st.pending()
+	if len(pending) != 1 || pending[0].key() != "view/census" {
+		t.Fatalf("the instance's own declaration is not pending work: %v", pending)
+	}
+	if st.quiet() {
+		t.Fatal("work the instance asked for did not wake the loop")
+	}
+	// It rides the prompt like any other pending declaration.
+	if p := situated(t, h, ""); !strings.Contains(p, `view "census"`) {
+		t.Fatal("the instance's own declaration is missing from the prompt")
+	}
+	// And it closes the same way.
+	heard(t, h, line(t, "script.authored", authored{Type: "view", Name: "census",
+		Script: "#!/bin/sh\nwc -l\n"}))
+	if !replayed(t, h).quiet() {
+		t.Fatal("authoring the instance's own proposal did not converge the loop")
+	}
+	page, err := runView(h, replayed(t, h), "census")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(page)) == "" {
+		t.Fatal("the proposed view rendered nothing")
+	}
+}
+
 // A re-declaration is what revision looks like on an append-only log: pending
 // again, while the older script keeps running until it is re-authored.
 func TestRedeclarationReopensPendingWork(t *testing.T) {

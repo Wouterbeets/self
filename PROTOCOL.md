@@ -97,6 +97,24 @@ jq -nc --arg t command --arg n entry --rawfile s /tmp/entry.sh \
   '{name:"script.authored",payload:{type:$t,name:$n,script:$s}}' | self hear
 ```
 
+### A capability may declare capabilities
+
+Nothing special is needed for this, and it is the sharpest form of the loop. A
+command's stdout is event JSONL, and `command.declared` / `view.declared` are
+events, so a command can emit one. The *instance* then has pending work that no
+mind asked for, it rides the next prompt like any other, and a mind authors it.
+
+```sh
+self run propose census "how many events of each name this log holds"
+self                      # exit 0: view/census is pending, and the instance asked
+self | claude -p | self hear
+self view census          # the instance grew a capability it proposed itself
+```
+
+The kernel does not distinguish growth a human asked for from growth the
+instance asked for. That is deliberate: both are declarations in the log, and
+both converge the same way.
+
 Retiring is an event too — no verb, no special path. The script leaves the
 surface and every event stays; re-declaring the capability brings it back as
 **pending work**, to be authored fresh. A retired script does not silently
