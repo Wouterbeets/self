@@ -22,6 +22,12 @@ export SELF_CALLER="<who you are>"   # your claim, recorded on events you cause
 export SELF_MIND_ID="<who you are>"  # signed into receipts for scripts you author
 ```
 
+Set `SELF_CALLER` before you write anything. It is recorded verbatim as `by`
+on every event you cause; without it your events are indistinguishable from
+every other caller's, so on an instance several agents share, no reader can
+tell which agent wrote a line and you cannot filter your own writes out of
+what you read back.
+
 The brief is a wake-up card. For depth, read `site/*.html` (the rendered
 state a human sees), `events.jsonl` (the raw log), `capabilities/` (the
 installed scripts, one directory per capability with the script at
