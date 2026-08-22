@@ -252,11 +252,17 @@ Four rules keep the exchange honest, all mechanical:
 
 1. **The kernel's vocabulary never travels raw.** `give` renames it to
    `lineage.<name>`; `learn` refuses a record containing it and appends nothing
-   at all. The refused set is frozen: a name may leave the kernel's vocabulary,
-   but it never leaves the refused set — so an old name can never be revived as
-   an attack. Without this a deposited `command.declared` would become pending
-   work and the next pass would author and sign an attacker's script under your
-   key.
+   at all. Without this a deposited `command.declared` would become pending work
+   and the next pass would author and sign an attacker's script under your key.
+
+   The refused set is **frozen**: it holds the eight names above plus every name
+   any earlier kernel acted on — `kernel.initialized`, `projector.declared`,
+   `script.compiled`, `self.asked`, `self.replied`, `self.reflected`,
+   `learn.orchestrated`, `capability.revision.requested`. A name may leave the
+   vocabulary; it never leaves this set, because otherwise retiring a name would
+   quietly make it depositable and yesterday's vocabulary would become
+   tomorrow's injection. If a record you are writing needs one of them, rename
+   it `lineage.<name>` — that is what `give` does, and it lands inert.
 2. **Moments are preserved.** Deposited events keep their own `occurred_at` and
    their own `by`. The door is re-stamped `learn:<account>`: doors are this
    log's facts, never another body's. A record arriving is history, not news.

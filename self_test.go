@@ -1015,6 +1015,17 @@ func TestLearnRefusesKernelVocabularyWholesale(t *testing.T) {
 	}
 }
 
+// The protocol lists the refused set. If the code and the list disagree, an
+// account author learns the difference by hitting an error, which is exactly the
+// friction one source of truth exists to prevent.
+func TestProtocolListsEveryRefusedName(t *testing.T) {
+	for name := range refused {
+		if !strings.Contains(protocolDoc, "`"+name+"`") {
+			t.Fatalf("%q is refused in a record but appears nowhere in PROTOCOL.md", name)
+		}
+	}
+}
+
 // A name may leave the kernel's vocabulary; it never leaves the refused set.
 func TestRefusedSetCoversRetiredNames(t *testing.T) {
 	live := []string{"command.declared", "view.declared", "script.authored", "script.installed",
