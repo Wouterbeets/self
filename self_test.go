@@ -264,6 +264,41 @@ func TestTornTailNeverBricksTheInstance(t *testing.T) {
 	}
 }
 
+// An unterminated final line that PARSES is a whole record whose terminator went
+// missing — which is what an editor that strips trailing newlines leaves behind.
+// Dropping it destroys a committed event, and it did.
+func TestCompleteFinalLineWithoutNewlineIsARecord(t *testing.T) {
+	h := home(t)
+	heard(t, h, line(t, "one.happened", map[string]string{"t": "first"}))
+
+	f, _ := os.OpenFile(logPath(h), os.O_WRONLY|os.O_APPEND, 0644)
+	f.WriteString(`{"id":"x","seq":2,"name":"two.happened","occurred_at":"2026-01-01T00:00:00Z","payload":{"t":"second"}}`)
+	f.Close()
+
+	events, err := readEvents(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Name != "two.happened" {
+		t.Fatalf("a complete final event without a newline was dropped: %d events", len(events))
+	}
+	// The next append must not overwrite it, glue onto it, or reuse its seq.
+	heard(t, h, line(t, "three.happened", map[string]string{}))
+	events, err = readEvents(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("want 3 records after the append, got %d", len(events))
+	}
+	if events[1].Name != "two.happened" {
+		t.Fatal("the committed record was destroyed by the append")
+	}
+	if events[2].Seq != 3 {
+		t.Fatalf("the append reused a sequence number: %d", events[2].Seq)
+	}
+}
+
 // Real corruption in the middle is not the same thing and must not be silently
 // skipped: that would change the instance's state without saying so.
 func TestCorruptMiddleLineIsAnErrorThatNamesIt(t *testing.T) {

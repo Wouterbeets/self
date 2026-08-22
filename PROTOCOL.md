@@ -414,11 +414,14 @@ workaround — the protocol being its own migration path is the claim.
 - **Nothing is timed out.** A capability script that hangs hangs the invocation,
   and inside a `while ask=$(self)` loop it hangs the loop. Wrap it with
   `timeout` if that matters to you; the kernel does not own that policy.
-- **A record is a line terminated by a newline.** A crash mid-write leaves
-  bytes that were never a record, and the next append drops them, saying so.
-  Real corruption further up is an error naming the line, never a silent skip:
-  the log is authoritative, so it is not the kernel's place to decide which of
-  your committed records to ignore.
+- **The last line of the log is judged by whether it is a whole event.**
+  Terminated by a newline, it is a record. Unterminated but parsing as an event,
+  it is also a record — complete, missing only its terminator, which is what an
+  editor that strips trailing newlines leaves behind — and the next append gives
+  it one. Unterminated and unparseable, it is a torn write: skipped, and dropped
+  by the next append, which says so. Real corruption further up is an error
+  naming the line, never a silent skip: the log is authoritative, so it is not
+  the kernel's place to decide which of your committed records to ignore.
 - **A command's runtime failure is not an event.** Its exit code and stderr are
   the caller's to see; nothing is appended, so a failing command leaves no trace
   in the log. Only a refused *authoring* attempt becomes state.

@@ -92,13 +92,20 @@ func logPath(home string) string { return filepath.Join(home, "events.jsonl") }
 
 // readEvents replays the log from disk.
 //
-// A record is a line TERMINATED BY A NEWLINE. A trailing fragment with no
-// newline was never durably committed — a crash, a full disk, a kill mid-write,
-// or simply another process appending this instant — so it is not a record and
-// is skipped. Without that rule a single short write bricked the instance
-// permanently, rehydrate included, and every read raced every append.
+// The last line is the interesting one, because a file can be caught mid-write —
+// a crash, a full disk, a kill, or simply another process appending this instant.
+// The rule that separates the cases is whether those bytes are a WHOLE event:
 //
-// A malformed line in the MIDDLE is different: that is real corruption, and it
+//   - Terminated by a newline: a record. Always.
+//   - Unterminated but parses as an event: also a record. It is complete; only
+//     its terminator is missing, which is what an editor that strips trailing
+//     newlines leaves behind. Dropping it would destroy a committed event.
+//   - Unterminated and does not parse: a torn write. Not a record, skipped, and
+//     dropped by the next append. Without this a single short write bricked the
+//     instance permanently, rehydrate included, and every read raced every
+//     append.
+//
+// A malformed line in the MIDDLE is none of those: it is real corruption, and it
 // is an error naming the line, because silently skipping it would change the
 // instance's state without saying so.
 func readEvents(home string) ([]Event, error) {
@@ -116,13 +123,13 @@ func readEvents(home string) ([]Event, error) {
 		if line == "" {
 			continue
 		}
-		if !terminated {
-			// The tail of the file, mid-write. Not a record.
-			fmt.Fprintf(os.Stderr, "self: ignoring an unterminated final line in events.jsonl (%d bytes) — it was never committed\n", len(line))
-			break
-		}
 		var e Event
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			if !terminated {
+				// Caught mid-write: incomplete bytes, not a record.
+				fmt.Fprintf(os.Stderr, "self: ignoring an unterminated, incomplete final line in events.jsonl (%d bytes) — it was never committed\n", len(line))
+				break
+			}
 			return nil, fmt.Errorf("events.jsonl line %d is not a readable event: %w — the log is authoritative, so fix that line (the rest of the file is intact)", n+1, err)
 		}
 		events = append(events, e)
@@ -209,15 +216,19 @@ func appendLocked(home string, evs []Event) error {
 	return f.Close()
 }
 
-// dropFragment removes an unterminated final line before the next append.
+// dropFragment makes the log end on a record boundary before the next append,
+// which means deciding what an unterminated final line is.
 //
-// This is the one place the log shrinks, and it does not violate append-only: a
-// record is a line terminated by a newline, so those bytes were never a record.
-// The alternatives are both worse. Appending straight on top glues this batch to
-// the fragment and destroys the committed record above it. Merely closing the
-// fragment with a newline promotes uncommitted bytes into a permanently
-// unreadable middle line — which bricks every later read, as it did before this
-// was written this way.
+// If it parses as an event it is a whole record whose terminator went missing —
+// an editor that strips trailing newlines is the ordinary way — so it is
+// TERMINATED, never discarded: dropping it would destroy a committed event.
+//
+// If it does not parse, it is a torn write, and it is truncated away. That is
+// the one place this log shrinks, and it does not violate append-only, because
+// those bytes were never a record. Both alternatives are worse: appending
+// straight on top glues the batch to the fragment and destroys the record above
+// it, and closing an incomplete fragment with a newline promotes garbage into a
+// permanently unreadable middle line, which bricks every later read.
 //
 // Call under the lock.
 func dropFragment(home string) error {
@@ -248,16 +259,25 @@ func dropFragment(home string) error {
 	if i == int(read)-1 {
 		return nil // already ends on a record boundary
 	}
+	tail := buf[i+1:] // i == -1 gives the whole window, which is the whole file below
 	var keep int64
 	if i < 0 {
 		if read < size {
 			return fmt.Errorf("events.jsonl has no newline in its last %d bytes; refusing to guess where the last record ends", window)
 		}
-		keep = 0 // the whole file is one unterminated fragment
+		keep = 0 // the whole file is one unterminated line
 	} else {
 		keep = size - read + int64(i) + 1
 	}
-	fmt.Fprintf(os.Stderr, "self: dropping %d uncommitted byte(s) from the end of events.jsonl — a record is a terminated line, so those bytes were never one\n", size-keep)
+
+	// Whole record, missing only its terminator? Give it one.
+	var e Event
+	if json.Unmarshal(bytes.TrimSpace(tail), &e) == nil {
+		_, err := f.WriteAt([]byte("\n"), size)
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "self: dropping %d incomplete byte(s) from the end of events.jsonl — they parse as no event, so they were never a record\n", size-keep)
 	return f.Truncate(keep)
 }
 
@@ -296,9 +316,9 @@ func lastSeq(home string) (int, error) {
 			}
 		}
 		lines := bytes.Split(buf, []byte{'\n'})
-		// The final element is whatever followed the last newline: an
-		// uncommitted fragment, or empty. Never a record.
-		lines = lines[:len(lines)-1]
+		// The final element is whatever followed the last newline. It counts
+		// only if it parses — same rule as readEvents — so the walk below tries
+		// it first and falls through when it is a torn write.
 		for i := len(lines) - 1; i >= 0; i-- {
 			line := bytes.TrimSpace(lines[i])
 			if len(line) == 0 {
