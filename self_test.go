@@ -171,6 +171,26 @@ func TestEventNamesMustBeDotted(t *testing.T) {
 	}
 }
 
+// A payload key that carries null is the same as no payload: normalized, so no
+// view has to defend against None. And raw bytes never reach the log, because a
+// RawMessage is written through verbatim and would break every view after it.
+func TestPayloadIsAlwaysValidJSONObject(t *testing.T) {
+	h := home(t)
+	heard(t, h, `{"name":"null.one","payload":null}`+"\n")
+	events, _ := readEvents(h)
+	if len(events) != 1 || string(events[0].Payload) != "{}" {
+		t.Fatalf("a null payload was not normalized: %s", events[0].Payload)
+	}
+	ensureSecret(h)
+	bad := newEvent("bad.one", json.RawMessage("{\"t\":\"\xff\xfe\"}"))
+	if err := appendEvents(h, []Event{bad}); err == nil {
+		t.Fatal("invalid UTF-8 reached the log")
+	}
+	if events2, err := readEvents(h); err != nil || len(events2) != 1 {
+		t.Fatalf("the log did not survive the refusal: %d %v", len(events2), err)
+	}
+}
+
 func TestConcurrentAppendsDoNotCollide(t *testing.T) {
 	h := home(t)
 	ensureSecret(h)
@@ -412,6 +432,23 @@ func TestPreambleDoesNotCostThePass(t *testing.T) {
 	// The ignored lines are echoed, not swallowed.
 	if !strings.Contains(report, "That should do it.") {
 		t.Fatalf("ignored prose was swallowed: %s", report)
+	}
+}
+
+// Order within one body must not matter: hear appends everything first, then
+// resolves declared-ness, then installs. A mind that prints its script before
+// its declaration is not wrong, just unordered.
+func TestScriptBeforeItsDeclarationInOneBody(t *testing.T) {
+	h := home(t)
+	body := line(t, "script.authored", authored{Type: "view", Name: "n", Script: "#!/bin/sh\ncat >/dev/null\necho ok\n"}) +
+		line(t, "view.declared", decl{Name: "n", Description: "x", Consumes: []string{"a.one"}})
+	report := heard(t, h, body)
+	if !strings.Contains(report, "installed view/n") {
+		t.Fatalf("order within one body mattered: %s", report)
+	}
+	c := replayed(t, h).cap(kindView, "n")
+	if c.Receipt == nil || len(c.Receipt.Consumes) != 1 || c.Receipt.Consumes[0] != "a.one" {
+		t.Fatalf("the receipt did not pick up the declaration's consumes: %+v", c.Receipt)
 	}
 }
 

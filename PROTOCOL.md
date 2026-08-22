@@ -86,7 +86,7 @@ it, and the reason rides the next prompt.
 Escaping a script into JSON by hand is miserable. Don't:
 
 ```sh
-jq -n --arg t command --arg n entry --rawfile s /tmp/entry.sh \
+jq -nc --arg t command --arg n entry --rawfile s /tmp/entry.sh \
   '{name:"script.authored",payload:{type:$t,name:$n,script:$s}}' | self
 ```
 
@@ -115,6 +115,10 @@ opaque bytes: text, HTML, JSON, whatever you like. A view is a **pure function
 of those events** — same events in, same bytes out. Do not read the clock, the
 network, or anything not on stdin. A view is never materialized to disk; it is
 replayed on demand.
+
+A view meant to drive a loop should print **nothing** when there is nothing to
+report. Emptiness composes with the shell; a friendly "no goals yet" does not,
+and `while [ -n "$(self view goals)" ]` then never terminates.
 
 ## Answering
 
@@ -279,7 +283,21 @@ puts the exit code where the loop can see it and works in POSIX sh.
 Quiet means *the kernel* has nothing pending. It does not mean there is nothing
 to do in the world: unfinished domain work lives in this instance's own views,
 and only a mind reading them can see it. That is the correct division — the
-kernel cannot know what matters here.
+kernel cannot know what matters here, and should not pretend to.
+
+So there are two loops, different shapes on purpose. The one above grows the
+instance and converges when it has finished building itself. A loop that works
+toward something is driven by a **view**, because a view is just bytes:
+
+```sh
+while [ -n "$(self view goals)" ]; do
+  self "advance the open goals" | claude -p | self hear
+done
+```
+
+Nothing in the kernel knows what a goal is, and nothing needs to. Whatever an
+instance has learned to track can be looped on the same way — which is why a
+view that drives a loop must go silent when it is done.
 
 A mind with its own tools does not need the trailing `self hear` at all: it
 writes through the same doors you do (`self run …`, `… | self hear`) and the
@@ -300,12 +318,22 @@ Any other `SELF_*` variable is passed through to capability scripts.
 
 ## Lineage
 
-This kernel begins a new log lineage. It does not read receipts written by the
-previous one (the type was renamed and the signature is domain-separated), so a
-grown v1 instance does not migrate by copying `events.jsonl` — it migrates the
-way anything moves between instances, which is the point: `self give` under the
-old kernel, `self learn` under this one. A v1 log remains readable; only its
-receipts are inert.
+This kernel begins a new log lineage. It does not read the previous kernel's
+receipts: `script.compiled` is not a name it acts on, and the signature is
+domain-separated even where it is. What that means for a v1 `events.jsonl`,
+verified rather than assumed:
+
+- Every event still **reads**. `self view log` shows the whole history, domain
+  events included, with their moments and speakers intact.
+- Every v1 `command.declared` appears as a **pending declaration**, because its
+  receipt no longer verifies. So the loop offers to re-author it, locally and
+  under this key — a migration that runs itself.
+- v1 `projector.declared` events are invisible here: the kind was renamed to
+  `view`. Re-declare those as views.
+
+The clean path for a grown instance is the one anything else travels: `self
+give` under the old kernel, `self learn` under this one. That is not a
+workaround — the protocol being its own migration path is the claim.
 
 ## Limits, stated plainly
 

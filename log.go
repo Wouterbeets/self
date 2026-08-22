@@ -21,6 +21,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // An Event is the only record type. Two provenance fields sit beside the
@@ -66,7 +67,10 @@ func callerClaim() string { return strings.TrimSpace(os.Getenv("SELF_CALLER")) }
 func newEvent(name string, payload json.RawMessage) Event {
 	b := make([]byte, 16)
 	rand.Read(b)
-	if len(payload) == 0 {
+	// An absent payload and an explicit null are the same thing said twice, and
+	// only one of them is safe for a view to index into. Normalize, so no view
+	// ever has to defend against None.
+	if len(payload) == 0 || string(bytes.TrimSpace(payload)) == "null" {
 		payload = json.RawMessage(`{}`)
 	}
 	return Event{ID: hex.EncodeToString(b), Name: name, OccurredAt: time.Now().UTC(), Payload: payload}
@@ -123,6 +127,12 @@ func appendEvents(home string, evs []Event) error {
 	for i := range evs {
 		if !validEventName(evs[i].Name) {
 			return fmt.Errorf("event name %q is not lowercase dotted (see self help)", evs[i].Name)
+		}
+		// The log must stay valid UTF-8 JSON: a payload carrying raw bytes would
+		// land unchanged (RawMessage is passed through verbatim) and then break
+		// every view that parses it. Refuse at the door instead.
+		if !utf8.Valid(evs[i].Payload) {
+			return fmt.Errorf("event %q carries a payload that is not valid UTF-8", evs[i].Name)
 		}
 	}
 	if err := os.MkdirAll(home, 0755); err != nil {

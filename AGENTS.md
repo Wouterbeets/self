@@ -40,7 +40,7 @@ writes out of what you read back.
 **Escaping a script into JSON by hand is miserable. Don't:**
 
 ```sh
-jq -n --arg t command --arg n note --rawfile s /tmp/note.sh \
+jq -nc --arg t command --arg n note --rawfile s /tmp/note.sh \
   '{name:"script.authored",payload:{type:$t,name:$n,script:$s}}' | self hear
 ```
 

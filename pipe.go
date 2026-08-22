@@ -107,7 +107,9 @@ var errQuiet = fmt.Errorf("nothing pending")
 func cmdHear(home string, input []byte, out io.Writer) error {
 	evs, scripts, prose := wire(string(input))
 	if len(evs) == 0 && len(scripts) == 0 {
-		if strings.TrimSpace(string(input)) != "" {
+		if hint := wireHint(input); hint != "" {
+			fmt.Fprintf(os.Stderr, "self: heard no events — %s\n", hint)
+		} else if strings.TrimSpace(string(input)) != "" {
 			fmt.Fprintf(os.Stderr, "self: heard no events — passed %d line(s) through and wrote nothing\n", len(prose))
 		}
 		_, err := out.Write(input)
@@ -149,6 +151,19 @@ func wire(body string) (evs []Event, scripts []authored, prose []string) {
 		evs = append(evs, newEvent(probe.Name, probe.Payload))
 	}
 	return evs, scripts, prose
+}
+
+// wireHint names the one wire mistake that is much likelier than any other: a
+// whole body that is a single pretty-printed JSON object. `jq -n` indents by
+// default, so the recipe in the protocol is one flag away from silently doing
+// nothing, and "heard no events" would send its author looking at the payload
+// instead of at the formatting.
+func wireHint(input []byte) string {
+	var whole wireLine
+	if json.Unmarshal(input, &whole) != nil || whole.Name == "" {
+		return ""
+	}
+	return "the body is ONE pretty-printed JSON object, and the wire is one object per line. Re-emit it compact (jq -c, or json.dumps without indent)."
 }
 
 type wireLine struct {
@@ -249,8 +264,10 @@ func hear(home string, evs []Event, scripts []authored, prose []string, out io.W
 		c := st.cap(r.Type, r.Name)
 		c.Receipt, c.RcptSeq, c.Reject = &r, e.Seq, nil
 		st.Reject = dropRejection(st.Reject, c.key())
+		// The receipt is the record; the file is a convenience that any later
+		// run re-derives. Failing to write it must not cost the rest of the body.
 		if _, err := materialize(home, st, r.Type, r.Name); err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "self: installed %s but could not write cap/: %s (a later run re-derives it)\n", c.key(), err)
 		}
 		installed = append(installed, c.key())
 	}
