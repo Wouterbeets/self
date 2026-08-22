@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // ─────────────────────────────── helpers ────────────────────────────────────
@@ -644,9 +645,11 @@ func TestPreambleDoesNotCostThePass(t *testing.T) {
 	if replayed(t, h).cap(kindCommand, "entry") == nil {
 		t.Fatal("the declaration did not land")
 	}
-	// The ignored lines are echoed, not swallowed.
-	if !strings.Contains(report, "That should do it.") {
-		t.Fatalf("ignored prose was swallowed: %s", report)
+	// Only the report reaches stdout: a driver script parses it, so chatter
+	// must not be interleaved with it. The ignored lines go to stderr, named
+	// and counted, which is the whole price of choosing leniency.
+	if strings.Contains(report, "That should do it.") {
+		t.Fatalf("ignored prose was interleaved with the report on stdout:\n%s", report)
 	}
 }
 
@@ -1413,6 +1416,73 @@ func TestUnknownVerbIsNotSilentlyAnAsk(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "what is going on") {
 		t.Fatal("the ask was lost")
+	}
+}
+
+// No file in this repository may show a pipeline whose last stage is a bare
+// `self`. That pipeline used to be the headline idiom; now the read face takes
+// its ask from argv and never reads stdin, so it silently discards whatever came
+// down the pipe and situates the default prompt instead.
+//
+// This is not hypothetical tidiness. Five copies of the old loop survived the
+// rewrite — in main.go's package doc, pipe.go's header, cmdLearn's doc comment,
+// lessons/chat, and worst of all a runtime stderr line that told every user of
+// `self learn` to run the broken pipeline — in a change whose own commit message
+// boasted about eliminating six hand-synced copies of one contract. A comment
+// cannot be tested by reading it, so it is tested here.
+func TestNoFileShowsThePipelineThatDiscardsTheAsk(t *testing.T) {
+	// Built from pieces so this file does not trip its own check.
+	needle := "|" + " self"
+	var offences []string
+
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" || info.Name() == "cap" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == "self_test.go" {
+			return nil
+		}
+		switch filepath.Ext(path) {
+		case ".go", ".md", ".sh", "":
+		default:
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || !utf8.Valid(data) {
+			return nil
+		}
+		for n, ln := range strings.Split(string(data), "\n") {
+			rest := ln
+			for {
+				i := strings.Index(rest, needle)
+				if i < 0 {
+					break
+				}
+				after := strings.TrimLeft(rest[i+len(needle):], " \t")
+				// A pipeline into `self hear` is the write door and correct.
+				// Anything else — end of line, a comment, a redirect, another
+				// pipe — is the loop that throws the ask away.
+				if !strings.HasPrefix(after, "hear") {
+					offences = append(offences,
+						fmt.Sprintf("%s:%d: %s", path, n+1, strings.TrimSpace(ln)))
+				}
+				rest = rest[i+len(needle):]
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(offences) > 0 {
+		t.Fatalf("a pipeline ending in a bare `self` discards its ask — the write door is `self hear`:\n  %s",
+			strings.Join(offences, "\n  "))
 	}
 }
 

@@ -5,8 +5,9 @@
 The kernel keeps no diary. It has no `self.asked`, no `self.replied`, no
 conversation of its own — that was a second conversation living beside this one,
 and it is gone. So a mind that wants to say something to a human needs a channel,
-and this lesson is it. Learn it early: without it, `echo "…" | self | claude -p |
-self` can do durable work but cannot answer you in words.
+and this lesson is it. Learn it early: without it, a pass through
+`self "…" | claude -p | self hear` can do durable work but cannot answer you in
+words.
 
 Conversation is a capability, not a kernel feature. That is the whole point of
 this account.
@@ -19,10 +20,10 @@ piped between two selves, so a conversation advances in two ordinary moves:
 - **A human speaks through a command.** `self run say <text…>` appends one
   `chat.message` with role `user`. That is all it does — no waiting, no network,
   no mind.
-- **A mind speaks through the wire.** A pass (`self | claude -p | self`) reads
-  the conversation by replaying it, and answers by printing one `chat.message`
-  with role `assistant` — plus any declaration or `script.authored` the request
-  called for, in the same breath.
+- **A mind speaks through the wire.** A pass (`self | claude -p | self hear`)
+  reads the conversation by replaying it, and answers by printing one
+  `chat.message` with role `assistant` — plus any declaration or
+  `script.authored` the request called for, in the same breath.
 
 A user message with no assistant message after it is an honest state, not an
 error: it means the next pass has work. The view shows it as it stands.
@@ -61,6 +62,6 @@ error: it means the next pass has work. The view shows it as it stands.
 ```sh
 self run say "what can you do?"
 self view chat                  # shows the question, marked unanswered
-self | claude -p | self         # the mind reads it and answers
+self | claude -p | self hear    # the mind reads it and answers
 self view chat                  # shows both turns
 ```

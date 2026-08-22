@@ -1,19 +1,24 @@
 package main
 
-// The seam. `self` is a filter and the mind is whatever the shell puts between
-// two invocations of it:
+// The seam: two faces, and which one runs is structural. An ask arrives as argv
+// and is situated (a read, appending nothing); what comes back from a mind
+// arrives on stdin, at `self hear` (the one write door).
 //
-//	echo "add a mood tracker" | self | claude -p | self
+//	self "add a mood tracker" | claude -p | self hear
 //
-// Two faces, and the content of stdin picks which — never a terminal, never a
-// flag. The law is that reads project and writes append: situating an ask
-// appends nothing, so an agent can orient a hundred times without scarring the
-// log. That is the whole dispatcher, and it behaves identically in a terminal,
-// a pipe, a script, a sandbox and cron.
+// Prose alone cannot tell an ask from an answer to one, which is why the
+// previous kernel reached for isatty — and why its documented loop misfiled a
+// mind's reply as a question everywhere an agent actually runs, while nobody
+// could know what `self` did without simulating file descriptors.
 //
-// The previous kernel decided this with isatty, which meant the documented loop
-// misfiled a mind's reply as a question everywhere an agent actually runs, and
-// meant no one could know what `self` did without simulating file descriptors.
+// The law: reads project, writes append, orientation is a read. An agent can
+// situate a hundred times without scarring the log, and the read face never
+// touches stdin, so it cannot block at the head of a pipeline either.
+//
+// PROTOCOL.md is the contract — the wire, the loop, the exit codes. Comments in
+// this package point at it rather than restating it, because six hand-synced
+// copies of one contract is how the previous kernel came to contradict itself
+// inside a single brief.
 
 import (
 	"bufio"
@@ -87,8 +92,9 @@ func cmdSituate(home string, ask string, out io.Writer) error {
 	return nil
 }
 
-// errQuiet is exit code 3: the read succeeded and there was nothing to do. It is
-// what lets `while self | mind | self hear; do :; done` terminate.
+// errQuiet is exit code 3: the read succeeded and there was nothing to do — the
+// loop's convergence signal. PROTOCOL.md's Exit codes section carries the shell
+// idiom that reads it, and the reason a pipeline cannot.
 var errQuiet = fmt.Errorf("nothing pending")
 
 // cmdHear is the write face — the only door a mind's output enters through.
@@ -330,10 +336,18 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 		fmt.Fprintf(out, "retired %s\n", k)
 	}
 	if len(prose) > 0 {
-		fmt.Fprintf(os.Stderr, "self: ignored %d line(s) that were not events (echoed below the report)\n", len(prose))
+		// Loud on purpose. Leniency means a stray line does not cost the pass,
+		// and the price is that a line which SHOULD have been an event now
+		// vanishes quietly unless this says otherwise. So it names how many and
+		// shows the first, and the lines go to stderr rather than stdout: the
+		// report is the outcome and a driver script parses it, while chatter is
+		// commentary and belongs beside it, not in it.
+		fmt.Fprintf(os.Stderr, "self: IGNORED %d line(s) — not events. First: %q\n",
+			len(prose), trunc(prose[0], 120))
 		for _, line := range prose {
-			fmt.Fprintln(out, line)
+			fmt.Fprintf(os.Stderr, "self:   ignored | %s\n", trunc(line, 200))
 		}
+		fmt.Fprintf(os.Stderr, "self: a line is an event only with a dotted lowercase name AND a payload key (see self help)\n")
 	}
 	if p := st.pending(); len(p) > 0 {
 		names := make([]string, 0, len(p))

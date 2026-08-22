@@ -2,18 +2,24 @@
 // memory. One append-only log is the only authoritative state; every capability
 // and every view is a deterministic replay of it. The kernel holds no model and
 // spawns nothing: intelligence enters through a shell pipe, where the mind is
-// whatever process you put between two invocations of self.
+// whatever process you put beside it.
 //
-//	echo "add a mood tracker" | self | claude -p | self
+//	self "add a mood tracker" | claude -p | self hear
 //
-// The first self situates the ask against the instance's own state and appends
-// nothing. The mind does durable work through installed commands and prints
-// events. The second self hears them: they land, and authored scripts install
-// under receipts the kernel signs with a key only it holds. A declaration
-// without a script stays pending and rides the next prompt, so the loop
-// converges — that is the strange loop, one shell pass at a time.
+// An ask arrives as argv, so the first self situates it against the instance's
+// own state and appends nothing. The mind does durable work through installed
+// commands and prints events. `self hear` lands them: events append, and
+// authored scripts install under receipts the kernel signs with a key only it
+// holds. A declaration without a script stays pending and rides the next
+// prompt, so the loop converges — that is the strange loop, one shell pass at a
+// time.
 //
 // Reads project. Writes append. Orientation is a read.
+//
+// PROTOCOL.md is the contract, embedded here and printed by `self help`. It is
+// the only place the wire is described: comments in this package point at it
+// rather than restating it, because six hand-synced copies of one contract is
+// how the previous kernel came to contradict itself inside a single brief.
 package main
 
 import (

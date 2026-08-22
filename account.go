@@ -152,7 +152,7 @@ func accountName(ref string) string {
 // attestation lands last — it must be last, because it hashes what actually
 // landed. The intelligent half rides the pipe: stdout is the learning prompt.
 //
-//	self learn account/ | claude -p | self
+//	self learn account/ | claude -p | self hear
 func cmdLearn(home, ref string, out io.Writer) error {
 	a, err := readAccount(ref)
 	if err != nil {
@@ -196,13 +196,10 @@ func cmdLearn(home, ref string, out io.Writer) error {
 	ae.Via = doorKernel // the kernel's own attestation, like a receipt
 	batch = append(batch, ae)
 
-	if prior := priorLearn(home, a); prior > 0 {
-		fmt.Fprintf(os.Stderr, "self: note — this exact account was already learned at seq %d; learning it again deposits its record a second time (the log is append-only, so both deposits stay)\n", prior)
-	}
 	if err := appendEvents(home, batch); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "self: learned %q — %d event(s) deposited; pipe this prompt to a mind:  self learn %s | claude -p | self\n", a.Name, len(a.Deposit), ref)
+	fmt.Fprintf(os.Stderr, "self: learned %q — %d event(s) deposited; pipe this prompt to a mind:  self learn %s | claude -p | self hear\n", a.Name, len(a.Deposit), ref)
 
 	st, err := loadState(home)
 	if err != nil {
@@ -210,29 +207,6 @@ func cmdLearn(home, ref string, out io.Writer) error {
 	}
 	_, err = io.WriteString(out, situate(home, st, learnAsk(ref, a)))
 	return err
-}
-
-// priorLearn reports the seq of an earlier attestation for this exact account
-// and record, or 0. Learning twice is legitimate — an account can be updated —
-// but doing it by accident duplicates a whole deposit, so say so.
-func priorLearn(home string, acc *account) int {
-	events, err := readEvents(home)
-	if err != nil {
-		return 0
-	}
-	for _, e := range events {
-		if e.Name != "lesson.learned" {
-			continue
-		}
-		var p struct {
-			Account      string `json:"account"`
-			RecordSha256 string `json:"record_sha256"`
-		}
-		if json.Unmarshal(e.Payload, &p) == nil && p.Account == acc.Name && p.RecordSha256 == acc.RecordHash {
-			return e.Seq
-		}
-	}
-	return 0
 }
 
 // learnAsk frames the work: realize this intent HERE, as this instance's own
