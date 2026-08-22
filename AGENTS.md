@@ -1,87 +1,72 @@
 # self — agent integration card
 
-Copy the section below into the agent instructions (`CLAUDE.md`, `AGENTS.md`,
-or system prompt) of any project whose sessions should use a self instance as
-shared persistent state. It assumes `self` is on PATH; by default the current
-working directory is the instance, or `SELF_HOME` can pin a shared one.
+Copy the section below into the agent instructions (`CLAUDE.md`, `AGENTS.md`, a
+system prompt) of any project whose sessions should share one persistent memory.
+It assumes `self` is on PATH. The working directory is the instance unless
+`SELF_HOME` pins one.
 
 ---
 
 ## self: persistent state for this project
 
-This environment carries `self`: an event-sourced runtime whose append-only
-log outlives your session. Anything worth keeping across sessions must be
-written to it as events; anything not in the log is lost when your context
-ends.
+This environment carries `self`: an event-sourced runtime whose append-only log
+outlives your session. Anything worth keeping across sessions must be written to
+it as events. Anything not in the log is lost when your context ends.
 
-**First, orient, and identify yourself:**
+**Orient first. Reading never changes anything.**
 
 ```sh
-cat "$SELF_HOME/site/brief.md"      # where you are, what exists, where to look
-export SELF_CALLER="<who you are>"   # your claim, recorded on events you cause
-export SELF_MIND_ID="<who you are>"  # signed into receipts for scripts you author
+export SELF_CALLER="<who you are>"   # recorded verbatim as `by` on what you write
+self brief                           # what exists, what is pending, what broke
+self help                            # the complete protocol — read it once
+self view log                        # what happened here lately, and who says so
 ```
 
-Set `SELF_CALLER` before you write anything. It is recorded verbatim as `by`
-on every event you cause; without it your events are indistinguishable from
-every other caller's, so on an instance several agents share, no reader can
-tell which agent wrote a line and you cannot filter your own writes out of
-what you read back.
+Set `SELF_CALLER` before you write. It is the only attribution there is: without
+it your events are indistinguishable from every other caller's, so on a shared
+instance nobody can tell which agent wrote a line and you cannot filter your own
+writes out of what you read back.
 
-The brief is a wake-up card. For depth, read `site/*.html` (the rendered
-state a human sees), `events.jsonl` (the raw log), `capabilities/` (the
-installed scripts, one directory per capability with the script at
-`<name>/run`).
+**The five things you can do**
 
-**The interface — one filter and a few verbs:**
+| | |
+|---|---|
+| read state | `self view <name>` — replays a view from the log. Never a command: a command's output is appended, so a query written as a command litters the log on every read. If the view you need is missing, author one. |
+| write | `self run <cmd> [args…]` for an installed verb, or print events: `echo '{"name":"note.added","payload":{"text":"…"}}' \| self hear` |
+| grow | declare a capability and author its script in one body — see `self help`. Only a kernel-signed receipt installs, and only for something this log declared. |
+| learn | `self learn <account-dir>` deposits an account's record and prints its learning prompt; answer it yourself or pipe it to another mind. |
+| ask | `self "<question>"` prints the situated prompt a mind would receive. Useful for seeing what another mind would be told. It appends nothing. |
 
-- **Read.** `self show <projection>` (or `$SELF_HOME/site/*.html`, or the
-  HTTP routes when serving). Projections are deterministic replays of the
-  log — they are the current state. The index page (`/`) lists every
-  command and projection this instance has. Reads go through projections,
-  never through commands: a command's output is appended to the log, so a
-  query implemented as a command leaves a render artifact on every read.
-  If the view you need is missing, author a projector (a short script:
-  events as JSONL on stdin, near-plain HTML on stdout) rather than adding
-  a read subcommand.
-- **Write.** `self run <command> [args…]` appends events and re-renders all
-  projections. Or pipe event JSONL straight in: `echo '{"name":"…","payload":{…}}' | self`.
-  The log is append-only; no operation is destructive.
-- **Persist.** State lives only in events. Route anything that must survive
-  the session through the instance's commands. Where a `remember` command
-  exists, use it for durable facts — one self-contained fact per call,
-  written for a future reader with no other context; check `/memory` before
-  re-learning something the instance already knows.
-- **Ask / extend.** The loop is a shell pipe and you can stand on either side
-  of it. To see what a mind would be asked: `echo "<ask>" | self` (this also
-  records the ask). To BE the mind: read that prompt and pipe your answer
-  back in — event lines (`{"name":"…","payload":{…}}`), declarations
-  (`command.declared` / `projector.declared`), scripts
-  (`script.authored` with `{type, name, script}`), and always end with
-  `{"name":"self.replied","payload":{"text":"…"}}`. Only the kernel installs,
-  under a signed receipt. `self | cat` shows pending work. Declining to
-  extend is a valid outcome. `self protocol` prints the full wire contract.
-- **Learn.** `self learn <account-dir>` deposits an account's record and
-  prints its learning prompt; answer it (or pipe it to another mind) to grow
-  the capabilities it asks for.
+**Escaping a script into JSON by hand is miserable. Don't:**
 
-**Established instances may define conventions.** Long-lived instances often
-carry capabilities for memory (`remember` / `/memory`), work logs, or
-session hand-off. Check the index page; where such capabilities exist, use
-them: announce your session at start, record what you did before your
-context ends, and leave durable facts in memory rather than in prose
-nobody will re-read. When a thread's history stops informing decisions,
-record an authored summary of the current state so projections can lead
-with it; the log keeps the full record, summaries keep readers cheap.
+```sh
+jq -nc --arg t command --arg n note --rawfile s /tmp/note.sh \
+  '{name:"script.authored",payload:{type:$t,name:$n,script:$s}}' | self hear
+```
 
-**The log is authoritative** over any rendered page, note, or this card.
-`self rehydrate` rebuilds the entire instance from `events.jsonl` +
-`.secret`; what survives that is the actual state.
+**Established instances carry conventions.** A long-lived instance usually has
+capabilities for memory, work logs, or session hand-off. Check `self brief` and
+use what is there: announce yourself at the start, record what you did before
+your context ends, and leave durable facts where a future cold reader will
+actually look — a view — rather than in prose nobody re-reads. When a thread's
+history stops informing decisions, write a summary through a command so views
+can lead with it; the log keeps everything, summaries keep readers cheap.
+
+**Two things not to do.** Do not edit `events.jsonl`, and do not write into
+`cap/` — installed bytes are content-addressed against a signed receipt and your
+edit will simply be overwritten the next time the capability runs. Do not reach
+for a harness session store (`claude -p --continue` and its kin) as memory: it
+chains state outside the log, where `rehydrate` cannot replay it and no audit can
+see it. If a cold start feels slow, that is design pressure pointed at the right
+target — improve the views.
+
+**The log is authoritative** over any view, any note, and this card.
+`self rehydrate` rebuilds the instance from `events.jsonl` + `.secret`; what
+survives that is the actual state.
 
 ---
 
-*Design note: the runtime does not distinguish an internal mind from an
-external agent — there is no internal mind. Everything intelligent stands in
-the same shell pipe, acts through the same three primitives (commands,
-events, projections), reads the same replayed state, and leaves receipts
-signed by the instance carrying its author string.*
+*Design note: the runtime does not distinguish an internal mind from an external
+agent, because there is no internal mind. Everything intelligent stands in the
+same shell pipe, acts through the same primitives, reads the same replayed
+state, and leaves receipts signed by the instance carrying its own claim.*
