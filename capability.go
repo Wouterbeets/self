@@ -252,15 +252,17 @@ func validCapability(typ, name string) bool {
 	if len(name) > 200 {
 		return false
 	}
-	segs := strings.Split(name, "/")
-	for i, seg := range segs {
+	for _, seg := range strings.Split(name, "/") {
 		if len(seg) > 64 {
 			return false
 		}
 		if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, ".") {
 			return false
 		}
-		if seg == "run" && i == len(segs)-1 {
+		// `run` is the file a capability's own directory holds, so it collides
+		// at every position, not only the last: a name like x/run/y needs
+		// cap/command/x/run to be a directory, which is where x's script lives.
+		if seg == "run" {
 			return false
 		}
 	}
@@ -560,6 +562,11 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 		out = append(out, e)
 	}
 	if err := sc.Err(); err != nil {
+		// Stop the producer as well as the read: waiting on a process still
+		// writing into a pipe nobody drains blocks forever.
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
 		cmd.Wait()
 		return nil, fmt.Errorf("reading command %q output: %w (nothing appended)", name, err)
 	}

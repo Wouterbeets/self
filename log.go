@@ -193,7 +193,16 @@ func appendLocked(home string, evs []Event) error {
 	if err != nil {
 		return err
 	}
+	// A batch is all or nothing. On a short write — a full disk is the usual
+	// way — roll the file back to where it started, still under the lock, so a
+	// torn tail never exists. dropFragment is the backstop for the writes that
+	// never reach here at all (a kill, a power cut), not the plan.
+	base := int64(0)
+	if st, serr := f.Stat(); serr == nil {
+		base = st.Size()
+	}
 	if _, err := f.Write(buf.Bytes()); err != nil {
+		f.Truncate(base)
 		f.Close()
 		return err
 	}
@@ -395,13 +404,28 @@ type receipt struct {
 	Sig      string   `json:"sig"`
 }
 
+// sign is the trust gate's arithmetic. Every field is length-prefixed so the
+// preimage is injective: two different receipts can never share one.
+//
+// consumes needs its COUNT prefixed as well as each element. Joining the list
+// into a single field left the partition unsigned, so a two-element list and one
+// element holding the same bytes with a separator inside hashed identically —
+// and that single element matches no event name, which means a validly-signed
+// receipt whose view is fed nothing.
 func sign(key []byte, r receipt) string {
 	m := hmac.New(sha256.New, key)
-	m.Write([]byte("self.receipt.v3\x00"))
-	fields := []string{r.Type, r.Name, r.Script, strings.Join(r.Consumes, "\x00"), r.By}
-	for _, f := range fields {
-		fmt.Fprintf(m, "%d:", len(f))
-		m.Write([]byte(f))
+	m.Write([]byte("self.receipt.v4\x00"))
+	field := func(s string) {
+		fmt.Fprintf(m, "%d:", len(s))
+		m.Write([]byte(s))
+	}
+	field(r.Type)
+	field(r.Name)
+	field(r.Script)
+	field(r.By)
+	fmt.Fprintf(m, "consumes=%d:", len(r.Consumes))
+	for _, c := range r.Consumes {
+		field(c)
 	}
 	return hex.EncodeToString(m.Sum(nil))
 }

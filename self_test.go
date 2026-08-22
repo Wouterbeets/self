@@ -401,6 +401,35 @@ func TestForgedReceiptIsInert(t *testing.T) {
 	}
 }
 
+// The receipt preimage must be injective. consumes was joined into one
+// length-prefixed field, so the PARTITION of the list went unsigned: a
+// two-element list and a single element holding the same bytes with a separator
+// inside hashed identically — and that single element matches no event name, so
+// the view is fed nothing under a signature that still verifies.
+func TestSignatureCoversTheConsumesPartition(t *testing.T) {
+	key := []byte("a key for signing")
+	sep := string([]byte{0})
+	two := receipt{Type: kindView, Name: "v", Script: "#!/bin/sh\ntrue\n", Consumes: []string{"a.one", "c.two"}}
+	one := two
+	one.Consumes = []string{"a.one" + sep + "c.two"}
+	if sign(key, two) == sign(key, one) {
+		t.Fatal("two different consumes lists share a signature")
+	}
+	empty := two
+	empty.Consumes = nil
+	blank := two
+	blank.Consumes = []string{""}
+	if sign(key, empty) == sign(key, blank) {
+		t.Fatal("no consumes and one empty element share a signature — one means the whole log")
+	}
+	// And nothing else about a receipt may collide either.
+	base := receipt{Type: kindCommand, Name: "ab", Script: "s", By: "x"}
+	shifted := receipt{Type: kindCommand, Name: "a", Script: "bs", By: "x"}
+	if sign(key, base) == sign(key, shifted) {
+		t.Fatal("a field boundary is not covered")
+	}
+}
+
 // Editing an installed script has no effect: execution resolves the receipt,
 // checks the blob against its own hash, and restores it.
 func TestTamperedScriptIsHealed(t *testing.T) {
@@ -449,7 +478,8 @@ func TestMaterializeFailsClosedAndSaysWhy(t *testing.T) {
 // directory holds, so it is refused at receipt time rather than at exec time.
 func TestReservedNamesAreRefused(t *testing.T) {
 	h := home(t)
-	for _, bad := range []string{"notes/run", "../escape", ".hidden", "a//b"} {
+	for _, bad := range []string{"notes/run", "x/run/y", "run", "../escape", ".hidden", "a//b",
+		strings.Repeat("n", 201), strings.Repeat("s", 65) + "/x"} {
 		body := line(t, "command.declared", decl{Name: bad, Description: "x"}) +
 			line(t, "script.authored", authored{Type: "command", Name: bad, Script: "#!/bin/sh\ntrue\n"})
 		heard(t, h, body)
