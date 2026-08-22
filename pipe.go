@@ -1,800 +1,391 @@
 package main
 
-// The seam. `self` is a filter, and the mind is whatever the shell puts
-// between two invocations of it:
+// The seam. `self` is a filter and the mind is whatever the shell puts between
+// two invocations of it:
 //
-//	echo "whats going on today?" | self | claude -p | self
+//	echo "add a mood tracker" | self | claude -p | self
 //
-// The kernel holds no model and spawns no mind — ever. The first `self` turns
-// prose into a situated prompt: the question wrapped with the orientation
-// brief, the recent conversation, any pending work, and the answer contract.
-// The mind is any process that reads that prompt, performs durable writes via
-// installed commands, and prints an ordinary prose summary. The second `self`
-// records that whole summary as one self.replied event and passes it through.
-// Pure event JSONL remains a low-level machine wire; mixed prose/event streams
-// are never guessed apart. Which face runs is decided by stdin and pipe direction:
+// Two faces, and the content of stdin picks which — never a terminal, never a
+// flag. The law is that reads project and writes append: situating an ask
+// appends nothing, so an agent can orient a hundred times without scarring the
+// log. That is the whole dispatcher, and it behaves identically in a terminal,
+// a pipe, a script, a sandbox and cron.
 //
-//	prose → pipe     → ask   (record self.asked, emit the situated prompt)
-//	prose → terminal → reply (record one self.replied, echo unchanged)
-//	event JSONL      → hear  (append/install; every nonblank line must be an event)
-//	nothing (a tty)  → the work prompt: pending compiles, else one reflection
-//
-// So the strange loop is one shell idiom, applied until quiet:
-//
-//	self | claude -p | self         # one improvement / compile cycle
-//
-// A declaration without a script stays pending and is asked again on every
-// pass — the loop converges when the mind has nothing left to author.
+// The previous kernel decided this with isatty, which meant the documented loop
+// misfiled a mind's reply as a question everywhere an agent actually runs, and
+// meant no one could know what `self` did without simulating file descriptors.
 
 import (
 	"bufio"
-	"bytes"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 )
 
-// ─────────────────────────────── the contracts ──────────────────────────────
+// protocolDoc is the contract, embedded so a `self` on PATH describes itself
+// with no repo in sight. `self help` prints it whole; the situated prompt
+// splices the marked section. One description of the wire, in one place.
+//
+//go:embed PROTOCOL.md
+var protocolDoc string
 
-// pipeContract is the shape of an installed capability script — what a mind
-// must author toward. It rides inside every prompt that asks for a script.
-const pipeContract = `command script: receives args as argv, current events as JSONL on stdin, writes new events as JSONL on stdout (one JSON object per line, fields: name, payload). The kernel assigns id, seq, occurred_at, and provenance (via — the door the invocation came through — and by, the caller's claim); a script cannot set them.
-projector script: receives the events matching its declared consumes list as JSONL on stdin (an empty list or "*" means every event — declare consumes precisely and the script never needs to filter), writes bare semantic HTML on stdout. Do not emit CSS, JavaScript, inline styles, or external assets: the kernel injects the shared shell at serve time. The kernel persists projector output to SELF_HOME/site/<name>.html.
-The kernel sets SELF_HOME on every script. Any language with a shebang works; use only standard libraries.`
-
-// answerContract closes every prompt the ask face emits. It teaches any mind —
-// claude -p, a local model, a shell script — how to speak back through the
-// pipe so the second `self` can hear it.
-const answerContract = `HOW TO ANSWER — use your tools to perform durable work through installed commands: self run <command> …. Your stdout is communication only: print one plain-text final summary describing what changed, evidence, blockers, and next action. The final self in the pipeline records the complete summary as one self.replied event and echoes it to the terminal. Do not print event JSON or mix machine records into prose.
-
-The log is the only memory: state not written through a command, and a summary not returned through the final self, did not persist.
-
-Capability authoring is the one low-level exception. When explicitly asked to author pending capabilities, stdout must be pure event JSONL with no prose. Emit declarations and scripts as:
-{"name":"script.authored","payload":{"type":"command|projector","name":"<capability>","script":"<the full script>"}}
-Only the kernel installs and signs; a declaration without a script stays pending and is asked again.
-
-You are expected to have tools: explore SELF_HOME yourself — site/*.html, events.jsonl, capabilities/ — before answering. Do not edit events.jsonl or install scripts yourself. THIS REPLY IS FINAL — you are not re-invoked.`
-
-// ─────────────────────────────── the dispatcher ─────────────────────────────
-
-// cmdPipe is bare `self`: the filter. Its face is chosen by the shape of
-// stdin, so the same word composes on either side of a mind.
-func cmdPipe(home string) error {
-	if err := ensureHome(home); err != nil {
-		return err
+// wireContract is PROTOCOL.md's own words about the wire, spliced rather than
+// restated. Six hand-synced copies of one contract is how the previous kernel
+// came to contradict itself inside a single brief.
+func wireContract() string {
+	_, rest, ok := strings.Cut(protocolDoc, "<!-- prompt:begin -->")
+	if !ok {
+		return ""
 	}
-	if stdinIsTTY() {
-		if stdoutIsTTY() {
-			// A human at a terminal: orientation, not a prompt.
-			fmt.Print(freshBrief(home))
-			fmt.Print(pipeStatus(home))
-			return nil
-		}
-		// `self | mind | self` with no piped question: emit the work prompt.
-		return emitWork(home, os.Stdout)
+	body, _, _ := strings.Cut(rest, "<!-- prompt:end -->")
+	return strings.TrimSpace(body)
+}
+
+// defaultAsk is what bare `self` situates: not a face, just the text used when
+// nobody supplied one. Pending work is already in the brief, so this does not
+// need a priority queue — it needs to point at what is there.
+const defaultAsk = `No specific ask. Look at the brief above, then decide.
+
+1. If declarations are pending, author them. That is the work of this pass.
+2. If a refusal stands, resolve it: author the capability correctly, or retire it.
+3. Otherwise read this instance's views — ` + "`self view <name>`" + ` — and act on
+   what they show. Unfinished domain work is real work, and the kernel cannot see
+   it: only the views can.
+4. If nothing there needs doing, choose ONE small improvement to this instance
+   and make it, or print nothing. Silence is a valid turn.`
+
+// ──────────────────────────────── the seam ──────────────────────────────────
+//
+// Direction is structural, not sniffed. An ask arrives as ARGV; what comes back
+// from a mind arrives on STDIN, at `self hear`. Prose alone cannot tell the two
+// apart — "what is going on?" and a mind's answer to it are both prose — which
+// is exactly why the previous kernel reached for isatty and got the loop wrong
+// everywhere an agent runs. So the read face never reads stdin (it would also
+// block at the head of a pipeline), and the write face is named.
+
+// situate is the read face: everything a cold mind needs to act, and nothing the
+// log does not already hold. Appends nothing, ever.
+func cmdSituate(home string, ask string, out io.Writer) error {
+	empty := strings.TrimSpace(ask) == ""
+	if empty {
+		ask = defaultAsk
 	}
-	input, err := io.ReadAll(os.Stdin)
+	st, err := loadState(home)
 	if err != nil {
 		return err
 	}
-	body := string(input)
-	if stdoutIsTTY() && strings.TrimSpace(body) != "" {
-		if evs, scripts, reply, ok := parseMachineWire(body); ok {
-			return hear(home, evs, scripts, reply, os.Stdout)
+	if _, err := io.WriteString(out, situate(home, st, ask)); err != nil {
+		return err
+	}
+	if empty && st.quiet() {
+		return errQuiet
+	}
+	return nil
+}
+
+// errQuiet is exit code 3: the read succeeded and there was nothing to do. It is
+// what lets `while self | mind | self hear; do :; done` terminate.
+var errQuiet = fmt.Errorf("nothing pending")
+
+// cmdHear is the write face — the only door a mind's output enters through.
+// Event lines land and install; every other line is ignored, echoed, and
+// counted. Nothing else is written.
+//
+// This used to be strict: a body was the wire only if EVERY line was an event,
+// on the theory that a mind narrating around JSON must not partially mutate
+// state. Driving the real loop killed that theory. Told plainly that stdout is
+// the wire, `claude -p` opened with one line — "Printing the six lines to
+// stdout now, exactly as the wire requires" — and six perfect events followed.
+// Strictness threw all six away. That is the modal behaviour of a chat-trained
+// model, and the property strictness protected does not exist here: `hear` is
+// only ever invoked to ingest, so there is no reply face for a prose body to be
+// mistaken for. Leniency is also less code — a stray fence or a backticked line
+// is just a line that is not an event.
+func cmdHear(home string, input []byte, out io.Writer) error {
+	evs, scripts, prose := wire(string(input))
+	if len(evs) == 0 && len(scripts) == 0 {
+		if strings.TrimSpace(string(input)) != "" {
+			fmt.Fprintf(os.Stderr, "self: heard no events — passed %d line(s) through and wrote nothing\n", len(prose))
 		}
-		return recordReply(home, body, os.Stdout)
+		_, err := out.Write(input)
+		return err
 	}
-	return pipeFilter(home, body, os.Stdout)
+	return hear(home, evs, scripts, prose, out)
 }
 
-// pipeFilter routes one stdin body to a face. Split from cmdPipe so tests
-// drive the seam without a terminal.
-func pipeFilter(home, input string, out io.Writer) error {
-	if evs, scripts, reply, ok := parseMachineWire(input); ok {
-		return hear(home, evs, scripts, reply, out)
-	}
-	question := strings.TrimSpace(input)
-	if question == "" {
-		return emitWork(home, out)
-	}
-	return emitAsk(home, question, out)
-}
+// ────────────────────────────────── wire ────────────────────────────────────
 
-func stdinIsTTY() bool  { return isTTY(os.Stdin) }
-func stdoutIsTTY() bool { return isTTY(os.Stdout) }
-
-func isTTY(f *os.File) bool {
-	st, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return st.Mode()&os.ModeCharDevice != 0
-}
-
-// pipeStatus is the one-glance state a human gets under the brief: what is in
-// flight (pending scripts, a waiting chat message) and what just broke (open
-// rejections) — all derived from the log, all continuable through the same
-// pipe. The brief itself stays pure orientation; this is the live margin.
-func pipeStatus(home string) string {
-	var b strings.Builder
-	if pending := pendingDecls(home); len(pending) > 0 {
-		fmt.Fprintf(&b, "\n%d declaration(s) pending scripts — run:  self | claude -p | self\n", len(pending))
-	}
-	if rejs := openRejections(home); len(rejs) > 0 {
-		last := rejs[len(rejs)-1]
-		where := strings.Trim(last.Type+"/"+last.Name, "/")
-		if where == "" {
-			where = "a script"
-		}
-		fmt.Fprintf(&b, "\n%d rejected script(s) unresolved — latest, %s: %s — run:  self | claude -p | self\n", len(rejs), where, last.Reason)
-	}
-	if seq, content, ok := unansweredChat(home); ok {
-		content = strings.ReplaceAll(content, "\n", " ")
-		if len(content) > 120 {
-			content = content[:120] + "…"
-		}
-		fmt.Fprintf(&b, "\na chat message (seq %d) is waiting for a reply: %q — run:  self | claude -p | self\n", seq, content)
-	}
-	b.WriteString("\nthe loop:  echo \"<ask>\" | self | claude -p | self      serve:  self serve\n")
-	return b.String()
-}
-
-// ──────────────────────────────── the wire ──────────────────────────────────
-
-// authored is a script the mind wrote for a declared capability, carried on
-// the wire as a script.authored line. It never lands in the log raw — the
-// signed script.compiled receipt is its record.
+// authored is a script a mind wrote, carried on the wire as script.authored. It
+// never lands in the log raw: the signed receipt is its record.
 type authored struct {
 	Type   string `json:"type"`
 	Name   string `json:"name"`
 	Script string `json:"script"`
 }
 
-// parseWire classifies a stdin body line by line: event lines (a JSON object
-// with a name), authored scripts (the script.authored event, lifted off the
-// wire), and everything else — prose, kept in stream order as the reply. The
-// text of a self.replied event joins the reply too: it is both memory and
-// message.
-func parseWire(input string) (evs []Event, scripts []authored, reply []string) {
-	sc := bufio.NewScanner(strings.NewReader(input))
-	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
+// wire splits a mind's output into events, authored scripts, and everything
+// else. A line is an event when it is a JSON object with a dotted lowercase
+// name AND a payload key. Both halves matter: on the name test alone, a mind
+// reporting {"name":"notes","status":"ok"} would land an event called "notes" in
+// the authoritative log.
+func wire(body string) (evs []Event, scripts []authored, prose []string) {
+	for _, line := range lines(body) {
+		probe, ok := eventLine(line)
+		if !ok {
+			prose = append(prose, line)
 			continue
 		}
-		content, fence := unfence(line)
-		if fence {
-			continue
-		}
-		var e struct {
-			Name    string          `json:"name"`
-			Payload json.RawMessage `json:"payload"`
-		}
-		if json.Unmarshal([]byte(content), &e) != nil || e.Name == "" {
-			reply = append(reply, line)
-			continue
-		}
-		if e.Name == "script.authored" {
-			// Kept even when malformed (empty script, unparseable payload):
-			// the hear face rejects it with a recorded reason — a bad authored
-			// line is a failure the log must remember, not a line to drop.
+		if probe.Name == "script.authored" {
+			// Kept even when malformed: a bad authored line is a failure the
+			// log must remember, not a line to drop.
 			var a authored
-			json.Unmarshal(e.Payload, &a)
+			json.Unmarshal(probe.Payload, &a)
 			scripts = append(scripts, a)
 			continue
 		}
-		if e.Name == "self.replied" {
-			var p struct{ Text string }
-			if json.Unmarshal(e.Payload, &p) == nil && p.Text != "" {
-				reply = append(reply, p.Text)
-			}
-		}
-		evs = append(evs, newEvent(e.Name, e.Payload))
+		evs = append(evs, newEvent(probe.Name, probe.Payload))
 	}
-	return evs, scripts, reply
+	return evs, scripts, prose
 }
 
-// parseMachineWire accepts only an entirely machine-shaped stream. One prose
-// line makes the whole body prose; this prevents accidental partial ingestion
-// when a mind narrates around JSON-looking text.
-func parseMachineWire(input string) (evs []Event, scripts []authored, reply []string, ok bool) {
-	seen := false
-	sc := bufio.NewScanner(strings.NewReader(input))
+type wireLine struct {
+	Name    string          `json:"name"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// eventLine parses one line, retrying without surrounding backticks — models
+// wrap single lines in code spans, and a fence line simply is not an event.
+func eventLine(line string) (wireLine, bool) {
+	for _, candidate := range []string{line, strings.TrimSpace(strings.Trim(line, "`"))} {
+		var w wireLine
+		if json.Unmarshal([]byte(candidate), &w) == nil && validEventName(w.Name) && w.Payload != nil {
+			return w, true
+		}
+	}
+	return wireLine{}, false
+}
+
+func lines(body string) []string {
+	var out []string
+	sc := bufio.NewScanner(strings.NewReader(body))
 	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
+		if line := strings.TrimSpace(sc.Text()); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// ────────────────────────────────── hear ────────────────────────────────────
+
+// hear is the write door: events land, authored scripts install under signed
+// receipts, and the outcome is reported. The whole body is one critical
+// section — a declaration and its script arrive in the same breath, and
+// resolving declared-ness between them must not race another invocation
+// retiring the same capability.
+func hear(home string, evs []Event, scripts []authored, prose []string, out io.Writer) error {
+	key, err := ensureSecret(home)
+	if err != nil {
+		return err
+	}
+	unlock, err := lockLog(home)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	by := callerClaim()
+	for i := range evs {
+		evs[i].Via, evs[i].By = doorHear, by
+	}
+	if err := appendLocked(home, evs); err != nil {
+		return err
+	}
+
+	events, err := readEvents(home)
+	if err != nil {
+		return err
+	}
+	st := replay(events, key)
+
+	var installed, refused []string
+	for _, a := range scripts {
+		r, err := install(home, st, a, by)
+		if err != nil {
+			rej := rejection{Type: a.Type, Name: a.Name, Reason: err.Error(), Excerpt: trunc(a.Script, excerptCap)}
+			payload, _ := json.Marshal(rej)
+			e := newEvent("script.rejected", payload)
+			e.Via = doorKernel // the refusal is the kernel's own act
+			// appendLocked assigns Seq into the slice it is given, so read the
+			// event back from there: a copy would carry seq 0 and make the
+			// capability look eternally pending.
+			batch := []Event{e}
+			if err := appendLocked(home, batch); err != nil {
+				return err
+			}
+			e = batch[0]
+			rej.Seq = e.Seq
+			st.Events = append(st.Events, e)
+			st.Reject = append(st.Reject, &rej)
+			if c := st.cap(a.Type, a.Name); c != nil {
+				c.Reject = &rej
+			}
+			refused = append(refused, fmt.Sprintf("%s/%s: %s", a.Type, a.Name, err))
 			continue
 		}
-		seen = true
-		var envelope struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal([]byte(line), &envelope) != nil || envelope.Name == "" {
-			return nil, nil, nil, false
-		}
-	}
-	if !seen || sc.Err() != nil {
-		return nil, nil, nil, false
-	}
-	evs, scripts, reply = parseWire(input)
-	return evs, scripts, reply, true
-}
-
-// recordReply is the final face of `self | mind | self`: stdout from the mind
-// is ordinary text, recorded whole as one reply and echoed byte-for-byte.
-func recordReply(home, input string, out io.Writer) error {
-	if err := ensureHome(home); err != nil {
-		return err
-	}
-	text := strings.TrimSpace(input)
-	if text == "" {
-		return nil
-	}
-	payload, _ := json.Marshal(map[string]string{"text": text})
-	e := newEvent("self.replied", payload)
-	e.Via, e.By = "pipe", callerClaim()
-	if err := appendEvent(home, &e); err != nil {
-		return err
-	}
-	refreshSiteAfter(home, []Event{e})
-	_, err := io.WriteString(out, input)
-	return err
-}
-
-// unfence strips the Markdown a chat-shaped mind (claude -p and its kin) wraps
-// JSON in, so a model that answers in prose still plugs into the pipe. A line
-// that is a bare fence marker (``` or ```json) is decoration; a single line
-// wrapped in backticks is unwrapped. Anything else passes through untouched.
-func unfence(line string) (content string, fence bool) {
-	t := strings.TrimSpace(line)
-	if strings.HasPrefix(t, "```") {
-		return "", true
-	}
-	if len(t) >= 2 && strings.HasPrefix(t, "`") && strings.HasSuffix(t, "`") {
-		return strings.TrimSpace(strings.Trim(t, "`")), false
-	}
-	return t, false
-}
-
-// ──────────────────────────────── hear ──────────────────────────────────────
-
-// authorClaim names who authored the bytes a receipt carries: SELF_MIND_ID
-// when the composer of the pipe set one, else the caller's claim, else the
-// door itself. A claim, recorded and signed — never verified.
-func authorClaim() string {
-	if id := strings.TrimSpace(os.Getenv("SELF_MIND_ID")); id != "" {
-		return id
-	}
-	if by := callerClaim(); by != "" {
-		return by
-	}
-	return "pipe"
-}
-
-// hear ingests what came back through the pipe: events land with the pipe's
-// provenance, authored scripts install under signed receipts (only for
-// capabilities this log has declared), and the reply passes through to out.
-func hear(home string, evs []Event, scripts []authored, reply []string, out io.Writer) error {
-	if err := ensureHome(home); err != nil {
-		return err
-	}
-	// Append first, install second, render once at the end — a declaration
-	// and its authored script often arrive in the same breath, and no
-	// projection should replay between the two.
-	for i := range evs {
-		evs[i].Via, evs[i].By = "pipe", callerClaim()
-		if err := appendEvent(home, &evs[i]); err != nil {
+		payload, _ := json.Marshal(r)
+		e := newEvent("script.installed", payload)
+		e.Via = doorKernel // the receipt is the kernel's own act; the author is signed inside
+		batch := []Event{e}
+		if err := appendLocked(home, batch); err != nil {
 			return err
 		}
-	}
-	if n := applyRetirements(home, evs); n > 0 {
-		fmt.Fprintf(os.Stderr, "self: retired %d capabilit(ies)\n", n)
-	}
-	installed := 0
-	var rejected []Event
-	for _, a := range scripts {
-		typ, name, err := installAuthored(home, a)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "self: %s\n", err)
-			if rej, rerr := recordRejection(home, typ, name, err.Error(), a.Script); rerr != nil {
-				fmt.Fprintf(os.Stderr, "self: recording the rejection: %s\n", rerr)
-			} else {
-				rejected = append(rejected, rej)
-			}
-			continue
+		e = batch[0]
+		st.Events = append(st.Events, e)
+		c := st.cap(r.Type, r.Name)
+		c.Receipt, c.RcptSeq, c.Reject = &r, e.Seq, nil
+		st.Reject = dropRejection(st.Reject, c.key())
+		if _, err := materialize(home, st, r.Type, r.Name); err != nil {
+			return err
 		}
-		installed++
+		installed = append(installed, c.key())
 	}
-	if installed > 0 {
-		refreshSite(home)
-	} else {
-		refreshSiteAfter(home, append(evs, rejected...))
+
+	retired := applyRetirements(home, evs)
+
+	// The report goes to stdout: this is the last stage of a pipeline, and
+	// whether the script installed is the one thing its operator needs.
+	if len(evs) > 0 {
+		fmt.Fprintf(out, "heard %d event(s): seq %d-%d\n", len(evs), evs[0].Seq, evs[len(evs)-1].Seq)
 	}
-	for _, line := range reply {
-		fmt.Fprintln(out, line)
+	for _, k := range installed {
+		fmt.Fprintf(out, "installed %s under a signed receipt\n", k)
 	}
-	fmt.Fprintf(os.Stderr, "self: heard %d event(s), installed %d script(s), rejected %d\n", len(evs), installed, len(rejected))
-	if pending := pendingDecls(home); len(pending) > 0 {
-		fmt.Fprintf(os.Stderr, "self: %d declaration(s) pending scripts — run:  self | claude -p | self\n", len(pending))
+	for _, r := range refused {
+		fmt.Fprintf(out, "REFUSED %s\n", r)
+	}
+	for _, k := range retired {
+		fmt.Fprintf(out, "retired %s\n", k)
+	}
+	if len(prose) > 0 {
+		fmt.Fprintf(os.Stderr, "self: ignored %d line(s) that were not events (echoed below the report)\n", len(prose))
+		for _, line := range prose {
+			fmt.Fprintln(out, line)
+		}
+	}
+	if p := st.pending(); len(p) > 0 {
+		names := make([]string, 0, len(p))
+		for _, c := range p {
+			names = append(names, c.key())
+		}
+		fmt.Fprintf(out, "pending: %s\n", strings.Join(names, ", "))
+	}
+	if len(refused) > 0 {
+		return fmt.Errorf("%d authored script(s) refused", len(refused))
 	}
 	return nil
 }
 
-// installAuthored installs one authored script, gated the only way anything
-// installs: the capability must be declared in this log (and not retired),
-// and the kernel signs a script.compiled receipt over the bytes. An authored
-// script whose type/name are blank matches the single pending declaration if
-// exactly one exists — tolerance for a terse mind, never ambiguity. The
-// resolved type/name come back even on failure, so the caller can record the
-// rejection against the right capability.
-func installAuthored(home string, a authored) (typ, name string, err error) {
-	typ, name = strings.TrimSpace(a.Type), strings.TrimSpace(a.Name)
+// install is the trust gate. A mind can only ever propose: the capability must
+// be declared in this log and not retired, and the kernel signs the bytes with
+// its own key. The consumes list is taken from the DECLARATION and signed with
+// the script, so what a view was signed against is what it will be fed.
+func install(home string, st *state, a authored, by string) (receipt, error) {
+	typ, name := strings.TrimSpace(a.Type), strings.TrimSpace(a.Name)
 	if typ == "" || name == "" {
-		pending := pendingDecls(home)
-		if len(pending) != 1 {
-			return typ, name, fmt.Errorf("script.authored without type/name matches nothing (pending: %d)", len(pending))
-		}
-		typ, name = pending[0].Type, pending[0].Name
+		return receipt{}, fmt.Errorf("script.authored needs both type and name")
+	}
+	if !validCapability(typ, name) {
+		return receipt{}, fmt.Errorf("script.authored for an unusable %s name %q (lowercase path segments; a trailing \"run\" segment is reserved)", typ, name)
 	}
 	if strings.TrimSpace(a.Script) == "" {
-		return typ, name, fmt.Errorf("script.authored without a script")
+		return receipt{}, fmt.Errorf("script.authored carries no script")
 	}
-	if typ != "command" && typ != "projector" {
-		return typ, name, fmt.Errorf("script.authored for unknown type %q", typ)
+	c := st.cap(typ, name)
+	if c == nil {
+		return receipt{}, fmt.Errorf("%s/%s is not declared in this log — declare it in the same body, before the script", typ, name)
 	}
-	events, err := readEvents(home)
-	if err != nil {
-		return typ, name, err
+	r := receipt{Type: typ, Name: name, Script: a.Script, By: by}
+	if typ == kindView {
+		r.Consumes = c.Decl.Consumes
 	}
-	commands, _, projectors, _ := declaredCaps(events)
-	declared := false
-	switch typ {
-	case "command":
-		_, declared = commands[name]
-	case "projector":
-		_, declared = projectors[name]
-	}
-	if !declared {
-		return typ, name, fmt.Errorf("script.authored for undeclared %s/%s — declare it first", typ, name)
-	}
-	if err := installScript(home, typ, name, a.Script); err != nil {
-		return typ, name, err
-	}
-	if err := appendReceipt(home, typ, name, a.Script, authorClaim()); err != nil {
-		return typ, name, err
-	}
-	fmt.Fprintf(os.Stderr, "self: installed %s/%s under a signed receipt\n", typ, name)
-	return typ, name, nil
+	r.Sig = sign(st.Key, r)
+	return r, nil
 }
 
-// ─────────────────────────────── rejections ─────────────────────────────────
-//
-// A script.authored the kernel refuses used to die in stderr — invisible to
-// the next pass of a stateless mind, outside the log→projections model
-// everything else lives in. Now the failure is an event: the kernel records
-// what it refused and why, and "is it still open" is derived by replay, like
-// pending declarations — there is no repair-state file and no repair
-// lifecycle. A rejection closes structurally: a verified receipt for the same
-// capability postdates it (the work got done), or a capability.retired
-// tombstone does (the work was dismissed).
-
-// rejectionExcerptCap bounds the rejected bytes carried in the log. Rejected
-// scripts never install, so replay never needs them whole — the excerpt is
-// for diagnosis, and the log is already unbounded enough.
-const rejectionExcerptCap = 1024
-
-// rejectionRecord is the payload of a script.rejected event — the kernel's
-// own testimony (via "kernel", never accepted from the pipe) about a
-// script.authored it refused to install.
-type rejectionRecord struct {
-	Type    string `json:"type,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Reason  string `json:"reason"`
-	Excerpt string `json:"excerpt,omitempty"`
-}
-
-// recordRejection appends the kernel's testimony that an authored script was
-// refused. Type/name may be empty when the wire line could not be resolved to
-// a capability; the reason always survives.
-func recordRejection(home, typ, name, reason, script string) (Event, error) {
-	excerpt := script
-	if len(excerpt) > rejectionExcerptCap {
-		excerpt = excerpt[:rejectionExcerptCap] + "…"
-	}
-	payload, _ := json.Marshal(rejectionRecord{Type: typ, Name: name, Reason: reason, Excerpt: excerpt})
-	e := newEvent("script.rejected", payload)
-	e.Via = "kernel" // the refusal is the kernel's own act, like a receipt
-	err := appendEvent(home, &e)
-	return e, err
-}
-
-// openRejection is a recorded refusal nothing has resolved yet — derived
-// state, never stored.
-type openRejection struct {
-	Seq    int
-	Type   string
-	Name   string
-	Reason string
-}
-
-// keyedRejection reports whether a rejection names a real capability — one a
-// declaration, receipt, or retirement could ever match.
-func keyedRejection(r openRejection) bool {
-	return (r.Type == "command" || r.Type == "projector") && validCapabilityName(r.Name)
-}
-
-// openRejections replays the log into the refusals still standing: the latest
-// kernel-stamped script.rejected per capability, open until a verified
-// receipt or a retirement for that capability postdates it. A rejection that
-// names no resolvable capability cannot be closed by either, so it closes on
-// any later successful install — it means "the last authoring pass failed",
-// and a later pass that installs anything supersedes it. Only via "kernel"
-// counts: doors are this log's facts, so a rejection arriving through the
-// pipe or a learned account is inert data here.
-func openRejections(home string) []openRejection {
-	events, err := readEvents(home)
-	if err != nil {
-		return nil
-	}
-	secret, err := loadSecret(home)
-	if err != nil {
-		return nil
-	}
-	open := map[string]openRejection{}
-	for _, e := range events {
-		switch e.Name {
-		case "script.rejected":
-			if e.Via != "kernel" {
-				continue
-			}
-			var r rejectionRecord
-			if json.Unmarshal(e.Payload, &r) != nil || r.Reason == "" {
-				continue
-			}
-			open[r.Type+"/"+r.Name] = openRejection{e.Seq, r.Type, r.Name, r.Reason}
-		case "script.compiled":
-			if rec, ok := verifiedReceipt(secret, e.Payload); ok {
-				delete(open, rec.Type+"/"+rec.Name)
-				for key, rej := range open {
-					if !keyedRejection(rej) {
-						delete(open, key)
-					}
-				}
-			}
-		case "capability.retired":
-			if d, ok := parseRetirement(e.Payload); ok {
-				delete(open, d.Type+"/"+d.Name)
-			}
-		}
-	}
-	out := make([]openRejection, 0, len(open))
-	for _, rej := range open {
-		out = append(out, rej)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
-	return out
-}
-
-// orphanRejections are the open rejections no pending declaration will carry:
-// the capability was never declared (or its declaration is gone), so the
-// pending section cannot surface the failure — the work face must.
-func orphanRejections(home string) []openRejection {
-	pendingKeys := map[string]bool{}
-	for _, p := range pendingDecls(home) {
-		pendingKeys[p.Type+"/"+p.Name] = true
-	}
-	var out []openRejection
-	for _, r := range openRejections(home) {
-		if keyedRejection(r) && !pendingKeys[r.Type+"/"+r.Name] {
+func dropRejection(rs []*rejection, key string) []*rejection {
+	out := rs[:0]
+	for _, r := range rs {
+		if r.Type+"/"+r.Name != key {
 			out = append(out, r)
 		}
 	}
 	return out
 }
 
-// ──────────────────────────────── ask ───────────────────────────────────────
-
-// emitAsk records the question — hearing an ask is an experience, and the log
-// is the only memory — then emits the situated prompt for whatever mind sits
-// downstream.
-func emitAsk(home, question string, out io.Writer) error {
-	if err := ensureHome(home); err != nil {
-		return err
+// applyRetirements takes retired capabilities off the readable surface as their
+// tombstones land, so disk never claims something the log has ended. Every
+// event stays; re-declaring revives it.
+func applyRetirements(home string, evs []Event) []string {
+	var out []string
+	for _, e := range evs {
+		if e.Name != "capability.retired" {
+			continue
+		}
+		var t struct{ Type, Name string }
+		if json.Unmarshal(e.Payload, &t) != nil || !validCapability(t.Type, t.Name) {
+			continue
+		}
+		unlink(home, t.Type, t.Name)
+		out = append(out, t.Type+"/"+t.Name)
 	}
-	payload, _ := json.Marshal(map[string]string{"text": question})
-	e := newEvent("self.asked", payload)
-	e.Via, e.By = "pipe", callerClaim()
-	if err := appendEvent(home, &e); err != nil {
-		return err
-	}
-	refreshSiteAfter(home, []Event{e})
-	_, err := io.WriteString(out, situatedPrompt(home, question))
-	return err
+	return out
 }
 
-// emitWork is the empty-stdin face: pending compiles if any, else one
-// reflection — so bare `self | claude -p | self` always means something, and
-// running it repeatedly converges when the mind has nothing left to author or
-// improve.
-func emitWork(home string, out io.Writer) error {
-	if err := ensureHome(home); err != nil {
-		return err
-	}
-	if len(pendingDecls(home)) > 0 {
-		_, err := io.WriteString(out, situatedPrompt(home,
-			"Author the pending scripts listed above. Emit one script.authored line per declaration; add nothing else unless something is plainly broken."))
-		return err
-	}
-	if orphans := orphanRejections(home); len(orphans) > 0 {
-		var ask strings.Builder
-		ask.WriteString("A previous pass authored script(s) the kernel rejected, and no matching declaration is pending:\n")
-		for _, r := range orphans {
-			fmt.Fprintf(&ask, "- %s/%s — rejected: %s\n", r.Type, r.Name, r.Reason)
-		}
-		ask.WriteString("For each one: if the capability is worth having, declare it (command.declared / projector.declared) and author its script (script.authored) in this answer; if it is not, dismiss the rejection by emitting {\"name\":\"capability.retired\",\"payload\":{\"type\":\"<type>\",\"name\":\"<name>\"}}. Resolve every line — an unresolved rejection is asked again on the next pass.")
-		_, err := io.WriteString(out, situatedPrompt(home, ask.String()))
-		return err
-	}
-	if seq, content, ok := unansweredChat(home); ok {
-		e := newEvent("self.reflected", json.RawMessage(`{}`))
-		e.Via, e.By = "pipe", callerClaim()
-		if err := appendEvent(home, &e); err != nil {
-			return err
-		}
-		_, err := io.WriteString(out, situatedPrompt(home, fmt.Sprintf(
-			"A user message on /chat (seq %d) is still waiting for a reply:\n\"%s\"\nAnswer it: emit one chat.message event with payload role \"assistant\" and content your reply. That reply is the work of this pass — explore the instance if you need context, but do not let any other improvement displace it.", seq, content)))
-		return err
-	}
-	e := newEvent("self.reflected", json.RawMessage(`{}`))
-	e.Via, e.By = "pipe", callerClaim()
-	if err := appendEvent(home, &e); err != nil {
-		return err
-	}
-	ask := strings.TrimSpace(os.Getenv("SELF_WORK_PROMPT"))
-	if ask == "" {
-		ask = "This is a self-improvement reflection. Explore this instance — capabilities, recent events, projections — and choose ONE small, high-value improvement. Use installed commands for durable work; if explicit capability authoring is required, emit pure event JSONL with no prose. If nothing is worth changing, say so plainly. Keep it minimal."
-	}
-	_, err := io.WriteString(out, situatedPrompt(home, ask))
-	return err
-}
+// ───────────────────────────────── the prompt ───────────────────────────────
 
-// situatedPrompt is the ask face's whole output: the ask, situated. Brief,
-// conversation, pending work, the ask itself, and the answer contract — a
-// complete cold-start context for any mind, built only from the log and its
-// replays.
-func situatedPrompt(home, ask string) string {
+// situate builds the situated prompt: the brief, pending work with the reason
+// each previous attempt failed, one exemplar of this instance's idiom, the wire
+// contract spliced from PROTOCOL.md, and the ask.
+func situate(home string, st *state, ask string) string {
 	var b strings.Builder
-	b.WriteString("You are the mind of a self instance — a local-first, event-sourced runtime. This prompt came out of `self`; your stdout will be piped back into `self`.\n\n")
-	b.WriteString(freshBrief(home))
-	b.WriteString(conversationTail(home))
-	b.WriteString(pendingSection(home))
-	b.WriteString("\n## The ask\n\n")
+	b.WriteString("You are the mind of a self instance. This came out of `self`; your stdout goes back into `self`.\n\n")
+	b.WriteString(brief(home, st))
+	b.WriteString(pendingSection(st))
+	b.WriteString("\n")
+	b.WriteString(wireContract())
+	b.WriteString("\n\n## The ask\n\n")
 	b.WriteString(strings.TrimSpace(ask))
-	b.WriteString("\n\n## How to answer\n\n")
-	b.WriteString(answerContract)
 	b.WriteString("\n")
 	return b.String()
 }
 
-// conversationTail renders the last few pipe exchanges so the loop reads as a
-// conversation. Only events that entered through the pipe door count — a
-// deposited record cannot speak here: doors are this log's facts, and the
-// tail trusts them.
-func conversationTail(home string) string {
-	events, err := readEvents(home)
-	if err != nil {
-		return ""
-	}
-	type turn struct{ who, text string }
-	var turns []turn
-	for _, e := range events {
-		switch e.Name {
-		case "self.asked", "self.replied":
-			if e.Via != "pipe" {
-				continue
-			}
-			var p struct{ Text string }
-			if json.Unmarshal(e.Payload, &p) == nil && p.Text != "" {
-				turns = append(turns, turn{e.Name[len("self."):], p.Text})
-			}
-		case "chat.message":
-			// the chat surface is the door users talk through; its turns
-			// surface in the tail no matter which CLI door carried them
-			var p struct{ Role, Content string }
-			if json.Unmarshal(e.Payload, &p) == nil && p.Content != "" {
-				who := "self"
-				if p.Role == "user" {
-					who = "you"
-				}
-				turns = append(turns, turn{who, p.Content})
-			}
-		}
-	}
-	if len(turns) <= 1 {
-		return "" // the current ask alone is no conversation
-	}
-	if len(turns) > 8 {
-		turns = turns[len(turns)-8:]
-	}
-	var b strings.Builder
-	b.WriteString("\n## Recent conversation (from the log)\n\n")
-	for _, t := range turns {
-		text := strings.ReplaceAll(t.text, "\n", " ")
-		if len(text) > 300 {
-			text = text[:300] + "…"
-		}
-		fmt.Fprintf(&b, "%s: %s\n", t.who, text)
-	}
-	return b.String()
-}
-
-// pendingDecl is a declared capability with no script yet — or one declared
-// anew since its last receipt, which is how revision looks on the log.
-type pendingDecl struct {
-	Type string
-	Name string
-	Decl json.RawMessage
-}
-
-// pendingDecls replays the log into the capabilities awaiting scripts: the
-// latest declaration per live capability, pending when no verified receipt
-// postdates it. Derived, like everything — there is no pending-state file.
-func pendingDecls(home string) []pendingDecl {
-	events, err := readEvents(home)
-	if err != nil {
-		return nil
-	}
-	secret, err := loadSecret(home)
-	if err != nil {
-		return nil
-	}
-	declSeq := map[string]int{}
-	declPayload := map[string]json.RawMessage{}
-	receiptSeq := map[string]int{}
-	var order []string
-	for _, e := range events {
-		if typ, name := declName(e); typ != "" {
-			key := typ + "/" + name
-			if _, seen := declSeq[key]; !seen {
-				order = append(order, key)
-			}
-			declSeq[key], declPayload[key] = e.Seq, e.Payload
-			continue
-		}
-		switch e.Name {
-		case "script.compiled":
-			if r, ok := verifiedReceipt(secret, e.Payload); ok {
-				receiptSeq[r.Type+"/"+r.Name] = e.Seq
-			}
-		case "capability.retired":
-			if d, ok := parseRetirement(e.Payload); ok {
-				key := d.Type + "/" + d.Name
-				delete(declSeq, key)
-				delete(declPayload, key)
-				delete(receiptSeq, key)
-			}
-		}
-	}
-	var pending []pendingDecl
-	done := map[string]bool{} // a retire-then-redeclare lists its key twice
-	for _, key := range order {
-		seq, live := declSeq[key]
-		if !live || done[key] || receiptSeq[key] >= seq {
-			continue
-		}
-		done[key] = true
-		typ, name, _ := strings.Cut(key, "/")
-		pending = append(pending, pendingDecl{typ, name, declPayload[key]})
-	}
-	return pending
-}
-
-// unansweredChat replays the log for the newest user chat.message with no
-// assistant chat.message after it. A user waiting on a reply is work: the
-// work face must surface it, because the conversation tail alone cannot
-// outrank a model's inclination to report "nothing pending" and stop.
-func unansweredChat(home string) (seq int, content string, ok bool) {
-	events, err := readEvents(home)
-	if err != nil {
-		return 0, "", false
-	}
-	var lastUser *Event
-	for i := range events {
-		e := &events[i]
-		if e.Name != "chat.message" {
-			continue
-		}
-		var p struct{ Role, Content string }
-		if json.Unmarshal(e.Payload, &p) != nil {
-			continue
-		}
-		switch p.Role {
-		case "user":
-			lastUser = e
-		case "assistant":
-			lastUser = nil
-		}
-	}
-	if lastUser == nil {
-		return 0, "", false
-	}
-	var p struct{ Content string }
-	json.Unmarshal(lastUser.Payload, &p)
-	return lastUser.Seq, p.Content, true
-}
-
-// pendingSection renders the compile asks: one DECLARATION block per pending
-// capability, the pipe contract they must honor, and one recently compiled
-// script as this instance's idiom.
-func pendingSection(home string) string {
-	pending := pendingDecls(home)
+// pendingSection is the strange loop's ask. The rejection reason replayed here
+// is the only thing that makes script.rejected teach anyone anything: without
+// it the refusal is a failure the log remembers and nothing reads.
+func pendingSection(st *state) string {
+	pending := st.pending()
 	if len(pending) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n## Pending work — declared capabilities awaiting scripts\n\n")
-	b.WriteString("For each declaration below, author a complete executable script (any language with a shebang, standard libraries only) honoring this contract, test it by execution with your own tools, and emit one script.authored line (see HOW TO ANSWER). If a declaration carries an \"implementation\", it is a reference: verify and adapt it — never copy it blindly.\n\n")
-	b.WriteString(pipeContract)
-	b.WriteString("\n")
-	rejections := map[string]string{}
-	for _, r := range openRejections(home) {
-		rejections[r.Type+"/"+r.Name] = r.Reason
-	}
-	for _, p := range pending {
-		fmt.Fprintf(&b, "\nDECLARATION (%s %q):\n%s\n", p.Type, p.Name, compactJSON(p.Decl))
-		if reason, ok := rejections[p.Type+"/"+p.Name]; ok {
-			fmt.Fprintf(&b, "Your previous attempt was REJECTED: %s. Author it again without repeating that mistake.\n", reason)
+	b.WriteString("\n## Pending — declared, awaiting a script\n\n")
+	b.WriteString("Author each one, test it by running it, and print its script.authored line.\n")
+	skip := map[string]bool{}
+	for _, c := range pending {
+		skip[c.key()] = true
+		d, _ := json.Marshal(c.Decl)
+		fmt.Fprintf(&b, "\n%s %q declared at seq %d:\n%s\n", c.Type, c.Name, c.DeclSeq, d)
+		if c.Reject != nil {
+			fmt.Fprintf(&b, "Your previous attempt was REFUSED: %s\nDo not repeat that mistake.\n", c.Reject.Reason)
 		}
 	}
-	skip := map[string]bool{}
-	for _, p := range pending {
-		skip[p.Type+"/"+p.Name] = true
-	}
-	if exName, exScript := exemplarScript(home, skip); exScript != "" {
-		b.WriteString("\nA recently compiled capability of this instance, as idiom — learn its shape, do not copy it blindly:\n")
-		fmt.Fprintf(&b, "\n--- EXEMPLAR %s ---\n%s\n--- END EXEMPLAR ---\n", exName, exScript)
+	if name, script := st.exemplar(skip); script != "" {
+		fmt.Fprintf(&b, "\nAn installed capability of this instance, as idiom — learn its shape, do not copy it:\n\n--- %s ---\n%s\n--- end ---\n", name, script)
 	}
 	return b.String()
-}
-
-// exemplarScript returns the most recently compiled script from the log's
-// verified receipts, skipping the capabilities being asked about (so a
-// recompile is never anchored to its own broken past). Traced compiles show a
-// mind spends its first minute rediscovering the instance's idiom from disk;
-// handing it one exemplar removes that phase.
-func exemplarScript(home string, skip map[string]bool) (exName, exScript string) {
-	events, err := readEvents(home)
-	if err != nil {
-		return "", ""
-	}
-	secret, err := loadSecret(home)
-	if err != nil {
-		return "", ""
-	}
-	for _, e := range events {
-		if e.Name != "script.compiled" {
-			continue
-		}
-		if r, ok := verifiedReceipt(secret, e.Payload); ok && !skip[r.Type+"/"+r.Name] {
-			exName, exScript = r.Type+"/"+r.Name, r.Script
-		}
-	}
-	const cap = 4096
-	if len(exScript) > cap {
-		exScript = exScript[:cap] + "\n… (truncated)"
-	}
-	return exName, exScript
-}
-
-func compactJSON(raw json.RawMessage) string {
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, raw); err != nil {
-		return string(raw)
-	}
-	return buf.String()
 }

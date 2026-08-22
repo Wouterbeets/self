@@ -1,0 +1,585 @@
+package main
+
+// Capabilities: one replay, one materialization, two ways to run.
+//
+// Everything derived — what exists, what is pending, what was refused, which
+// bytes are trusted — comes out of a single walk over the log in replay().
+// There is no second source and no cache to drift.
+
+import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+const (
+	kindCommand = "command"
+	kindView    = "view"
+)
+
+// decl is a declaration: a name and prose. Deliberately schemaless — v1 carried
+// params, an event schema, a reference implementation and a revision record,
+// none of which anything validated, and the reference implementation was a
+// runnable riding the one channel the account protocol exists to keep runnables
+// out of. What a command takes and emits belongs in Description, because that
+// string is what the next cold mind actually reads.
+type decl struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Consumes    []string `json:"consumes,omitempty"` // views only: the events fed on stdin
+}
+
+// capability is a live declared capability and whatever the log says about it.
+type capability struct {
+	Type    string
+	Name    string
+	Decl    decl
+	DeclSeq int
+	Receipt *receipt // the latest verified receipt, nil if never installed
+	RcptSeq int
+	Reject  *rejection // a refusal that still stands for this capability
+}
+
+func (c *capability) key() string { return c.Type + "/" + c.Name }
+
+// Pending reports whether this capability is waiting for a script: never
+// installed, or re-declared since its last receipt (which is what a revision
+// looks like on an append-only log).
+func (c *capability) Pending() bool { return c.Receipt == nil || c.RcptSeq < c.DeclSeq }
+
+// rejection is the kernel's testimony that it refused an authored script.
+type rejection struct {
+	Seq    int    `json:"-"`
+	Type   string `json:"type,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Reason string `json:"reason"`
+	// Excerpt is bounded: a refused script never installs, so replay never
+	// needs it whole — it is there to diagnose, not to restore.
+	Excerpt string `json:"excerpt,omitempty"`
+}
+
+const excerptCap = 1024
+
+// state is the log, replayed. Constructed once per invocation.
+type state struct {
+	Events []Event
+	Key    []byte
+	Caps   []*capability // live, in first-declared order
+	byKey  map[string]*capability
+	Reject []*rejection // refusals still standing, in log order
+}
+
+func loadState(home string) (*state, error) {
+	events, err := readEvents(home)
+	if err != nil {
+		return nil, err
+	}
+	return replay(events, secret(home)), nil
+}
+
+// replay is the only interpreter of the log. Given the events and the key, it
+// answers every derived question at once. A nil key means nothing verifies:
+// a directory holding a log but no .secret has no capabilities, which is the
+// truth about it.
+func replay(events []Event, key []byte) *state {
+	st := &state{Events: events, Key: key, byKey: map[string]*capability{}}
+	rejects := map[string]*rejection{}
+
+	forget := func(k string) {
+		delete(st.byKey, k)
+		delete(rejects, k)
+		for i, c := range st.Caps {
+			if c.key() == k {
+				st.Caps = append(st.Caps[:i], st.Caps[i+1:]...)
+				break
+			}
+		}
+	}
+	live := func(typ, name string) *capability {
+		k := typ + "/" + name
+		if c, ok := st.byKey[k]; ok {
+			return c
+		}
+		c := &capability{Type: typ, Name: name}
+		st.byKey[k] = c
+		st.Caps = append(st.Caps, c)
+		return c
+	}
+
+	for _, e := range events {
+		switch e.Name {
+		case "command.declared", "view.declared":
+			typ := strings.TrimSuffix(e.Name, ".declared")
+			var d decl
+			if json.Unmarshal(e.Payload, &d) != nil || !validCapability(typ, d.Name) {
+				continue
+			}
+			c := live(typ, d.Name)
+			c.Decl, c.DeclSeq = d, e.Seq
+
+		case "script.installed":
+			// Only a receipt this instance signed counts. A receipt for a
+			// capability no declaration mentions still installs — rehydrate
+			// must be able to rebuild from receipts alone — but it can only
+			// exist if someone held the key.
+			r, ok := verifyReceipt(key, e.Payload)
+			if !ok {
+				continue
+			}
+			c := live(r.Type, r.Name)
+			c.Receipt, c.RcptSeq = &r, e.Seq
+			// A successful install closes the refusal it supersedes, and any
+			// refusal too vague to name a capability.
+			delete(rejects, r.Type+"/"+r.Name)
+			delete(rejects, "/")
+
+		case "script.rejected":
+			// The kernel's own testimony only. A refusal arriving through the
+			// pipe or a learned account is inert: doors are local facts.
+			if e.Via != doorKernel {
+				continue
+			}
+			var r rejection
+			if json.Unmarshal(e.Payload, &r) != nil || r.Reason == "" {
+				continue
+			}
+			r.Seq = e.Seq
+			rejects[r.Type+"/"+r.Name] = &r
+
+		case "capability.retired":
+			var t struct{ Type, Name string }
+			if json.Unmarshal(e.Payload, &t) != nil || !validCapability(t.Type, t.Name) {
+				continue
+			}
+			forget(t.Type + "/" + t.Name)
+		}
+	}
+
+	for _, c := range st.Caps {
+		c.Reject = rejects[c.key()]
+	}
+	for _, r := range rejects {
+		st.Reject = append(st.Reject, r)
+	}
+	sort.Slice(st.Reject, func(i, j int) bool { return st.Reject[i].Seq < st.Reject[j].Seq })
+	return st
+}
+
+func (st *state) cap(typ, name string) *capability { return st.byKey[typ+"/"+name] }
+
+func (st *state) list(typ string) []*capability {
+	var out []*capability
+	for _, c := range st.Caps {
+		if c.Type == typ {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (st *state) pending() []*capability {
+	var out []*capability
+	for _, c := range st.Caps {
+		if c.Pending() {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// quiet reports the loop's convergence: nothing declared awaits a script and no
+// refusal stands. It is what bare `self` turns into exit code 3.
+func (st *state) quiet() bool { return len(st.pending()) == 0 && len(st.Reject) == 0 }
+
+// exemplar returns the most recently installed script, skipping the
+// capabilities currently being asked about so a re-author is never anchored to
+// its own broken past. A cold mind otherwise spends its first minutes
+// rediscovering this instance's idiom from disk.
+func (st *state) exemplar(skip map[string]bool) (string, string) {
+	var name, script string
+	best := 0
+	for _, c := range st.Caps {
+		if c.Receipt == nil || skip[c.key()] || c.RcptSeq < best {
+			continue
+		}
+		best, name, script = c.RcptSeq, c.key(), c.Receipt.Script
+	}
+	const cap = 4096
+	if len(script) > cap {
+		script = script[:cap] + "\n… (truncated)"
+	}
+	return name, script
+}
+
+// ──────────────────────────────── names ─────────────────────────────────────
+
+// validCapability gates every name that reaches the filesystem. `run` is
+// reserved as a trailing segment because that is the file a name's directory
+// holds: a capability called notes/run would collide with notes' own script.
+func validCapability(typ, name string) bool {
+	if typ != kindCommand && typ != kindView {
+		return false
+	}
+	if name == "" || strings.Contains(name, `\`) {
+		return false
+	}
+	segs := strings.Split(name, "/")
+	for i, seg := range segs {
+		if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, ".") {
+			return false
+		}
+		if seg == "run" && i == len(segs)-1 {
+			return false
+		}
+	}
+	return true
+}
+
+// ──────────────────────────── materialization ───────────────────────────────
+//
+// Installed bytes are content-addressed: cap/blob/<sha256> holds the script and
+// cap/<type>/<name>/run is a symlink to it. Two consequences that a
+// rewrite-in-place scheme cannot have: a running script's bytes can never
+// change under it (different bytes are a different path), and verifying an
+// install is comparing a file to its own name.
+
+func capDir(home string) string  { return filepath.Join(home, "cap") }
+func blobDir(home string) string { return filepath.Join(home, "cap", "blob") }
+
+func blobPath(home, sum string) string { return filepath.Join(blobDir(home), sum) }
+
+func linkPath(home, typ, name string) string {
+	return filepath.Join(capDir(home), typ, name, "run")
+}
+
+// materialize resolves a capability to executable bytes on disk, healing
+// whatever it finds. It fails closed and distinguishes the three ways a
+// capability can have no trusted script, because "not found" sends an agent
+// looking in the wrong place.
+func materialize(home string, st *state, typ, name string) (string, error) {
+	c := st.cap(typ, name)
+	switch {
+	case c == nil:
+		return "", fmt.Errorf("no %s %q in this log — declare it, or check `self brief`", typ, name)
+	case c.Receipt == nil && st.Key == nil && len(st.Events) > 0:
+		return "", fmt.Errorf("%s %q: no receipt verifies under this instance's key — is .secret missing next to events.jsonl?", typ, name)
+	case c.Receipt == nil:
+		return "", fmt.Errorf("%s %q is declared but pending: no script has been authored for it yet", typ, name)
+	}
+
+	script := c.Receipt.Script
+	sum := sha256.Sum256([]byte(script))
+	hexsum := hex.EncodeToString(sum[:])
+	blob := blobPath(home, hexsum)
+
+	if have, err := os.ReadFile(blob); err != nil || string(have) != script {
+		if err == nil {
+			fmt.Fprintf(os.Stderr, "self: %s/%s: blob %s did not match its own hash — restored from the receipt at seq %d\n", typ, name, hexsum[:12], c.RcptSeq)
+		}
+		if err := writeFileAtomic(blob, []byte(script), 0755); err != nil {
+			return "", err
+		}
+	}
+	if err := linkBlob(home, typ, name, hexsum); err != nil {
+		return "", err
+	}
+	return blob, nil
+}
+
+// writeFileAtomic writes through a temp file and a rename, so a reader — or an
+// exec — never sees a partial script, and a running process keeps the inode it
+// started with.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// linkBlob points the readable path at a blob. The symlink is for humans and
+// agents (`cat cap/command/entry/run`); execution always uses the blob.
+func linkBlob(home, typ, name, sum string) error {
+	link := linkPath(home, typ, name)
+	rel, err := filepath.Rel(filepath.Dir(link), blobPath(home, sum))
+	if err != nil {
+		return err
+	}
+	if have, err := os.Readlink(link); err == nil && have == rel {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
+		return err
+	}
+	tmp := link + ".tmp"
+	os.Remove(tmp)
+	if err := os.Symlink(rel, tmp); err != nil {
+		return err
+	}
+	return os.Rename(tmp, link)
+}
+
+// unlink removes a retired capability's readable path. Its blob stays until
+// rehydrate collects it — blobs are shared and cheap; a dangling one is inert.
+func unlink(home, typ, name string) {
+	link := linkPath(home, typ, name)
+	os.Remove(link)
+	dir := filepath.Dir(link)
+	for dir != capDir(home) && dir != "/" && dir != "." {
+		if os.Remove(dir) != nil { // succeeds only when empty
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
+}
+
+// rehydrate makes cap/ match the log exactly: materialize what live verified
+// receipts require, remove every readable path they do not, and collect
+// unreferenced blobs. It is the only thing allowed to delete, and it needs
+// nothing but events.jsonl and .secret — no model, no network.
+func rehydrate(home string) error {
+	st, err := loadState(home)
+	if err != nil {
+		return err
+	}
+	keepLinks := map[string]bool{}
+	keepBlobs := map[string]bool{}
+	installed := 0
+	for _, c := range st.Caps {
+		if c.Receipt == nil {
+			continue
+		}
+		if _, err := materialize(home, st, c.Type, c.Name); err != nil {
+			return err
+		}
+		sum := sha256.Sum256([]byte(c.Receipt.Script))
+		keepLinks[linkPath(home, c.Type, c.Name)] = true
+		keepBlobs[hex.EncodeToString(sum[:])] = true
+		installed++
+	}
+
+	removed := 0
+	for _, typ := range []string{kindCommand, kindView} {
+		root := filepath.Join(capDir(home), typ)
+		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || filepath.Base(path) != "run" {
+				return nil
+			}
+			if !keepLinks[path] {
+				os.Remove(path)
+				removed++
+			}
+			return nil
+		})
+		pruneEmpty(root)
+	}
+	blobs, _ := os.ReadDir(blobDir(home))
+	for _, b := range blobs {
+		if !keepBlobs[b.Name()] {
+			os.Remove(filepath.Join(blobDir(home), b.Name()))
+			removed++
+		}
+	}
+	fmt.Fprintf(os.Stderr, "self: %d capabilit(ies) materialized from the log, %d stale file(s) removed\n", installed, removed)
+	return nil
+}
+
+func pruneEmpty(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			pruneEmpty(filepath.Join(dir, e.Name()))
+		}
+	}
+	os.Remove(dir) // succeeds only when empty
+}
+
+// ───────────────────────────── running scripts ──────────────────────────────
+
+// scriptEnv is deliberately scrubbed. Thesis: a view is a pure function of its
+// events, and a rebuild is byte-identical. Neither survives inheriting $TZ,
+// $LC_ALL or a caller's $PATH, so nothing is inherited except SELF_* variables,
+// which are the documented way to hand a capability configuration on purpose.
+// This is determinism, not containment — see the limits in `self help`.
+func scriptEnv(home string) []string {
+	env := []string{
+		"SELF_HOME=" + home,
+		"HOME=" + home,
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"TZ=UTC",
+		"LC_ALL=C",
+	}
+	for _, kv := range os.Environ() {
+		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SELF_") && k != "SELF_HOME" {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
+func feed(w io.WriteCloser, events []Event) {
+	go func() {
+		enc := json.NewEncoder(w)
+		for i := range events {
+			enc.Encode(events[i])
+		}
+		w.Close()
+	}()
+}
+
+// runCommand executes a command capability and appends what it emits. via and
+// by are the invocation's provenance, stamped onto every emitted event: a
+// script's own output can never set them.
+func runCommand(home string, st *state, name string, args []string, via, by string) ([]Event, error) {
+	bin, err := materialize(home, st, kindCommand, name)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(bin, args...)
+	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home), home, os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	feed(stdin, st.Events)
+
+	var out []Event
+	var parseErr error
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		// Only name and payload are read: everything else about an event is
+		// the kernel's to say.
+		var p struct {
+			Name    string          `json:"name"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(line), &p); err != nil {
+			parseErr = fmt.Errorf("command %q printed a line that is not an event: %s", name, trunc(line, 120))
+			continue
+		}
+		if !validEventName(p.Name) {
+			parseErr = fmt.Errorf("command %q emitted the event name %q, which is not lowercase dotted", name, p.Name)
+			continue
+		}
+		e := newEvent(p.Name, p.Payload)
+		e.Via, e.By = via, by
+		out = append(out, e)
+	}
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("command %q exited: %w (nothing appended)", name, err)
+	}
+	if parseErr != nil {
+		return nil, fmt.Errorf("%w (nothing appended)", parseErr)
+	}
+	if err := appendEvents(home, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// runView replays a view. Its input is exactly the events its RECEIPT names —
+// not its latest declaration: re-declaring a view with a wider consumes list
+// leaves it pending, and until it is re-authored the old script must keep
+// seeing the stream it was signed against.
+func runView(home string, st *state, name string) ([]byte, error) {
+	if name == "log" && st.cap(kindView, "log") == nil {
+		return builtinLogView(st), nil
+	}
+	bin, err := materialize(home, st, kindView, name)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(bin)
+	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home), home, os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	var out strings.Builder
+	cmd.Stdout = &out
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	feed(stdin, consumed(st.Events, st.cap(kindView, name).Receipt.Consumes))
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("view %q exited: %w", name, err)
+	}
+	return []byte(out.String()), nil
+}
+
+// consumed filters the log to a view's declared inputs. An empty list — or
+// "*" — means the whole log: the view asked for everything.
+func consumed(events []Event, consumes []string) []Event {
+	if len(consumes) == 0 {
+		return events
+	}
+	want := map[string]bool{}
+	for _, c := range consumes {
+		if c == "*" {
+			return events
+		}
+		want[c] = true
+	}
+	var out []Event
+	for _, e := range events {
+		if want[e.Name] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// builtinLogView answers the cheapest question at every cold start — what
+// happened here lately, and who says so — on an instance that has not yet
+// grown a single view. A declared view named "log" shadows it.
+func builtinLogView(st *state) []byte {
+	var b strings.Builder
+	for _, e := range st.Events {
+		by := e.By
+		if by == "" {
+			by = "-"
+		}
+		fmt.Fprintf(&b, "%d\t%s\t%s\tvia=%s\tby=%s\t%s\n",
+			e.Seq, e.OccurredAt.Format("2006-01-02T15:04:05Z"), e.Name, e.Via, by,
+			trunc(compact(e.Payload), 200))
+	}
+	return []byte(b.String())
+}
