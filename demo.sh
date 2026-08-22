@@ -1,64 +1,94 @@
 #!/usr/bin/env bash
-# demo.sh — see the machinery with no LLM, in about ten seconds.
+# demo.sh — the whole thesis, offline, in about fifteen seconds.
 #
-# This shows the whole loop end to end WITHOUT a model. The mind is a shell
-# process piped between two selves — here examples/mind-stub, a deterministic
-# offline filter plugged through the same seam as any real one:
+# No model, no network, no API key. The mind here is examples/mind-stub, a
+# deterministic filter plugged through exactly the same seam as `claude -p`:
 #
-#     self learn <lesson> | mind | self      # intent → declarations → scripts
-#     echo "<ask>"        | self | mind | self
+#     self learn <account> | mind | self hear
+#     self "<ask>"         | mind | self hear
 #
-# A lesson's intent becomes declarations, declarations get authored scripts
-# installed under signed receipts, running a command appends an event, a
-# projection renders it, and the whole instance rebuilds from events.jsonl +
-# .secret alone — byte for byte.
-#
-# The stub authors trivial scripts; the point here is the machinery, not the
-# intelligence. For real capabilities, put a real mind in the pipe:
-#     self learn lessons/chat | claude -p | self
+# It authors trivial scripts on purpose. The point is the machinery.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")" && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mind="$root/examples/mind-stub"
-export SELF_MIND_ID="stub (no LLM)"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
 say "build"
 go build -o "$work/self" "$root"
 self="$work/self"
+export PATH="$work:$PATH"
 export SELF_HOME="$work/home"
+export SELF_CALLER="demo.sh (no LLM)"
 
-say "the strange loop: learn a lesson through the pipe (deposit, declare, author, install)"
-"$self" learn "$root/lessons/journal" | "$mind" | "$self"
+say "reads project: bare self on a directory that is not yet an instance"
+mkdir -p "$SELF_HOME"
+self >/dev/null || true
+if [ -z "$(ls -A "$SELF_HOME")" ]; then
+  printf 'OK — orientation created nothing. Looking does not write.\n'
+else
+  printf 'MISMATCH — a read left files behind:\n%s\n' "$(ls -A "$SELF_HOME")" >&2; exit 1
+fi
 
-say "ask through the pipe (the ask and the reply both land in the log)"
-echo "what can you do now?" | "$self" | "$mind" | "$self"
+say "the strange loop: an intent becomes declarations, scripts, and signed receipts"
+self learn "$root/lessons/journal" | "$mind" | self hear
 
-say "run the learned command a couple of times (each appends one event)"
-"$self" run entry water the plants
-"$self" run entry call mum
+say "the new capability is real"
+self run entry water the plants
+self run entry call mum
 
-say "the projection is a pure replay of the log"
-"$self" show journal
+say "a view is a pure replay of the log"
+self view journal
 
-say "rebuild a fresh copy from events.jsonl + .secret alone (no LLM, no network)"
-mirror="$work/mirror"
-mkdir -p "$mirror"
+say "the same log, replayed twice, is the same bytes"
+a="$(self view journal)"; b="$(self view journal)"
+[ "$a" = "$b" ] && printf 'OK — deterministic.\n' || { printf 'MISMATCH\n' >&2; exit 1; }
+
+say "editing an installed script has no effect: the log is authoritative"
+script="$SELF_HOME/cap/command/entry/run"
+printf '#!/bin/sh\necho "{\\"name\\":\\"pwned.one\\",\\"payload\\":{}}"\n' > "$(readlink -f "$script")"
+self run entry tampering >/dev/null
+if self view log | grep -q pwned; then printf 'MISMATCH — a hand edit ran\n' >&2; exit 1; fi
+printf 'OK — the blob was restored from its receipt and the signed script ran.\n'
+
+say "rebuild a fresh body from events.jsonl + .secret alone (no model, no network)"
+mirror="$work/mirror"; mkdir -p "$mirror"
 cp "$SELF_HOME/events.jsonl" "$SELF_HOME/.secret" "$mirror/"
-SELF_HOME="$mirror" "$self" rehydrate
+SELF_HOME="$mirror" self rehydrate
 
 say "the rebuild is byte-for-byte identical"
-if diff -q "$SELF_HOME/site/journal.html" "$mirror/site/journal.html" >/dev/null \
-	&& diff -q "$SELF_HOME/capabilities/commands/entry/run" "$mirror/capabilities/commands/entry/run" >/dev/null \
-	&& diff -q "$SELF_HOME/capabilities/projectors/journal/run" "$mirror/capabilities/projectors/journal/run" >/dev/null; then
-  printf 'OK — the projection and the compiled script reconstructed exactly.\n'
+if diff <(self view journal) <(SELF_HOME="$mirror" self view journal) >/dev/null \
+  && diff "$(readlink -f "$SELF_HOME/cap/command/entry/run")" \
+          "$(readlink -f "$mirror/cap/command/entry/run")" >/dev/null; then
+  printf 'OK — the view and the installed script reconstructed exactly.\n'
 else
-  printf 'MISMATCH — reconstruction was not deterministic.\n' >&2
-  exit 1
+  printf 'MISMATCH — reconstruction was not deterministic.\n' >&2; exit 1
+fi
+
+say "the account protocol: give evidence, curate it, learn it elsewhere"
+account="$work/account"
+self give journal. "$account"
+printf '\nwhat travelled (plain text, nothing runnable):\n'
+ls "$account"
+printf '\ncuration is editing the directory — dropping one line before passing it on:\n'
+tail -n +2 "$account/record.jsonl" > "$account/record.tmp" && mv "$account/record.tmp" "$account/record.jsonl"
+wc -l < "$account/record.jsonl" | xargs printf '  %s event(s) left in the record\n'
+
+other="$work/other"; mkdir -p "$other"
+SELF_HOME="$other" self learn "$account" | "$mind" | SELF_HOME="$other" self hear
+
+say "the intervention is visible in the receiving log, forever"
+SELF_HOME="$other" self view log | grep lesson.learned
+
+say "convergence: bare self exits 3 when the kernel has nothing pending"
+if self >/dev/null; then
+  printf 'there is still work pending\n'
+else
+  printf 'OK — exit %d: quiet. `while ask=$(self); do ... ; done` would stop here.\n' $?
 fi
 
 say "the log is the whole truth — this is all that was kept"
-cat "$SELF_HOME/events.jsonl"
+self view log

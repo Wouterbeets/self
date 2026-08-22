@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 """mind-stub — a deterministic, offline mind. No LLM, no network, no state.
 
-A mind is any filter: it reads a situated prompt on stdin and prints event
-JSONL on stdout. This one is deliberately dumb — it proves the machinery, not
-the intelligence — and it plugs into the same pipe as any real mind:
+A mind is any filter: it reads a situated prompt on stdin and prints event JSONL
+on stdout. This one is deliberately dumb — it proves the machinery, not the
+intelligence — and it plugs into exactly the same seam as any real mind:
 
-    echo "hello" | self | examples/mind-stub | self
-    self learn lessons/journal | examples/mind-stub | self
-    self | examples/mind-stub | self          # pending scripts / reflection
+    self "hello"                     | examples/mind-stub | self hear
+    self learn lessons/journal       | examples/mind-stub | self hear
+    self                             | examples/mind-stub | self hear
 
-What it does, by reading the prompt alone (a real mind would also explore
-SELF_HOME with its own tools):
+What it does, reading the prompt alone (a real mind would also explore SELF_HOME
+with its own tools):
 
-  - Every 'DECLARATION (<type> "<name>"):' block in the pending-work section
-    is answered with a script.authored line carrying a trivial script that
-    honors the pipe contract.
-  - An ask carrying an '--- INTENT ---' section (a learn) is answered with one
-    command.declared + one projector.declared named in the intent's backticks,
+  - Every pending declaration block is answered with a script.authored line
+    carrying a trivial script that honors the capability contract.
+  - An ask carrying an "--- INTENT" section (a learn) is answered with one
+    command.declared and one view.declared, named from the intent's backticks,
     plus their scripts in the same pass.
-  - Anything else gets a fixed self.replied.
+  - Anything else gets silence, which is a valid turn.
 """
 
 import json
@@ -30,16 +29,10 @@ def backticked(s):
     return re.findall(r"`([^`]*)`", s)
 
 
-def sanitize(s):
-    s = s.strip()
-    if s.startswith("self-seed-"):
-        s = s[len("self-seed-"):]
-    if s.endswith("-seed"):
-        s = s[: -len("-seed")]
-    s = s.strip("`/ <>.,:;()[]{}\t\n")
+def slug(s):
     out, dash = [], False
-    for ch in s.lower():
-        if ch.isascii() and (ch.isalnum() or ch == "_"):
+    for ch in s.strip().lower():
+        if ch.isascii() and (ch.isalnum() or ch in "_-"):
             out.append(ch)
             dash = False
         elif not dash:
@@ -53,136 +46,108 @@ def first_command(intent):
         if tok.startswith("self run "):
             rest = tok[len("self run "):].split()
             if rest:
-                return sanitize(rest[0])
+                return slug(rest[0])
     return ""
 
 
-def first_projection(intent):
+def first_view(intent):
     for tok in backticked(intent):
-        if tok.startswith("/") and len(tok) > 1:
-            return sanitize(tok[1:])
+        if tok.startswith("self view "):
+            rest = tok[len("self view "):].split()
+            if rest:
+                return slug(rest[0])
     return ""
 
 
 def first_event(intent):
     for tok in backticked(intent):
-        if "." in tok and " " not in tok and not tok.startswith("/"):
+        if re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z0-9_]+)+", tok):
             return tok
     return ""
 
 
-def payload_field(fields):
-    fields = fields or {}
-    if "title" in fields:
-        return "title"
-    if "text" in fields:
-        return "text"
-    keys = sorted(k for k in fields if k.strip())
-    return keys[0] if keys else "title"
+def emit(name, payload):
+    print(json.dumps({"name": name, "payload": payload}))
 
 
-def command_script(decl):
-    event = (decl.get("event") or {}).get("name", "").strip() or decl.get("name", "") + ".ran"
-    field = payload_field((decl.get("event") or {}).get("fields"))
+def command_script(event_name):
+    # stdin is the whole log and must be drained; argv is the arguments; stdout
+    # is new events.
     return (
         "#!/usr/bin/env python3\n"
-        "# STUB (no LLM) — " + decl.get("description", "") + "\n"
         "import sys, json\n"
-        "print(json.dumps({\"name\": " + json.dumps(event)
-        + ", \"payload\": {" + json.dumps(field)
-        + ": \" \".join(sys.argv[1:]) or \"(untitled)\"}}))\n"
+        "sys.stdin.read()\n"
+        "text = ' '.join(sys.argv[1:]).strip()\n"
+        "if not text:\n"
+        "    sys.exit('nothing to record')\n"
+        "print(json.dumps({'name': %r, 'payload': {'text': text}}))\n" % event_name
     )
 
 
-def projector_script(decl):
+def view_script():
+    # stdin is the consumed events as JSONL; stdout is opaque bytes.
     return (
         "#!/usr/bin/env python3\n"
-        "# STUB (no LLM) — " + decl.get("description", "") + "\n"
         "import sys, json\n"
-        "from html import escape\n"
-        "consumes = " + json.dumps(decl.get("consumes") or []) + "\n"
-        "print(\"<h1>" + decl.get("name", "") + "</h1><ul>\")\n"
+        "rows = []\n"
         "for line in sys.stdin:\n"
         "    line = line.strip()\n"
         "    if not line:\n"
         "        continue\n"
         "    e = json.loads(line)\n"
-        "    if not consumes or e.get(\"name\") in consumes:\n"
-        "        payload = e.get('payload', {}) or {}\n"
-        "        value = payload.get('title', payload.get('text'))\n"
-        "        if value is None and payload:\n"
-        "            value = payload[sorted(payload)[0]]\n"
-        "        print(f\"<li>{escape(str(value if value is not None else '(untitled)'))}</li>\")\n"
-        "print(\"</ul>\")\n"
+        "    p = e.get('payload') or {}\n"
+        "    rows.append((e.get('occurred_at', ''), p.get('text', json.dumps(p))))\n"
+        "for when, what in reversed(rows):\n"
+        "    print('%s  %s' % (when, what))\n"
     )
 
 
-def authored(typ, decl):
-    script = command_script(decl) if typ == "command" else projector_script(decl)
-    return json.dumps({"name": "script.authored", "payload": {
-        "type": typ, "name": decl.get("name", ""), "script": script}})
+def answer_pending(prompt):
+    """Author every declaration the pending section lists."""
+    found = False
+    for typ, name in re.findall(r'^(command|view) "([^"]+)" declared at seq', prompt, re.M):
+        script = command_script("stub." + slug(name).replace("-", "_")) if typ == "command" else view_script()
+        emit("script.authored", {"type": typ, "name": name, "script": script})
+        found = True
+    return found
 
 
-def pending_declarations(prompt):
-    """Every 'DECLARATION (<type> "<name>"):' block, declaration JSON on the
-    next non-empty line — the shape the ask face renders pending work in."""
-    out = []
-    lines = prompt.splitlines()
-    for i, line in enumerate(lines):
-        m = re.match(r'DECLARATION \((command|projector) "', line.strip())
-        if not m:
-            continue
-        for rest in lines[i + 1:]:
-            rest = rest.strip()
-            if not rest:
-                continue
-            if rest.startswith("{"):
-                out.append((m.group(1), json.loads(rest)))
-            break
-    return out
+def answer_intent(prompt):
+    """Realize an intent as one command and one view.
 
+    The intent rides the prompt quoted line by line (it is another instance's
+    prose), so unquote it before reading the names out of it.
+    """
+    body = prompt.split("--- INTENT", 1)[1].split("--- END INTENT", 1)[0]
+    body = body.split("\n", 1)[1] if "\n" in body else body
+    intent = "\n".join(
+        line[2:] if line.startswith("| ") else line for line in body.split("\n")
+    )
+    command = first_command(intent) or "note"
+    view = first_view(intent) or "notes"
+    event = first_event(intent) or "stub.noted"
 
-def intent_of(prompt):
-    m = re.search(r"--- INTENT ---\n(.*?)\n--- END INTENT ---", prompt, re.S)
-    return m.group(1).strip() if m else ""
-
-
-def learn(intent):
-    command = first_command(intent) or "entry"
-    projector = first_projection(intent) or command + "s"
-    event = first_event(intent) or command + ".recorded"
-    cmd_decl = {
+    emit("command.declared", {
         "name": command,
-        "description": "offline stub command learned from an intent",
-        "params": {"text": "string"},
-        "event": {"name": event, "fields": {"text": "string"}}}
-    proj_decl = {
-        "name": projector,
-        "description": "offline stub projection learned from an intent",
-        "consumes": [event]}
-    print(json.dumps({"name": "command.declared", "payload": cmd_decl}))
-    print(json.dumps({"name": "projector.declared", "payload": proj_decl}))
-    print(authored("command", cmd_decl))
-    print(authored("projector", proj_decl))
-    print(json.dumps({"name": "self.replied", "payload": {
-        "text": 'stub declared and authored "%s" and "%s"' % (command, projector)}}))
+        "description": "stub: usage: %s <text…> — appends %s {text}" % (command, event),
+    })
+    emit("script.authored", {"type": "command", "name": command, "script": command_script(event)})
+    emit("view.declared", {
+        "name": view,
+        "description": "stub: every %s, newest first" % event,
+        "consumes": [event],
+    })
+    emit("script.authored", {"type": "view", "name": view, "script": view_script()})
 
 
 def main():
     prompt = sys.stdin.read()
-    pending = pending_declarations(prompt)
-    intent = intent_of(prompt)
-    if intent:
-        learn(intent)
+    if answer_pending(prompt):
         return
-    if pending:
-        for typ, decl in pending:
-            print(authored(typ, decl))
-        print(json.dumps({"name": "self.replied", "payload": {
-            "text": "stub authored %d pending script(s)" % len(pending)}}))
+    if "--- INTENT" in prompt:
+        answer_intent(prompt)
         return
-    print(json.dumps({"name": "self.replied", "payload": {
-        "text": "stub replied: nothing to add"}}))
+    # Nothing to do. Silence is a valid turn.
 
 
 if __name__ == "__main__":
