@@ -1445,11 +1445,14 @@ func TestNoFileShowsThePipelineThatDiscardsTheAsk(t *testing.T) {
 			}
 			return nil
 		}
-		if path == "self_test.go" {
+		// This file builds the needle from pieces so it does not trip itself.
+		// CHANGELOG.md is exempt for a real reason: its job is to show what
+		// changed, and the old loop is what changed.
+		if path == "self_test.go" || path == "CHANGELOG.md" {
 			return nil
 		}
 		switch filepath.Ext(path) {
-		case ".go", ".md", ".sh", "":
+		case ".go", ".md", ".sh", ".yml", "":
 		default:
 			return nil
 		}
