@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // refused is the frozen set of names a record may never carry raw. It is the
@@ -87,12 +88,26 @@ func readAccount(ref string) (*account, error) {
 		// of events with nothing saying what they were for.
 		return nil, fmt.Errorf("%s/intent.md is empty — an account's intent is the required half", ref)
 	}
-	if raw, err := os.ReadFile(filepath.Join(ref, "record.jsonl")); err == nil {
+	raw, rerr := os.ReadFile(filepath.Join(ref, "record.jsonl"))
+	if rerr != nil && !os.IsNotExist(rerr) {
+		// A record that is there but unreadable is not the same as no record:
+		// treating it as absent would silently learn half an account.
+		return nil, fmt.Errorf("record.jsonl is present but unreadable: %w", rerr)
+	}
+	if rerr == nil {
 		for i, line := range strings.Split(string(raw), "\n") {
 			if line = strings.TrimSpace(line); line == "" {
 				continue
 			}
-			var e Event
+			// Only the four fields a deposit keeps are parsed. The rest of a
+			// foreign event — seq, id, via — is discarded on the way in, so a
+			// wrong type in one of them must not cost the whole account.
+			var e struct {
+				Name       string          `json:"name"`
+				OccurredAt time.Time       `json:"occurred_at"`
+				By         string          `json:"by"`
+				Payload    json.RawMessage `json:"payload"`
+			}
 			if err := json.Unmarshal([]byte(line), &e); err != nil {
 				return nil, fmt.Errorf("record.jsonl line %d: %w", i+1, err)
 			}
@@ -102,14 +117,20 @@ func readAccount(ref string) (*account, error) {
 			if !validEventName(e.Name) {
 				return nil, fmt.Errorf("record.jsonl line %d: %q is not a lowercase dotted event name (nothing was deposited)", i+1, e.Name)
 			}
-			a.Deposit = append(a.Deposit, e)
+			a.Deposit = append(a.Deposit, Event{
+				Name: e.Name, OccurredAt: e.OccurredAt, By: e.By, Payload: e.Payload,
+			})
 		}
 		sum := sha256.Sum256(raw)
 		a.RecordHash = hex.EncodeToString(sum[:])
 	}
-	if raw, err := os.ReadFile(filepath.Join(ref, "manifest.json")); err == nil {
-		if err := json.Unmarshal(raw, &a.Manifest); err != nil {
-			return nil, fmt.Errorf("parse manifest.json: %w", err)
+	if mraw, err := os.ReadFile(filepath.Join(ref, "manifest.json")); err == nil {
+		// The manifest is advisory — learn reads only its claimed digest, to
+		// record beside the real one. A malformed one is worth saying out loud
+		// and nothing more; aborting on it would let a typo in a file the
+		// protocol calls optional block an account whose record is fine.
+		if err := json.Unmarshal(mraw, &a.Manifest); err != nil {
+			fmt.Fprintf(os.Stderr, "self: ignoring an unreadable manifest.json (it is advisory): %s\n", err)
 		}
 	}
 	return a, nil

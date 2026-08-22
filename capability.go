@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -485,13 +486,21 @@ func pruneEmpty(dir string) {
 // $LC_ALL or a caller's $PATH, so nothing is inherited except SELF_* variables,
 // which are the documented way to hand a capability configuration on purpose.
 // This is determinism, not containment — see the limits in `self help`.
-func scriptEnv(home string) []string {
+func scriptEnv(selfHome, work string) []string {
 	env := []string{
-		"SELF_HOME=" + home,
-		"HOME=" + home,
+		"HOME=" + work,
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"TZ=UTC",
 		"LC_ALL=C",
+		// Per-process hash randomization is enough to make a script that
+		// iterates a set render different bytes every run. Determinism is a
+		// claim this kernel makes, so it pins the seed rather than hoping.
+		"PYTHONHASHSEED=0",
+	}
+	// A command is an effect on one instance and is told which. A view is a
+	// pure function of its events and is told nothing.
+	if selfHome != "" {
+		env = append(env, "SELF_HOME="+selfHome)
 	}
 	for _, kv := range os.Environ() {
 		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SELF_") && k != "SELF_HOME" {
@@ -520,7 +529,7 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 		return nil, err
 	}
 	cmd := exec.Command(bin, args...)
-	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home), home, os.Stderr
+	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home, home), home, os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -594,8 +603,18 @@ func runView(home string, st *state, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A view is a pure function of its events, so it is given no path to the
+	// instance: no SELF_HOME, and an empty scratch directory to run in. Its
+	// whole input arrives on stdin. This is not a sandbox — a script can still
+	// guess a path — but the kernel no longer hands a view the log to read, or
+	// to write.
+	scratch, err := os.MkdirTemp("", "self-view-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(scratch)
 	cmd := exec.Command(bin)
-	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home), home, os.Stderr
+	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv("", scratch), scratch, os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -644,8 +663,10 @@ func builtinLogView(st *state) []byte {
 		if by == "" {
 			by = "-"
 		}
+		// RFC3339, not a literal Z: a deposited event keeps its own moment, and
+		// that moment may carry an offset this log did not choose.
 		fmt.Fprintf(&b, "%d\t%s\t%s\tvia=%s\tby=%s\t%s\n",
-			e.Seq, e.OccurredAt.Format("2006-01-02T15:04:05Z"), e.Name, e.Via, by,
+			e.Seq, e.OccurredAt.Format(time.RFC3339), e.Name, e.Via, by,
 			trunc(compact(e.Payload), 200))
 	}
 	return []byte(b.String())

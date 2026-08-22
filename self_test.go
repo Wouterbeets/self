@@ -668,13 +668,16 @@ func TestViewsAreDeterministic(t *testing.T) {
 }
 
 // A view must not be able to see the caller's environment: determinism is the
-// claim, and $TZ or $LC_ALL would break it silently.
-func TestScriptEnvIsScrubbed(t *testing.T) {
+// claim, and $TZ or $LC_ALL would break it silently. Nor is a view given any
+// path to the instance — its whole input is stdin, so SELF_HOME and the
+// instance as a working directory were the log handed over for no reason.
+func TestViewGetsNoPathToTheInstance(t *testing.T) {
 	h := home(t)
 	t.Setenv("SNEAKY", "leaked")
 	t.Setenv("SELF_PASSED", "on purpose")
 	body := line(t, "view.declared", decl{Name: "env", Description: "x", Consumes: []string{"*"}}) +
-		line(t, "script.authored", authored{Type: "view", Name: "env", Script: "#!/bin/sh\ncat >/dev/null\nenv | sort\n"})
+		line(t, "script.authored", authored{Type: "view", Name: "env",
+			Script: "#!/bin/sh\ncat >/dev/null\nenv | sort\necho \"cwd=$(pwd)\"\nls events.jsonl 2>&1 | sed 's/^/ls: /'\n"})
 	heard(t, h, body)
 	page, err := runView(h, replayed(t, h), "env")
 	if err != nil {
@@ -684,10 +687,44 @@ func TestScriptEnvIsScrubbed(t *testing.T) {
 	if strings.Contains(got, "SNEAKY") {
 		t.Fatalf("the caller's environment leaked into a view:\n%s", got)
 	}
-	for _, want := range []string{"TZ=UTC", "LC_ALL=C", "SELF_HOME=" + h, "SELF_PASSED=on purpose"} {
+	if strings.Contains(got, "SELF_HOME=") {
+		t.Fatalf("a view was handed a path to the instance:\n%s", got)
+	}
+	if strings.Contains(got, "cwd="+h) {
+		t.Fatalf("a view ran inside the instance:\n%s", got)
+	}
+	if !strings.Contains(got, "ls: ") || !strings.Contains(got, "events.jsonl") {
+		t.Fatalf("the probe did not run:\n%s", got)
+	}
+	if !strings.Contains(got, "No such file") && !strings.Contains(got, "cannot access") {
+		t.Fatalf("a view could reach the log from its working directory:\n%s", got)
+	}
+	for _, want := range []string{"TZ=UTC", "LC_ALL=C", "PYTHONHASHSEED=0", "SELF_PASSED=on purpose"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q from the script environment:\n%s", want, got)
 		}
+	}
+}
+
+// A command, unlike a view, is an effect on this instance and is told which one.
+func TestCommandGetsTheInstanceAndNothingElse(t *testing.T) {
+	h := home(t)
+	t.Setenv("SNEAKY", "leaked")
+	body := line(t, "command.declared", decl{Name: "env", Description: "x"}) +
+		line(t, "script.authored", authored{Type: "command", Name: "env",
+			Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"env.seen\",\"payload\":{\"home\":\"%s\",\"cwd\":\"%s\",\"sneaky\":\"%s\"}}\\n' \"$SELF_HOME\" \"$(pwd)\" \"${SNEAKY:-}\"\n"})
+	heard(t, h, body)
+	evs, err := runCommand(h, replayed(t, h), "env", nil, doorCLI, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p struct{ Home, Cwd, Sneaky string }
+	json.Unmarshal(evs[0].Payload, &p)
+	if p.Home != h || p.Cwd != h {
+		t.Fatalf("a command was not told its instance: home=%q cwd=%q want %q", p.Home, p.Cwd, h)
+	}
+	if p.Sneaky != "" {
+		t.Fatalf("the caller's environment leaked into a command: %q", p.Sneaky)
 	}
 }
 
@@ -1061,6 +1098,39 @@ func TestInterventionIsVisible(t *testing.T) {
 	}
 	if p.Events != 1 {
 		t.Fatalf("attested %d events, one was kept", p.Events)
+	}
+}
+
+// A record is parsed for the four fields a deposit keeps. A wrong type in one it
+// discards anyway must not cost the whole account — and an advisory manifest
+// that will not parse is worth a word on stderr, not an abort.
+func TestRecordSurvivesFieldsLearnDiscards(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "intent.md"), []byte("# from a different shape of kernel"), 0644)
+	os.WriteFile(filepath.Join(dir, "record.jsonl"),
+		[]byte(`{"name":"note.added","seq":"three","id":42,"via":["odd"],"payload":{"t":"1"}}`+"\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("{ not json at all"), 0644)
+	h := home(t)
+	if err := cmdLearn(h, dir, &bytes.Buffer{}); err != nil {
+		t.Fatalf("a field learn discards anyway killed the account: %v", err)
+	}
+	if !hasEvent(t, h, "note.added") {
+		t.Fatal("the record was not deposited")
+	}
+}
+
+// A record that is present but unreadable is not the same as no record: treating
+// it as absent would silently learn half an account.
+func TestUnreadableRecordIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "intent.md"), []byte("# x"), 0644)
+	os.Mkdir(filepath.Join(dir, "record.jsonl"), 0755) // there, and not readable as a file
+	h := home(t)
+	if err := cmdLearn(h, dir, &bytes.Buffer{}); err == nil {
+		t.Fatal("an unreadable record was treated as absent")
+	}
+	if events, _ := readEvents(h); len(events) != 0 {
+		t.Fatal("it deposited anyway")
 	}
 }
 

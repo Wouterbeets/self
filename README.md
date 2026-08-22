@@ -90,14 +90,15 @@ cap/           installed scripts, derived: blobs addressed by hash, with a
                readable symlink per capability. Delete it; nothing is lost.
 ```
 
-Two kinds of capability, and the difference is what the kernel does with the
-output: it appends what a command prints and never appends what a view prints. A
-command gets argv and the log on stdin. A view gets exactly the events its
-receipt names and prints opaque bytes — text, HTML, JSON, whatever you want to
-read. Both are ordinary executables in any language with a shebang, written by a
-mind and installed only under a signature. Nothing *stops* an installed script
-from writing to the log itself — see the limits — but then it is not a view
-doing it, it is a program you installed.
+Two kinds of capability, and the difference is the trust boundary. The kernel
+appends what a **command** prints and never appends what a **view** prints; a
+command is told which instance it is acting on, and a view is told nothing at
+all — no `SELF_HOME`, an empty directory to run in, its whole input on stdin.
+A command gets argv and the log; a view gets exactly the events its receipt
+names and prints opaque bytes — text, HTML, JSON, whatever you want to read.
+Both are ordinary executables in any language with a shebang, written by a mind
+and installed only under a signature. None of this is a sandbox: an installed
+script runs as you, and the limits say so.
 
 The whole contract is [`PROTOCOL.md`](PROTOCOL.md), which is also what
 `self help` prints. Nothing else in this repository restates it — there is one

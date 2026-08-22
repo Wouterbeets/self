@@ -108,18 +108,30 @@ return:
 
 ## Capability scripts
 
-Any language with a shebang; standard library only. The kernel hands every
-script a scrubbed environment (`SELF_HOME`, `HOME` = the instance, a fixed
-`PATH`, `TZ=UTC`, `LC_ALL=C`, plus any `SELF_*` variable of the caller) and runs
-it with the instance as its working directory. Nothing else is inherited —
-determinism is the point.
+Any language with a shebang; standard library only. The environment is scrubbed:
+a fixed `PATH`, `TZ=UTC`, `LC_ALL=C`, `PYTHONHASHSEED=0`, and any `SELF_*`
+variable of the caller — which is the documented way to hand a capability
+configuration on purpose. Nothing else is inherited, because determinism is a
+claim this kernel makes and an inherited `$TZ` or a randomized hash seed
+silently breaks it.
+
+The two kinds are told different things, and the difference is the boundary:
+
+- A **command** is an effect on one instance, so it gets `SELF_HOME` and runs
+  with the instance as its working directory.
+- A **view** is a pure function of its events, so it gets **no path to the
+  instance at all**: no `SELF_HOME`, and an empty scratch directory to run in.
+  Its whole input arrives on stdin. This is not a sandbox — a script can still
+  guess a path — but the kernel does not hand a view the log to read, or to
+  write.
 
 **command** — argv is the arguments after `self run <name>`. stdin is the whole
 log as JSONL. stdout is new events as JSONL. Exit non-zero and nothing is
 appended.
 
-**view** — never ingested: whatever it prints goes to the reader, not the log.
-stdin is exactly the events its receipt's `consumes` list names, as
+**view** — never ingested: whatever it prints goes to the reader, not the log,
+and it is handed no path to the instance. stdin is exactly the events its
+receipt's `consumes` list names, as
 JSONL, in log order (an empty list or `["*"]` means every event). stdout is
 opaque bytes: text, HTML, JSON, whatever you like. A view is a **pure function
 of those events** — same events in, same bytes out. Do not read the clock, the
@@ -248,6 +260,14 @@ Four rules keep the exchange honest, all mechanical:
 2. **Moments are preserved.** Deposited events keep their own `occurred_at` and
    their own `by`. The door is re-stamped `learn:<account>`: doors are this
    log's facts, never another body's. A record arriving is history, not news.
+
+   That re-stamped door is also what lets a view tell the difference. A learned
+   record lands under the event names this instance already reads, so it changes
+   what existing views print — which is the point of learning evidence, and also
+   the way a hostile account reaches your pages. A view that should show only
+   local testimony filters on `via`; one that should show both makes the
+   provenance visible. Deciding which is the receiving mind's job, not the
+   kernel's.
 3. **Interventions are visible.** `lesson.learned` records the sha256 of the
    record file **as read** beside what the manifest claimed. Deleting a line
    before learning is legitimate curation — and it shows, in both logs, forever.
