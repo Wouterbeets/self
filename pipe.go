@@ -272,7 +272,7 @@ func hear(home string, evs []Event, scripts []authored, prose []string, out io.W
 		installed = append(installed, c.key())
 	}
 
-	retired := applyRetirements(home, evs)
+	retired := applyRetirements(home, st, evs)
 
 	// The report goes to stdout: this is the last stage of a pipeline, and
 	// whether the script installed is the one thing its operator needs.
@@ -347,7 +347,12 @@ func dropRejection(rs []*rejection, key string) []*rejection {
 // applyRetirements takes retired capabilities off the readable surface as their
 // tombstones land, so disk never claims something the log has ended. Every
 // event stays; re-declaring revives it.
-func applyRetirements(home string, evs []Event) []string {
+//
+// It consults the replayed state rather than the tombstones alone: one body can
+// retire a capability and then declare it again, and replay is the only thing
+// that knows which of the two came last. Unlinking on the tombstone alone would
+// delete a capability that is live.
+func applyRetirements(home string, st *state, evs []Event) []string {
 	var out []string
 	for _, e := range evs {
 		if e.Name != "capability.retired" {
@@ -356,6 +361,9 @@ func applyRetirements(home string, evs []Event) []string {
 		var t struct{ Type, Name string }
 		if json.Unmarshal(e.Payload, &t) != nil || !validCapability(t.Type, t.Name) {
 			continue
+		}
+		if st.cap(t.Type, t.Name) != nil {
+			continue // a later declaration in this same body revived it
 		}
 		unlink(home, t.Type, t.Name)
 		out = append(out, t.Type+"/"+t.Name)

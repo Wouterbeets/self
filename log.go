@@ -124,17 +124,6 @@ func appendEvents(home string, evs []Event) error {
 	if len(evs) == 0 {
 		return nil
 	}
-	for i := range evs {
-		if !validEventName(evs[i].Name) {
-			return fmt.Errorf("event name %q is not lowercase dotted (see self help)", evs[i].Name)
-		}
-		// The log must stay valid UTF-8 JSON: a payload carrying raw bytes would
-		// land unchanged (RawMessage is passed through verbatim) and then break
-		// every view that parses it. Refuse at the door instead.
-		if !utf8.Valid(evs[i].Payload) {
-			return fmt.Errorf("event %q carries a payload that is not valid UTF-8", evs[i].Name)
-		}
-	}
 	if err := os.MkdirAll(home, 0755); err != nil {
 		return err
 	}
@@ -149,6 +138,18 @@ func appendEvents(home string, evs []Event) error {
 // appendLocked is appendEvents' body for callers already holding the lock (a
 // hear body, which must resolve declared-ness between its own appends).
 func appendLocked(home string, evs []Event) error {
+	// Every append passes through here, so this is where the log's two
+	// well-formedness rules live: a lowercase dotted name, and a payload that
+	// is valid UTF-8. A RawMessage is written through verbatim, so raw bytes
+	// would land unchanged and break every view that parses the line.
+	for i := range evs {
+		if !validEventName(evs[i].Name) {
+			return fmt.Errorf("event name %q is not lowercase dotted (see self help)", evs[i].Name)
+		}
+		if !utf8.Valid(evs[i].Payload) {
+			return fmt.Errorf("event %q carries a payload that is not valid UTF-8", evs[i].Name)
+		}
+	}
 	last, err := lastSeq(home)
 	if err != nil {
 		return err

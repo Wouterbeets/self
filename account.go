@@ -81,7 +81,12 @@ func readAccount(ref string) (*account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("an account is a directory with an intent.md: %w", err)
 	}
-	a := &account{Name: filepath.Base(strings.TrimRight(ref, "/")), Intent: strings.TrimSpace(string(data))}
+	a := &account{Name: accountName(ref), Intent: strings.TrimSpace(string(data))}
+	if a.Intent == "" {
+		// intent.md is the required half: an account with no telling is a pile
+		// of events with nothing saying what they were for.
+		return nil, fmt.Errorf("%s/intent.md is empty — an account's intent is the required half", ref)
+	}
 	if raw, err := os.ReadFile(filepath.Join(ref, "record.jsonl")); err == nil {
 		for i, line := range strings.Split(string(raw), "\n") {
 			if line = strings.TrimSpace(line); line == "" {
@@ -108,6 +113,16 @@ func readAccount(ref string) (*account, error) {
 		}
 	}
 	return a, nil
+}
+
+// accountName is the name a deposit's door will carry, so it must be a token and
+// not whatever the caller's path happened to end in.
+func accountName(ref string) string {
+	name := filepath.Base(strings.TrimRight(ref, "/"))
+	if name == "" || name == "." || name == ".." || name == "/" {
+		return "account"
+	}
+	return name
 }
 
 // cmdLearn is the only way in, and it splits along the seam. The mechanical
@@ -195,6 +210,12 @@ func learnAsk(ref string, a *account) string {
 // lineage so they arrive as evidence and can never be installables. Curation is
 // the giver's move and it happens in the directory afterwards.
 func cmdGive(home, selector, dir string) error {
+	// An empty selector would match every event in the log — including every
+	// installed script — and quietly write the whole instance out to a
+	// directory. Giving is deliberate; make it say what it gives.
+	if strings.TrimSpace(selector) == "" {
+		return fmt.Errorf("give needs a selector: an event-name prefix (\"note.\"), or command/<name> | view/<name>")
+	}
 	st, err := loadState(home)
 	if err != nil {
 		return err

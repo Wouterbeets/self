@@ -609,6 +609,39 @@ func TestRetirementLeavesTheSurfaceAndTheLogKeepsEverything(t *testing.T) {
 	}
 }
 
+// One body can retire a capability and declare it again. Replay is the only
+// thing that knows which came last, so unlinking on the tombstone alone would
+// delete something that is live.
+func TestRetireThenRedeclareInOneBody(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	body := line(t, "capability.retired", map[string]string{"type": "command", "name": "entry"}) +
+		line(t, "command.declared", decl{Name: "entry", Description: "back again"}) +
+		line(t, "script.authored", authored{Type: "command", Name: "entry",
+			Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"journal.entry\",\"payload\":{\"text\":\"%s\"}}\\n' \"$*\"\n"})
+	heard(t, h, body)
+	st := replayed(t, h)
+	if st.cap(kindCommand, "entry") == nil {
+		t.Fatal("the re-declaration did not survive the tombstone")
+	}
+	if _, err := runCommand(h, st, "entry", []string{"alive"}, doorCLI, ""); err != nil {
+		t.Fatalf("a revived capability was unlinked: %v", err)
+	}
+}
+
+// Invalid UTF-8 must not reach the log through ANY door, including the wire.
+func TestWireCannotSmuggleRawBytes(t *testing.T) {
+	h := home(t)
+	var out bytes.Buffer
+	body := "{\"name\":\"bad.one\",\"payload\":{\"t\":\"\xff\xfe\"}}\n"
+	if err := cmdHear(h, []byte(body), &out); err == nil {
+		t.Fatal("the wire smuggled invalid UTF-8 into the log")
+	}
+	if events, err := readEvents(h); err != nil || len(events) != 0 {
+		t.Fatalf("the log took it anyway: %d %v", len(events), err)
+	}
+}
+
 // rehydrate is the only thing allowed to delete, and it makes disk match the
 // log exactly — including collecting the blobs nothing references.
 func TestRehydrateReconciles(t *testing.T) {
@@ -853,6 +886,25 @@ func TestManifestIsAdvisory(t *testing.T) {
 	}
 	if !hasEvent(t, h, "note.added") {
 		t.Fatal("the record was not deposited")
+	}
+}
+
+// An account must say what it is for, and giving must say what it gives: an
+// empty selector would write every event — every installed script included —
+// out to a directory.
+func TestAccountEdgesAreRefused(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "intent.md"), []byte("   \n"), 0644)
+	h := home(t)
+	if err := cmdLearn(h, dir, &bytes.Buffer{}); err == nil {
+		t.Fatal("an account with an empty intent was learned")
+	}
+	if events, _ := readEvents(h); len(events) != 0 {
+		t.Fatal("a refused account still wrote")
+	}
+	growJournal(t, h)
+	if err := cmdGive(h, "", t.TempDir()); err == nil {
+		t.Fatal("an empty selector gave the whole log away")
 	}
 }
 
