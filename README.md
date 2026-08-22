@@ -156,8 +156,9 @@ learn from, never as code that runs. `self` is the runtime that speaks it.
 This kernel is deliberately smaller than the one before it. What went, and why:
 
 - **The HTTP server, the injected shell, `site/`.** A web surface is a feature,
-  and it forced every view to emit bare HTML so a stylesheet could style it.
-  Views now emit whatever they like and `self view` prints it.
+  and it forced every view to emit bare markup — no CSS, no JavaScript, no
+  assets — so a server-side stylesheet could style it. That ceiling is gone. See
+  *Many faces* below for what is on the other side of it.
 - **The kernel's conversation** (`self.asked`, `self.replied`, `self.reflected`)
   and its knowledge of `chat.message`. The kernel kept a diary beside the chat
   lesson, and parsed a *lesson's* event name to decide what to do next.
@@ -187,6 +188,36 @@ newline: a crash mid-write leaves bytes that were never a record, and the next
 append drops them. Before that rule, one short write bricked an instance
 permanently — every verb, `rehydrate` included — with no repair path but the one
 thing the protocol forbids.
+
+## Many faces
+
+A view is a pure function from events to **bytes**. Not to HTML — to bytes, and
+the kernel neither knows nor cares what shape they are. One log, as many surfaces
+as you care to write, each composing with whatever already reads that format:
+
+```sh
+self view table                       # an aligned table with a total, at a prompt
+self view json | jq 'group_by(.what)' # your own history, queryable
+self view csv  > work.csv             # a spreadsheet, sqlite, pandas, R
+self view page > /tmp/p.html          # ONE self-contained HTML file, own CSS and JS
+self view chart > /tmp/p.svg          # a chart, as a pure function of events
+self view metrics                     # Prometheus text — scrape an instance that
+                                      #   has no idea what a metric is
+self view ics                         # iCalendar — a phone can subscribe to it
+self view replay > rebuild.sh         # a view whose output is a program
+```
+
+None of that is kernel support. Each face is a short script a mind wrote,
+installed under a signature, replayed on demand. `self view replay | sh` against
+a fresh instance produces a log whose table is identical to the original's: the
+log wrote the program that rebuilt the log.
+
+`lessons/faces` is the account that grows this — the intent, not the scripts,
+because nothing runnable travels. Learn it and your instance writes its own:
+
+```sh
+self learn lessons/faces | claude -p | self hear
+```
 
 ## Limits
 

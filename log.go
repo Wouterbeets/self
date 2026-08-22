@@ -316,9 +316,15 @@ func lastSeq(home string) (int, error) {
 			}
 		}
 		lines := bytes.Split(buf, []byte{'\n'})
-		// The final element is whatever followed the last newline. It counts
-		// only if it parses — same rule as readEvents — so the walk below tries
-		// it first and falls through when it is a torn write.
+		// The HIGHEST sequence in the window wins, not the last one seen. The
+		// kernel only ever writes them in order, so for a log it wrote these are
+		// the same answer — but a hand-appended line out of order would
+		// otherwise hand the next batch a number already in use, and duplicate
+		// sequences are the one thing replay cannot recover from.
+		//
+		// A line counts if it parses, terminated or not: same rule as
+		// readEvents, so a final record missing only its newline is not skipped.
+		best, found := 0, false
 		for i := len(lines) - 1; i >= 0; i-- {
 			line := bytes.TrimSpace(lines[i])
 			if len(line) == 0 {
@@ -329,9 +335,15 @@ func lastSeq(home string) (int, error) {
 			}
 			var e Event
 			if json.Unmarshal(line, &e) != nil {
-				continue // not a record; keep walking back
+				continue // not a record; keep looking
 			}
-			return e.Seq, nil
+			found = true
+			if e.Seq > best {
+				best = e.Seq
+			}
+		}
+		if found {
+			return best, nil
 		}
 		if window >= st.Size() {
 			return 0, nil // nothing readable anywhere: start from one

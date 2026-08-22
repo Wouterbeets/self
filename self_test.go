@@ -191,6 +191,45 @@ func TestPayloadIsAlwaysValidJSONObject(t *testing.T) {
 	}
 }
 
+// Duplicate sequence numbers are the one thing replay cannot recover from, so
+// the next batch continues past the HIGHEST sequence in the log's tail, not the
+// last one written. The kernel never writes them out of order; a hand-appended
+// line can.
+func TestNextSeqClearsTheHighestNotTheLast(t *testing.T) {
+	h := home(t)
+	ensureSecret(h)
+	heard(t, h, line(t, "one.happened", map[string]string{})+
+		line(t, "two.happened", map[string]string{})+
+		line(t, "three.happened", map[string]string{}))
+
+	// Someone hand-appends an out-of-order record.
+	f, _ := os.OpenFile(logPath(h), os.O_WRONLY|os.O_APPEND, 0644)
+	f.WriteString(`{"id":"x","seq":1,"name":"out.of.order","occurred_at":"2026-01-01T00:00:00Z","payload":{}}` + "\n")
+	f.Close()
+
+	heard(t, h, line(t, "next.one", map[string]string{}))
+	events, err := readEvents(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The hand-appended line already collides with seq 1; that damage is the
+	// editor's. What must hold is that the kernel's next append clears
+	// everything already in the log rather than continuing from the last line.
+	highestBefore, next := 0, 0
+	for _, e := range events {
+		if e.Name == "next.one" {
+			next = e.Seq
+			continue
+		}
+		if e.Seq > highestBefore {
+			highestBefore = e.Seq
+		}
+	}
+	if next <= highestBefore {
+		t.Fatalf("the append took seq %d, at or below the %d already in the log", next, highestBefore)
+	}
+}
+
 func TestConcurrentAppendsDoNotCollide(t *testing.T) {
 	h := home(t)
 	ensureSecret(h)
