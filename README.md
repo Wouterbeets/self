@@ -23,7 +23,10 @@ That is the strange loop, and it is one shell idiom:
 while ask=$(self); do printf '%s\n' "$ask" | claude -p | self hear; done
 ```
 
-It stops on its own. Bare `self` exits 3 when nothing is pending.
+It stops on its own: bare `self` exits 3 when nothing is pending. A loop that
+works toward something is a different shape, driven by a view rather than by the
+kernel — `while [ -n "$(self view goals)" ]` — because the kernel cannot know
+what matters here, and should not pretend to.
 
 ## Three laws
 
@@ -87,12 +90,14 @@ cap/           installed scripts, derived: blobs addressed by hash, with a
                readable symlink per capability. Delete it; nothing is lost.
 ```
 
-Two kinds of capability, and the line between them is a trust boundary: a
-**command** may append to the log, a **view** may not. A command gets argv and
-the log on stdin and prints events. A view gets exactly the events its receipt
-names and prints opaque bytes — text, HTML, JSON, whatever you want to read.
-Both are ordinary executables in any language with a shebang, written by a mind
-and installed only under a signature.
+Two kinds of capability, and the difference is what the kernel does with the
+output: it appends what a command prints and never appends what a view prints. A
+command gets argv and the log on stdin. A view gets exactly the events its
+receipt names and prints opaque bytes — text, HTML, JSON, whatever you want to
+read. Both are ordinary executables in any language with a shebang, written by a
+mind and installed only under a signature. Nothing *stops* an installed script
+from writing to the log itself — see the limits — but then it is not a view
+doing it, it is a program you installed.
 
 The whole contract is [`PROTOCOL.md`](PROTOCOL.md), which is also what
 `self help` prints. Nothing else in this repository restates it — there is one
@@ -174,6 +179,13 @@ scrubbed environment, because determinism was claimed but never enforced; and a
 `hear` that is lenient per line, because a real frontier model told plainly that
 stdout is the wire still opens with a sentence — and strictness threw six perfect
 events away.
+
+Two claims turned out to be false rather than broken, so the claims changed
+rather than the code. And a record is now *defined* as a line terminated by a
+newline: a crash mid-write leaves bytes that were never a record, and the next
+append drops them. Before that rule, one short write bricked an instance
+permanently — every verb, `rehydrate` included — with no repair path but the one
+thing the protocol forbids.
 
 ## Limits
 
