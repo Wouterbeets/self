@@ -98,14 +98,28 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return nil
 
 	case "view":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: self view <name>")
-		}
 		st, err := loadState(home)
 		if err != nil {
 			return err
 		}
-		page, err := runView(home, st, args[0])
+		if len(args) != 1 {
+			// No name — or too many — is a question about what is runnable, not a
+			// failure. Answer it with the names this log actually knows.
+			fmt.Fprintln(out, "usage: self view <name>")
+			fmt.Fprintln(out)
+			fmt.Fprint(out, viewUsage(st))
+			return nil
+		}
+		name := args[0]
+		// A name the log does not know at all — no view, no command by that name,
+		// and not the built-in log — is a guess. Point the reader at what is real
+		// rather than sending them to check `self brief` for the list.
+		if name != "log" && st.cap(kindView, name) == nil && st.cap(kindCommand, name) == nil {
+			fmt.Fprintf(out, "no view %q in this log\n\n", name)
+			fmt.Fprint(out, viewUsage(st))
+			return nil
+		}
+		page, err := runView(home, st, name)
 		if err != nil {
 			return err
 		}
@@ -207,6 +221,30 @@ func brief(home string, st *state) string {
 	b.WriteString("\n## where\n\n")
 	b.WriteString("`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n")
 	b.WriteString("`self help` the protocol · `self view log` what happened lately\n")
+	return b.String()
+}
+
+// viewUsage lists the views this instance can run, so a reader who asks for a
+// view by a name the log does not know — or asks for none at all — is pointed
+// at what actually exists instead of guessing. It mirrors the view section of
+// `brief`, because the two answer the same question: what can I read here?
+func viewUsage(st *state) string {
+	var b strings.Builder
+	b.WriteString("views on this instance — `self view <name>`:\n")
+	views := st.list(kindView)
+	for _, c := range views {
+		consumes := strings.Join(c.Decl.Consumes, ", ")
+		if consumes == "" {
+			consumes = "the whole log"
+		}
+		fmt.Fprintf(&b, "- %s — %s (consumes %s)%s\n", c.Name, oneLine(c.Decl.Description), consumes, pendingMark(c))
+	}
+	if st.cap(kindView, "log") == nil {
+		b.WriteString("- log — every event, one line each (built in; a declared view named `log` shadows it)\n")
+	}
+	if len(views) == 0 && st.cap(kindView, "log") == nil {
+		b.WriteString("\n(no declared views yet — only the built-in log; `self help` shows how to author one)\n")
+	}
 	return b.String()
 }
 
