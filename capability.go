@@ -76,15 +76,6 @@ type state struct {
 	Caps   []*capability // live, in first-declared order
 	byKey  map[string]*capability
 	Reject []*rejection // refusals still standing, in log order
-	Work   []*workItem  // open stacked work, in log order
-}
-
-// workItem is a line of prose the next pass should do. Not a capability —
-// arbitrary work. It rides the prompt like a pending declaration and holds
-// the loop open until a matching work.done.
-type workItem struct {
-	Seq  int
-	Text string
 }
 
 func loadState(home string) (*state, error) {
@@ -185,29 +176,6 @@ func replay(events []Event, key []byte) *state {
 				continue
 			}
 			forget(t.Type + "/" + t.Name)
-
-		case "work.queued":
-			var p struct {
-				Text string `json:"text"`
-			}
-			if json.Unmarshal(e.Payload, &p) != nil {
-				continue
-			}
-			text := strings.TrimSpace(p.Text)
-			if text == "" {
-				continue
-			}
-			st.Work = append(st.Work, &workItem{Seq: e.Seq, Text: text})
-
-		case "work.done":
-			var p struct {
-				Seq  int    `json:"seq"`
-				Text string `json:"text"`
-			}
-			if json.Unmarshal(e.Payload, &p) != nil {
-				continue
-			}
-			st.Work = closeWork(st.Work, p.Seq, strings.TrimSpace(p.Text))
 		}
 	}
 
@@ -243,37 +211,9 @@ func (st *state) pending() []*capability {
 	return out
 }
 
-// quiet reports the loop's convergence: nothing declared awaits a script, no
-// refusal stands, and no stacked work is open. It is what bare `self` turns
-// into exit code 3.
-func (st *state) quiet() bool {
-	return len(st.pending()) == 0 && len(st.Reject) == 0 && len(st.Work) == 0
-}
-
-func closeWork(open []*workItem, seq int, text string) []*workItem {
-	if seq != 0 {
-		out := open[:0]
-		for _, w := range open {
-			if w.Seq != seq {
-				out = append(out, w)
-			}
-		}
-		return out
-	}
-	if text == "" {
-		return open
-	}
-	out := open[:0]
-	closed := false
-	for _, w := range open {
-		if !closed && w.Text == text {
-			closed = true
-			continue
-		}
-		out = append(out, w)
-	}
-	return out
-}
+// quiet reports the loop's convergence: nothing declared awaits a script and no
+// refusal stands. It is what bare `self` turns into exit code 3.
+func (st *state) quiet() bool { return len(st.pending()) == 0 && len(st.Reject) == 0 }
 
 // exemplar returns the most recently installed script, skipping the
 // capabilities currently being asked about so a re-author is never anchored to

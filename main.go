@@ -123,9 +123,6 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		}
 		return cmdLearn(home, args[0], out)
 
-	case "work":
-		return cmdWork(home, args, out)
-
 	case "give":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: self give <event-prefix | command/<name> | view/<name>> <dir>")
@@ -145,7 +142,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		// more likely a mistyped verb than a question, and silently answering a
 		// typo with a prompt would hide it.
 		if len(args) == 0 && !strings.ContainsAny(verb, " \t\n") {
-			return fmt.Errorf("unknown verb %q — verbs: hear brief run view work learn give rehydrate help; to ask, quote it: self %q", verb, verb)
+			return fmt.Errorf("unknown verb %q — verbs: hear brief run view learn give rehydrate help; to ask, quote it: self %q", verb, verb)
 		}
 		return cmdSituate(home, strings.Join(append([]string{verb}, args...), " "), out)
 	}
@@ -169,10 +166,6 @@ func brief(home string, st *state) string {
 	}
 	b.WriteByte('\n')
 	b.WriteString(listCaps(st, kindCommand, kindView))
-	if len(st.Work) > 0 {
-		b.WriteByte('\n')
-		b.WriteString(listWork(st))
-	}
 	if len(st.Reject) > 0 {
 		b.WriteByte('\n')
 		for _, r := range st.Reject {
@@ -215,71 +208,6 @@ func listCaps(st *state, kinds ...string) string {
 		}
 	}
 	return formatCapRows(rows)
-}
-
-func listWork(st *state) string {
-	if len(st.Work) == 0 {
-		return "work  —\n"
-	}
-	var b strings.Builder
-	for _, w := range st.Work {
-		fmt.Fprintf(&b, "work  seq %-4d  %s\n", w.Seq, trunc(oneLine(w.Text), 80))
-	}
-	return b.String()
-}
-
-func cmdWork(home string, args []string, out io.Writer) error {
-	st, err := loadState(home)
-	if err != nil {
-		return err
-	}
-	if len(args) == 0 {
-		_, err = io.WriteString(out, listWork(st))
-		return err
-	}
-	if args[0] == "done" {
-		if len(args) != 2 {
-			return fmt.Errorf("usage: self work done <seq>\n%s", strings.TrimRight(listWork(st), "\n"))
-		}
-		var seq int
-		if _, err := fmt.Sscanf(args[1], "%d", &seq); err != nil || seq < 1 {
-			return fmt.Errorf("usage: self work done <seq>\n%s", strings.TrimRight(listWork(st), "\n"))
-		}
-		open := false
-		for _, w := range st.Work {
-			if w.Seq == seq {
-				open = true
-				break
-			}
-		}
-		if !open {
-			return fmt.Errorf("no open work seq %d\n%s", seq, strings.TrimRight(listWork(st), "\n"))
-		}
-		payload, _ := json.Marshal(map[string]int{"seq": seq})
-		e := newEvent("work.done", payload)
-		e.Via, e.By = doorCLI, callerClaim()
-		if err := appendEvents(home, []Event{e}); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "done  seq %d\n", seq)
-		return nil
-	}
-	text := strings.TrimSpace(strings.Join(args, " "))
-	if text == "" {
-		return fmt.Errorf("usage: self work <text…>")
-	}
-	payload, _ := json.Marshal(map[string]string{"text": text})
-	e := newEvent("work.queued", payload)
-	e.Via, e.By = doorCLI, callerClaim()
-	// appendEvents assigns Seq into the slice it is given, so read the event
-	// back from there: a copy would carry seq 0 and the next prompt would
-	// print a line that is not the line in the log.
-	batch := []Event{e}
-	if err := appendEvents(home, batch); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "work  seq %d  %s\n", batch[0].Seq, trunc(oneLine(text), 80))
-	return nil
 }
 
 func capStatus(c *capability) string {

@@ -125,27 +125,6 @@ return:
 {"name":"capability.retired","payload":{"type":"view","name":"journal"}}
 ```
 
-### Stacked work
-
-A line of prose the next pass should do. Not a capability — arbitrary work. It
-rides the prompt like a pending declaration and holds the loop open.
-
-```json
-{"name":"work.queued","payload":{"text":"analyse the metrics view and note insights"}}
-{"name":"work.done","payload":{"seq":12}}
-```
-
-`self work <text…>` queues one; `self work` lists what's open; `self work done <seq>`
-closes it. Closing is also the wire, so a mind (or a command) can stack work for
-the next call and settle it in the same body as the notes it took. `work.done`
-names a seq, or the exact text (oldest match). Empty text is not work: it lands
-in the log and names nothing.
-
-A command may emit either event, so the instance can queue work for itself —
-the same reflexivity as a capability declaring capabilities. A learned account
-cannot: both names are refused, because otherwise a record would wake the loop
-with an attacker's ask.
-
 ## Capability scripts
 
 Any language with a shebang; standard library only. The environment is scrubbed:
@@ -185,14 +164,13 @@ and `while [ -n "$(self view goals)" ]` then never terminates.
 ## Answering
 
 You are expected to have tools. The prompt is a wake-up card, not a context
-dump: it lists commands, views, and work. Read `events.jsonl`, `cap/`, run
-`self view`, `self work`, `self brief`, `self help` before you answer.
+dump: it lists commands and views. Read `events.jsonl`, `cap/`, run
+`self view`, `self brief`, `self help` before you answer.
 
 - Do durable work through `self run <command> …`, or by printing events.
 - To grow the instance, print a declaration and its `script.authored` in the
   same body — test the script by running it before you print it.
 - If a pending declaration lists a previous rejection, do not repeat it.
-- If work lines stand, do them. Close each with `work.done` `{seq}`.
 - If there is nothing worth doing, print nothing. Silence is a valid turn.
 - Never edit `events.jsonl` and never write into `cap/` yourself. Only a
   kernel-signed receipt installs, and only for a capability this log declared.
@@ -200,7 +178,7 @@ dump: it lists commands, views, and work. Read `events.jsonl`, `cap/`, run
 
 ## Events
 
-The kernel's own vocabulary — ten names it acts on. Everything else in the
+The kernel's own vocabulary — eight names it acts on. Everything else in the
 log is a domain event, appended verbatim and interpreted only by views.
 
 | name | who writes it | what it means |
@@ -210,8 +188,6 @@ log is a domain event, appended verbatim and interpreted only by views.
 | `script.installed` | the kernel | a receipt: these bytes are installed, signed under the local key |
 | `script.rejected` | the kernel | an authored script was refused, and why |
 | `capability.retired` | anyone | a tombstone: off the surface, still in the log |
-| `work.queued` | anyone | a line of prose the next pass should do; holds the loop open |
-| `work.done` | anyone | closes the matching `work.queued` (by `seq`, or oldest exact `text`) |
 | `intent.declared` | `self learn` | prose someone brought here: what an account is for |
 | `lesson.learned` | the kernel | an attestation: what an account actually deposited |
 | `account.given` | `self give` | this instance gave an account away |
@@ -298,7 +274,7 @@ Four rules keep the exchange honest, all mechanical:
    at all. Without this a deposited `command.declared` would become pending work
    and the next pass would author and sign an attacker's script under your key.
 
-   The refused set is **frozen**: it holds the ten names above plus every name
+   The refused set is **frozen**: it holds the eight names above plus every name
    any earlier kernel acted on — `kernel.initialized`, `projector.declared`,
    `script.compiled`, `self.asked`, `self.replied`, `self.reflected`,
    `learn.orchestrated`, `capability.revision.requested`. A name may leave the
@@ -340,9 +316,6 @@ self <ask…>                 situate that ask                             (READ
 self brief                  the inventory
 self run                    list commands
 self run <cmd> [args…]      execute a command
-self work                   list open work
-self work <text…>           queue a line of work (WRITE)
-self work done <seq>        close that line (WRITE)
 self view                   list views ("log" is built in)
 self view <name>            replay a view to stdout
 self learn <dir>            deposit an account, print its learning prompt
@@ -357,8 +330,8 @@ this instance's faces; `self run` is the index of its verbs. Both fit a screen.
 ## Exit codes
 
 `0` did the thing. `1` did not. `3` nothing to do — bare `self` exits 3 when no
-declaration is pending, no refusal stands, and no work is open. That is the loop's
-convergence signal, and the way to use it is command substitution, not a pipeline:
+declaration is pending and no refusal stands. That is the loop's convergence
+signal, and the way to use it is command substitution, not a pipeline:
 
 ```sh
 while ask=$(self); do printf '%s\n' "$ask" | claude -p | self hear; done
@@ -370,17 +343,14 @@ A pipeline would swallow it. `self | mind | self hear` exits with the status of
 `set -o pipefail` inside a `sh -c` is silently a no-op. Command substitution
 puts the exit code where the loop can see it and works in POSIX sh.
 
-Quiet means *the kernel* has nothing pending: no declaration awaits a script, no
-refusal stands, no stacked work is open. It does not mean there is nothing to do
-in the world. Derived conditions — an empty goals view, a metrics page that
-still looks wrong — live in views, and only a mind reading them can see them.
-Queue a line when you want the *next* pass to see it. Leave it in a view when
-the loop should watch a condition rather than a stack.
+Quiet means *the kernel* has nothing pending. It does not mean there is nothing
+to do in the world: unfinished domain work lives in this instance's own views,
+and only a mind reading them can see it. That is the correct division — the
+kernel cannot know what matters here, and should not pretend to.
 
 So there are two loops, different shapes on purpose. The one above grows the
-instance and works through what was stacked, and converges when both are
-quiet. A loop that watches a condition is driven by a **view**, because a view
-is just bytes:
+instance and converges when it has finished building itself. A loop that works
+toward something is driven by a **view**, because a view is just bytes:
 
 ```sh
 while [ -n "$(self view goals)" ]; do

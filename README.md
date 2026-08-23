@@ -23,10 +23,10 @@ That is the strange loop, and it is one shell idiom:
 while ask=$(self); do printf '%s\n' "$ask" | claude -p | self hear; done
 ```
 
-It stops on its own: bare `self` exits 3 when nothing is pending. Stack a line
-of work when the next pass should see it (`self work "analyse the metrics view"`);
-watch a condition with a view when the loop should keep going until the world
-looks right (`while [ -n "$(self view goals)" ]`).
+It stops on its own: bare `self` exits 3 when nothing is pending. A loop that
+works toward something is a different shape, driven by a view rather than by the
+kernel — `while [ -n "$(self view goals)" ]` — because the kernel cannot know
+what matters here, and should not pretend to.
 
 ## Three laws
 
@@ -67,6 +67,7 @@ Then put a real mind in the pipe:
 go install .                                     # `self` on PATH
 cd ~/somewhere
 self learn ~/self/lessons/chat | claude -p | self hear   # grow a way to talk
+self learn ~/self/lessons/aim  | claude -p | self hear   # grow a work stack the kernel will not see
 self run say "what can you do?"
 self view chat
 ```

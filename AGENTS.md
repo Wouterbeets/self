@@ -19,7 +19,6 @@ it as events. Anything not in the log is lost when your context ends.
 export SELF_CALLER="<who you are>"   # recorded verbatim as `by` on what you write
 self                                 # inventory: what exists, what is pending, what broke
 self view                            # the views this instance has
-self work                            # stacked work for the next pass
 self help                            # the complete protocol — read it once
 self view log                        # what happened here lately, and who says so
 ```
@@ -29,13 +28,12 @@ it your events are indistinguishable from every other caller's, so on a shared
 instance nobody can tell which agent wrote a line and you cannot filter your own
 writes out of what you read back.
 
-**The six things you can do**
+**The five things you can do**
 
 | | |
 |---|---|
 | read state | `self view` lists views; `self view <name>` replays one. Never a command: a command's output is appended, so a query written as a command litters the log on every read. If the view you need is missing, author one. |
 | write | `self run <cmd> [args…]` for an installed verb, or print events: `echo '{"name":"note.added","payload":{"text":"…"}}' \| self hear` |
-| stack | `self work <text…>` queues a line the next `self` will see. Close it with `self work done <seq>`, or `work.done` on the wire. |
 | grow | declare a capability and author its script in one body — see `self help`. Only a kernel-signed receipt installs, and only for something this log declared. |
 | learn | `self learn <account-dir>` deposits an account's record and prints its learning prompt; answer it yourself or pipe it to another mind. |
 | ask | `self "<question>"` prints the situated prompt a mind would receive. Useful for seeing what another mind would be told. It appends nothing. |

@@ -11,12 +11,6 @@ The kernel already said the prompt is a card, not a dump. The code now matches.
   status, refusals as one line each. The wire is `self help`; it is no longer
   spliced into every ask. A cold mind still gets declaration JSON, the refusal
   reason, and one idiom when something is pending.
-- **Stacked work.** Pending was only undeclared scripts. `work.queued` /
-  `work.done` are kernel events: a line of prose the next pass should do, riding
-  the prompt and holding the loop open. `self work "analyse the metrics view and
-  note insights"` queues one; `self work` lists; `self work done <seq>` closes.
-  A command may emit either, so the instance can stack work for itself. Accounts
-  cannot: both names are refused.
 
 ### Why
 
