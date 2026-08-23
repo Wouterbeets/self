@@ -391,7 +391,7 @@ func TestStrangeLoop(t *testing.T) {
 		t.Fatalf("a declaration did not become pending work: %d pending", len(st.pending()))
 	}
 	// The pending ask must carry the declaration, so a cold mind can act on it.
-	if p := situated(t, h, ""); !strings.Contains(p, `command "entry"`) {
+	if p := situated(t, h, ""); !strings.Contains(p, "pending  command/entry") {
 		t.Fatalf("pending work missing from the prompt:\n%s", p)
 	}
 
@@ -444,7 +444,7 @@ func TestACapabilityCanDeclareCapabilities(t *testing.T) {
 		t.Fatal("work the instance asked for did not wake the loop")
 	}
 	// It rides the prompt like any other pending declaration.
-	if p := situated(t, h, ""); !strings.Contains(p, `view "census"`) {
+	if p := situated(t, h, ""); !strings.Contains(p, "pending  view/census") {
 		t.Fatal("the instance's own declaration is missing from the prompt")
 	}
 	// And it closes the same way.
@@ -1304,23 +1304,31 @@ func TestAccountEdgesAreRefused(t *testing.T) {
 
 // ───────────────────────────── prompts and briefs ───────────────────────────
 
-// One description of the contract, spliced rather than restated. Six
-// hand-synced copies is how the previous kernel came to print two
-// contradictory instructions back to back inside one brief.
-func TestPromptSplicesTheProtocol(t *testing.T) {
+// The prompt is a wake-up card, not a dump of the contract. Six hand-synced
+// copies is how the previous kernel came to print two contradictory
+// instructions back to back inside one brief — so the card points at
+// `self help` rather than restating PROTOCOL.md.
+func TestPromptPointsAtTheProtocol(t *testing.T) {
 	if !strings.Contains(protocolDoc, "<!-- prompt:begin -->") {
 		t.Fatal("PROTOCOL.md lost its splice marker")
 	}
 	w := wireContract()
 	if !strings.Contains(w, "script.authored") || !strings.Contains(w, "## Capability scripts") {
-		t.Fatalf("the spliced section is missing the contract:\n%s", trunc(w, 200))
+		t.Fatalf("the marked section is missing the contract:\n%s", trunc(w, 200))
 	}
 	if strings.Contains(w, "## Accounts") {
 		t.Fatal("the splice ran past its end marker")
 	}
 	h := home(t)
-	if p := situated(t, h, "an ask"); !strings.Contains(p, w) {
-		t.Fatal("the prompt does not carry the spliced contract verbatim")
+	p := situated(t, h, "an ask")
+	if !strings.Contains(p, "self help is the wire") {
+		t.Fatal("the prompt does not point at the contract")
+	}
+	if strings.Contains(p, w) {
+		t.Fatal("the prompt restates the contract — it should point at self help")
+	}
+	if !strings.Contains(p, "an ask") {
+		t.Fatal("the ask was lost")
 	}
 }
 
@@ -1344,10 +1352,10 @@ func TestPromptCarriesAnExemplarButNotTheBrokenOne(t *testing.T) {
 	growJournal(t, h)
 	heard(t, h, line(t, "view.declared", decl{Name: "second", Description: "x", Consumes: []string{"*"}}))
 	p := situated(t, h, "")
-	if !strings.Contains(p, "as idiom") {
+	if !strings.Contains(p, "idiom  ") {
 		t.Fatal("no exemplar in the prompt")
 	}
-	if strings.Contains(p, "--- view/second ---") {
+	if strings.Contains(p, "idiom  view/second") {
 		t.Fatal("the exemplar is the capability being asked about")
 	}
 }
@@ -1357,13 +1365,16 @@ func TestPromptCarriesAnExemplarButNotTheBrokenOne(t *testing.T) {
 func TestBriefOnAnEmptyInstance(t *testing.T) {
 	h := home(t)
 	b := brief(h, replayed(t, h))
-	if len(b) > 2500 {
+	if len(b) > 800 {
 		t.Fatalf("the empty brief is %d bytes", len(b))
 	}
-	for _, want := range []string{"log: 0 events", "none yet", "SELF_CALLER", "nothing pending"} {
+	for _, want := range []string{"0 events", "SELF_CALLER", "cmd   —", "built-in"} {
 		if !strings.Contains(b, want) {
 			t.Fatalf("the empty brief is missing %q:\n%s", want, b)
 		}
+	}
+	if strings.Contains(b, "pending") || strings.Contains(b, "## ") {
+		t.Fatalf("the empty brief claims work or still speaks markdown:\n%s", b)
 	}
 }
 
@@ -1416,6 +1427,64 @@ func TestUnknownVerbIsNotSilentlyAnAsk(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "what is going on") {
 		t.Fatal("the ask was lost")
+	}
+}
+
+// A verb without its name is an index, not a usage error. Humans and minds
+// both need to see what is configured without paging through a prompt.
+func TestBareViewAndRunListWhatExists(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	heard(t, h, line(t, "view.declared", decl{Name: "census", Description: "counts", Consumes: []string{"*"}}))
+
+	var views bytes.Buffer
+	if err := dispatch(h, "view", nil, &views); err != nil {
+		t.Fatal(err)
+	}
+	got := views.String()
+	for _, want := range []string{"view  journal", "view  census", "pending", "built-in", "[journal.entry]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("self view is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "usage:") || strings.Contains(got, "## ") {
+		t.Fatalf("self view still speaks usage or markdown:\n%s", got)
+	}
+
+	var cmds bytes.Buffer
+	if err := dispatch(h, "run", nil, &cmds); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmds.String(), "cmd   entry") {
+		t.Fatalf("self run did not list commands:\n%s", cmds.String())
+	}
+
+	var missing bytes.Buffer
+	err := dispatch(h, "view", []string{"nope"}, &missing)
+	if err == nil {
+		t.Fatal("an unknown view succeeded")
+	}
+	if !strings.Contains(err.Error(), "no view") || !strings.Contains(err.Error(), "view  journal") {
+		t.Fatalf("an unknown view did not name what exists:\n%s", err)
+	}
+}
+
+// Naked self used to dump PROTOCOL.md and bury the inventory. The card must
+// stay on one screen and still carry the facts a pass needs.
+func TestSituateFitsAScreen(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	p := situated(t, h, "")
+	if len(p) > 1200 {
+		t.Fatalf("a quiet grown prompt is %d bytes:\n%s", len(p), p)
+	}
+	for _, want := range []string{"cmd   entry", "view  journal", "view  log", "self help is the wire", "ask"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("the card is missing %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "## The wire") || strings.Contains(p, "You are the mind") {
+		t.Fatalf("the card still dumps prose:\n%s", p)
 	}
 }
 

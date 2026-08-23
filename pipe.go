@@ -51,17 +51,9 @@ func wireContract() string {
 }
 
 // defaultAsk is what bare `self` situates: not a face, just the text used when
-// nobody supplied one. Pending work is already in the brief, so this does not
+// nobody supplied one. Pending work is already in the card, so this does not
 // need a priority queue — it needs to point at what is there.
-const defaultAsk = `No specific ask. Look at the brief above, then decide.
-
-1. If declarations are pending, author them. That is the work of this pass.
-2. If a refusal stands, resolve it: author the capability correctly, or retire it.
-3. Otherwise read this instance's views — ` + "`self view <name>`" + ` — and act on
-   what they show. Unfinished domain work is real work, and the kernel cannot see
-   it: only the views can.
-4. If nothing there needs doing, choose ONE small improvement to this instance
-   and make it, or print nothing. Silence is a valid turn.`
+const defaultAsk = `No specific ask. Author pending; else resolve refusals; else read a view and act; else one improvement or silence.`
 
 // ──────────────────────────────── the seam ──────────────────────────────────
 //
@@ -327,7 +319,7 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 		fmt.Fprintf(out, "heard %d event(s): seq %d-%d\n", len(evs), evs[0].Seq, evs[len(evs)-1].Seq)
 	}
 	for _, k := range installed {
-		fmt.Fprintf(out, "installed %s under a signed receipt\n", k)
+		fmt.Fprintf(out, "installed %s\n", k)
 	}
 	for _, r := range refused {
 		fmt.Fprintf(out, "REFUSED %s\n", r)
@@ -347,7 +339,6 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 		for _, line := range prose {
 			fmt.Fprintf(os.Stderr, "self:   ignored | %s\n", trunc(line, 200))
 		}
-		fmt.Fprintf(os.Stderr, "self: a line is an event only with a dotted lowercase name AND a payload key (see self help)\n")
 	}
 	if p := st.pending(); len(p) > 0 {
 		names := make([]string, 0, len(p))
@@ -446,17 +437,16 @@ func applyRetirements(home string, st *state, evs []Event) []string {
 
 // ───────────────────────────────── the prompt ───────────────────────────────
 
-// situate builds the situated prompt: the brief, pending work with the reason
-// each previous attempt failed, one exemplar of this instance's idiom, the wire
-// contract spliced from PROTOCOL.md, and the ask.
+// situate is the wake-up card: inventory, pending work with the reason each
+// previous attempt failed, one exemplar of this instance's idiom, and the ask.
+// The wire is `self help` — PROTOCOL.md says the prompt is a card, not a dump,
+// so the contract is not restated here.
 func situate(home string, st *state, ask string) string {
 	var b strings.Builder
-	b.WriteString("You are the mind of a self instance. This came out of `self`; your stdout goes back into `self`.\n\n")
+	b.WriteString("stdout → self hear.  self help is the wire.\n\n")
 	b.WriteString(brief(home, st))
 	b.WriteString(pendingSection(st))
-	b.WriteString("\n")
-	b.WriteString(wireContract())
-	b.WriteString("\n\n## The ask\n\n")
+	b.WriteString("\nask\n")
 	b.WriteString(strings.TrimSpace(ask))
 	b.WriteString("\n")
 	return b.String()
@@ -471,19 +461,17 @@ func pendingSection(st *state) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n## Pending — declared, awaiting a script\n\n")
-	b.WriteString("Author each one, test it by running it, and print its script.authored line.\n")
 	skip := map[string]bool{}
 	for _, c := range pending {
 		skip[c.key()] = true
 		d, _ := json.Marshal(c.Decl)
-		fmt.Fprintf(&b, "\n%s %q declared at seq %d:\n%s\n", c.Type, c.Name, c.DeclSeq, d)
+		fmt.Fprintf(&b, "\npending  %s  seq %d\n%s\n", c.key(), c.DeclSeq, d)
 		if c.Reject != nil {
-			fmt.Fprintf(&b, "Your previous attempt was REFUSED: %s\nDo not repeat that mistake.\n", c.Reject.Reason)
+			fmt.Fprintf(&b, "REFUSED  %s\n", c.Reject.Reason)
 		}
 	}
 	if name, script := st.exemplar(skip); script != "" {
-		fmt.Fprintf(&b, "\nAn installed capability of this instance, as idiom — learn its shape, do not copy it:\n\n--- %s ---\n%s\n--- end ---\n", name, script)
+		fmt.Fprintf(&b, "\nidiom  %s\n---\n%s\n---\n", name, script)
 	}
 	return b.String()
 }
