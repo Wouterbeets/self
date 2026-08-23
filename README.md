@@ -67,6 +67,7 @@ Then put a real mind in the pipe:
 go install .                                     # `self` on PATH
 cd ~/somewhere
 self learn ~/self/lessons/chat | claude -p | self hear   # grow a way to talk
+self learn ~/self/lessons/aim  | claude -p | self hear   # grow a work stack the kernel will not see
 self run say "what can you do?"
 self view chat
 ```

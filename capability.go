@@ -303,7 +303,8 @@ func materialize(home string, st *state, typ, name string) (string, error) {
 			return "", fmt.Errorf("no %s %q in this log — but there is a %s by that name: try `self %s %s`",
 				typ, name, other, map[string]string{kindCommand: "run", kindView: "view"}[other], name)
 		}
-		return "", fmt.Errorf("no %s %q in this log — declare it, or check `self brief`", typ, name)
+		return "", fmt.Errorf("no %s %q in this log — `self %s` lists what exists",
+			typ, name, map[string]string{kindCommand: "run", kindView: "view"}[typ])
 	case c.Receipt == nil && st.Key == nil && len(st.Events) > 0:
 		return "", fmt.Errorf("%s %q: no receipt verifies under this instance's key — is .secret missing next to events.jsonl?", typ, name)
 	case c.Receipt == nil:

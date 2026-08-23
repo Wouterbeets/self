@@ -73,20 +73,21 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return err
 
 	case "run":
+		st, err := loadState(home)
+		if err != nil {
+			return err
+		}
 		if len(args) < 1 {
-			return fmt.Errorf("usage: self run <command> [args...]")
+			_, err = io.WriteString(out, listCaps(st, kindCommand))
+			return err
 		}
 		// No ensureSecret here. Minting a key on this path meant `self run`
 		// dropped a .secret in whatever directory it was called from — and, on a
 		// real instance whose key went missing, forged a fresh one, hiding the
 		// only honest diagnostic there is.
-		st, err := loadState(home)
-		if err != nil {
-			return err
-		}
 		evs, err := runCommand(home, st, args[0], args[1:], doorCLI, callerClaim())
 		if err != nil {
-			return err
+			return fmt.Errorf("%w\n%s", err, strings.TrimRight(listCaps(st, kindCommand), "\n"))
 		}
 		if len(evs) == 0 {
 			fmt.Fprintln(out, "no events")
@@ -98,16 +99,20 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return nil
 
 	case "view":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: self view <name>")
-		}
 		st, err := loadState(home)
 		if err != nil {
 			return err
 		}
+		if len(args) == 0 {
+			_, err = io.WriteString(out, listCaps(st, kindView))
+			return err
+		}
+		if len(args) != 1 {
+			return fmt.Errorf("usage: self view <name>\n%s", strings.TrimRight(listCaps(st, kindView), "\n"))
+		}
 		page, err := runView(home, st, args[0])
 		if err != nil {
-			return err
+			return fmt.Errorf("%w\n%s", err, strings.TrimRight(listCaps(st, kindView), "\n"))
 		}
 		_, err = out.Write(page)
 		return err
@@ -137,7 +142,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		// more likely a mistyped verb than a question, and silently answering a
 		// typo with a prompt would hide it.
 		if len(args) == 0 && !strings.ContainsAny(verb, " \t\n") {
-			return fmt.Errorf("unknown verb %q — verbs: hear brief run view learn give rehydrate help; to ask a question, quote it: self %q", verb, verb)
+			return fmt.Errorf("unknown verb %q — verbs: hear brief run view learn give rehydrate help; to ask, quote it: self %q", verb, verb)
 		}
 		return cmdSituate(home, strings.Join(append([]string{verb}, args...), " "), out)
 	}
@@ -145,79 +150,119 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 
 // ───────────────────────────────── the brief ────────────────────────────────
 
-// brief is the state card: what this instance is, what it can do, what is
-// pending, and which authoring attempts stand refused. Facts only — the contract lives in PROTOCOL.md and there
-// is exactly one copy of it. This is the read an agent starts from, and every
-// line of it is a replay of the log.
+// brief is the state card: home, inventory, standing refusals. Facts only, one
+// screen. The contract lives in PROTOCOL.md and there is exactly one copy of
+// it. This is the read an agent starts from, and every line of it is a replay
+// of the log.
 func brief(home string, st *state) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# self — %s\n\n", home)
-
 	caller := callerClaim()
 	if caller == "" {
-		caller = `unset — export SELF_CALLER="<who you are>" so your writes are attributable`
+		caller = "unset — SELF_CALLER"
 	}
-	fmt.Fprintf(&b, "log: %d events    caller: %s\n", len(st.Events), caller)
+	fmt.Fprintf(&b, "%s  %d events  caller %s\n", home, len(st.Events), caller)
 	if len(st.Events) > 0 && st.Key == nil {
-		b.WriteString("\n**no .secret beside this log** — no receipt can verify, so this instance has no capabilities.\n")
+		b.WriteString("no .secret — no receipt verifies\n")
 	}
-
-	cmds, views := st.list(kindCommand), st.list(kindView)
-
-	b.WriteString("\n## commands — `self run <name> [args…]`\n\n")
-	if len(cmds) == 0 {
-		b.WriteString("none yet\n")
-	}
-	for _, c := range cmds {
-		fmt.Fprintf(&b, "- **%s** — %s%s\n", c.Name, oneLine(c.Decl.Description), pendingMark(c))
-	}
-
-	b.WriteString("\n## views — `self view <name>`\n\n")
-	for _, c := range views {
-		consumes := strings.Join(c.Decl.Consumes, ", ")
-		if consumes == "" {
-			consumes = "the whole log"
-		}
-		fmt.Fprintf(&b, "- **%s** — %s (consumes %s)%s\n", c.Name, oneLine(c.Decl.Description), consumes, pendingMark(c))
-	}
-	if st.cap(kindView, "log") == nil {
-		b.WriteString("- **log** — every event, one line each (built in; a declared view named `log` shadows it)\n")
-	}
-
-	if p := st.pending(); len(p) > 0 {
-		b.WriteString("\n## pending — declared, no script yet\n\n")
-		for _, c := range p {
-			fmt.Fprintf(&b, "- %s (declared at seq %d)\n", c.key(), c.DeclSeq)
-		}
-	}
+	b.WriteByte('\n')
+	b.WriteString(listCaps(st, kindCommand, kindView))
 	if len(st.Reject) > 0 {
-		b.WriteString("\n## refused — standing, until authored or retired\n\n")
+		b.WriteByte('\n')
 		for _, r := range st.Reject {
 			where := strings.Trim(r.Type+"/"+r.Name, "/")
 			if where == "" {
 				where = "(unnamed)"
 			}
-			fmt.Fprintf(&b, "- %s (seq %d): %s\n", where, r.Seq, oneLine(r.Reason))
+			fmt.Fprintf(&b, "refused  %s  seq %d  %s\n", where, r.Seq, oneLine(r.Reason))
 		}
 	}
-	if st.quiet() {
-		b.WriteString("\nnothing pending, nothing refused.\n")
-	}
-
-	b.WriteString("\n## where\n\n")
-	b.WriteString("`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n")
-	b.WriteString("`self help` the protocol · `self view log` what happened lately\n")
 	return b.String()
 }
 
-func pendingMark(c *capability) string {
-	if !c.Pending() {
+type capRow struct{ kind, name, status, rest string }
+
+// listCaps is the index a verb without a name prints: aligned columns, no
+// prose. `self view` lists views; `self run` lists commands; the brief lists
+// both.
+func listCaps(st *state, kinds ...string) string {
+	want := map[string]bool{}
+	for _, k := range kinds {
+		want[k] = true
+	}
+	var rows []capRow
+	if want[kindCommand] {
+		cmds := st.list(kindCommand)
+		if len(cmds) == 0 {
+			rows = append(rows, capRow{kind: "cmd", name: "—"})
+		}
+		for _, c := range cmds {
+			rows = append(rows, capRow{"cmd", c.Name, capStatus(c), capRest(c)})
+		}
+	}
+	if want[kindView] {
+		for _, c := range st.list(kindView) {
+			rows = append(rows, capRow{"view", c.Name, capStatus(c), capRest(c)})
+		}
+		if st.cap(kindView, "log") == nil {
+			rows = append(rows, capRow{"view", "log", "built-in", "every event"})
+		}
+	}
+	return formatCapRows(rows)
+}
+
+func capStatus(c *capability) string {
+	if c.Pending() && c.Receipt != nil {
+		return "stale"
+	}
+	if c.Pending() {
+		return "pending"
+	}
+	return "ok"
+}
+
+func capRest(c *capability) string {
+	rest := oneLine(c.Decl.Description)
+	if c.Type == kindView {
+		if tag := consumesTag(c.Decl.Consumes); tag != "" {
+			rest += "  " + tag
+		}
+	}
+	if c.Pending() {
+		rest += fmt.Sprintf("  seq %d", c.DeclSeq)
+	}
+	return rest
+}
+
+func consumesTag(cs []string) string {
+	if len(cs) == 0 {
 		return ""
 	}
-	if c.Receipt != nil {
-		return "  *(re-declared, running the older script until re-authored)*"
+	return "[" + strings.Join(cs, ",") + "]"
+}
+
+func formatCapRows(rows []capRow) string {
+	nw := 8
+	for _, r := range rows {
+		if n := utf8.RuneCountInString(r.name); n > nw {
+			nw = n
+		}
 	}
-	return "  *(pending — no script yet)*"
+	if nw > 20 {
+		nw = 20
+	}
+	var b strings.Builder
+	for _, r := range rows {
+		name := r.name
+		if utf8.RuneCountInString(name) > 20 {
+			name = trunc(name, 20)
+		}
+		if r.status == "" {
+			fmt.Fprintf(&b, "%-4s  %s\n", r.kind, name)
+			continue
+		}
+		fmt.Fprintf(&b, "%-4s  %-*s  %-8s  %s\n", r.kind, nw, name, r.status, trunc(r.rest, 56))
+	}
+	return b.String()
 }
 
 // ─────────────────────────────────── util ───────────────────────────────────

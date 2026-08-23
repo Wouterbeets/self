@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — the wake-up card
+
+The kernel already said the prompt is a card, not a dump. The code now matches.
+
+- **`self view` and `self run` with no name list what exists** — aligned columns,
+  status, consumes. An unknown name prints the same index under the error, so
+  you see the faces that *are* configured instead of a usage line.
+- **Naked `self` and `self brief` fit a screen.** Inventory first, pending as a
+  status, refusals as one line each. The wire is `self help`; it is no longer
+  spliced into every ask. A cold mind still gets declaration JSON, the refusal
+  reason, and one idiom when something is pending.
+
+### Why
+
+v2 deleted the HTTP server and left two shapes that fought the terminal: a
+one-line usage error (`self view`) that hid the views, and a prompt that
+restated PROTOCOL.md so the inventory was a needle. Both humans and minds
+read the same stdout. Prose was the wrong density for either.
+
+---
+
 ## v2.0.0 — the kernel that stopped guessing
 
 A rewrite. The log format is compatible; nothing else is. If you have a grown

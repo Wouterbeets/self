@@ -1,9 +1,10 @@
 # self — the protocol
 
-This file is the contract. `self help` prints it verbatim, and the situated
-prompt splices the marked section below into every ask, so there is exactly one
-description of the wire in the whole system. Nothing else — not the README, not
-AGENTS.md, not a comment — restates it.
+This file is the contract. `self help` prints it verbatim. The situated prompt
+is a wake-up card — inventory, pending work, the ask — and points here rather
+than restating the wire. The marked section below is what a mind reads once,
+via `self help`. Nothing else — not the README, not AGENTS.md, not a comment —
+restates it.
 
 ## The law
 
@@ -20,7 +21,7 @@ capability, every view — is a replay of it.
 terminal, never a heuristic:
 
 ```
-self [ask…]           situate: print the brief + the ask. Reads no stdin, appends nothing.  (READ)
+self [ask…]           situate: inventory, pending work, the ask. Reads no stdin, appends nothing.  (READ)
 … | self hear         hear: event lines land, authored scripts install.                     (WRITE)
 ```
 
@@ -163,8 +164,8 @@ and `while [ -n "$(self view goals)" ]` then never terminates.
 ## Answering
 
 You are expected to have tools. The prompt is a wake-up card, not a context
-dump: read `events.jsonl`, `cap/`, run `self brief`, `self view <name>`,
-`self help` before you answer.
+dump: it lists commands and views. Read `events.jsonl`, `cap/`, run
+`self view`, `self brief`, `self help` before you answer.
 
 - Do durable work through `self run <command> …`, or by printing events.
 - To grow the instance, print a declaration and its `script.authored` in the
@@ -309,17 +310,22 @@ Every verb names a different primitive. There is no sugar: no `ask`, no
 `reply`, no `author`, no `retire` — those are the wire.
 
 ```
-self                        situate the default ask: resolve whatever is pending (READ)
-self <ask…>                 situate that ask (READ)
-… | self hear               hear: event lines land, scripts install (WRITE)
-self brief                  the state card: what exists, what is pending, what broke
-self run <cmd> [args…]      execute a command capability
-self view <name>            replay a view to stdout ("log" is built in, shadowable)
+self                        inventory + pending. exit 3 if quiet          (READ)
+self <ask…>                 situate that ask                             (READ)
+… | self hear               hear: event lines land, scripts install      (WRITE)
+self brief                  the inventory
+self run                    list commands
+self run <cmd> [args…]      execute a command
+self view                   list views ("log" is built in)
+self view <name>            replay a view to stdout
 self learn <dir>            deposit an account, print its learning prompt
 self give <sel> <dir>       write an account from the log
 self rehydrate              make cap/ match the log exactly
 self help                   this file
 ```
+
+A verb used without its name lists what exists. `self view` is the index of
+this instance's faces; `self run` is the index of its verbs. Both fit a screen.
 
 ## Exit codes
 

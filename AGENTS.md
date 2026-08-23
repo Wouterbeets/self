@@ -17,7 +17,8 @@ it as events. Anything not in the log is lost when your context ends.
 
 ```sh
 export SELF_CALLER="<who you are>"   # recorded verbatim as `by` on what you write
-self brief                           # what exists, what is pending, what broke
+self                                 # inventory: what exists, what is pending, what broke
+self view                            # the views this instance has
 self help                            # the complete protocol — read it once
 self view log                        # what happened here lately, and who says so
 ```
@@ -31,7 +32,7 @@ writes out of what you read back.
 
 | | |
 |---|---|
-| read state | `self view <name>` — replays a view from the log. Never a command: a command's output is appended, so a query written as a command litters the log on every read. If the view you need is missing, author one. |
+| read state | `self view` lists views; `self view <name>` replays one. Never a command: a command's output is appended, so a query written as a command litters the log on every read. If the view you need is missing, author one. |
 | write | `self run <cmd> [args…]` for an installed verb, or print events: `echo '{"name":"note.added","payload":{"text":"…"}}' \| self hear` |
 | grow | declare a capability and author its script in one body — see `self help`. Only a kernel-signed receipt installs, and only for something this log declared. |
 | learn | `self learn <account-dir>` deposits an account's record and prints its learning prompt; answer it yourself or pipe it to another mind. |
