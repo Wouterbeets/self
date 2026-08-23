@@ -23,6 +23,15 @@ That is the strange loop, and it is one shell idiom:
 while ask=$(self); do printf '%s\n' "$ask" | claude -p | self hear; done
 ```
 
+`loop.sh` is that idiom as a script: the same wire, plus the policy the kernel
+refuses to own — a pass cap, a stall cap, a per-pass timeout, a rotated log —
+and any mind behind it:
+
+```sh
+./loop.sh                                 # the default mind is claude -p
+MIND="opencode run -m <model> --auto" ./loop.sh
+```
+
 It stops on its own: bare `self` exits 3 when nothing is pending. A loop that
 works toward something is a different shape, driven by a view rather than by the
 kernel — `while [ -n "$(self view goals)" ]` — because the kernel cannot know
