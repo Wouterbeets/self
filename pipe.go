@@ -53,7 +53,7 @@ func wireContract() string {
 // defaultAsk is what bare `self` situates: not a face, just the text used when
 // nobody supplied one. Pending work is already in the card, so this does not
 // need a priority queue — it needs to point at what is there.
-const defaultAsk = `No specific ask. Author pending; else resolve refusals; else read a view and act; else one improvement or silence.`
+const defaultAsk = `No specific ask. Author pending; else resolve refusals; else do the work; else read a view and act; else one improvement or silence.`
 
 // ──────────────────────────────── the seam ──────────────────────────────────
 //
@@ -346,6 +346,13 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 			names = append(names, c.key())
 		}
 		fmt.Fprintf(out, "pending: %s\n", strings.Join(names, ", "))
+	}
+	if len(st.Work) > 0 {
+		parts := make([]string, 0, len(st.Work))
+		for _, w := range st.Work {
+			parts = append(parts, fmt.Sprintf("seq %d", w.Seq))
+		}
+		fmt.Fprintf(out, "work: %s\n", strings.Join(parts, ", "))
 	}
 	if len(refused) > 0 {
 		return fmt.Errorf("%d authored script(s) refused", len(refused))

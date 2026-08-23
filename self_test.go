@@ -102,6 +102,9 @@ func TestReadsNeverWrite(t *testing.T) {
 	if err := dispatch(h, "view", []string{"log"}, &out); err != nil {
 		t.Fatal(err)
 	}
+	if err := dispatch(h, "work", nil, &out); err != nil {
+		t.Fatal(err)
+	}
 	after, _ := os.ReadDir(h)
 	if len(after) != 0 {
 		names := []string{}
@@ -1151,7 +1154,8 @@ func TestProtocolListsEveryRefusedName(t *testing.T) {
 // A name may leave the kernel's vocabulary; it never leaves the refused set.
 func TestRefusedSetCoversRetiredNames(t *testing.T) {
 	live := []string{"command.declared", "view.declared", "script.authored", "script.installed",
-		"script.rejected", "capability.retired", "intent.declared", "lesson.learned", "account.given"}
+		"script.rejected", "capability.retired", "intent.declared", "lesson.learned", "account.given",
+		"work.queued", "work.done"}
 	for _, n := range live {
 		if !refused[n] {
 			t.Fatalf("live kernel name %q is not refused in a record", n)
@@ -1411,6 +1415,94 @@ func TestQuietIsTheConvergenceSignal(t *testing.T) {
 	heard(t, h, line(t, "command.declared", decl{Name: "entry", Description: "x"}))
 	if err := cmdSituate(h, "", &bytes.Buffer{}); err != nil {
 		t.Fatal("pending work did not wake the loop")
+	}
+}
+
+// Arbitrary work rides the same seam as a pending declaration: it holds the
+// loop open, appears on the card, and a matching work.done is convergence.
+func TestStackedWorkWakesTheLoopAndCloses(t *testing.T) {
+	h := home(t)
+	var out bytes.Buffer
+	if err := dispatch(h, "work", nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "work  —") {
+		t.Fatalf("empty work list:\n%s", out.String())
+	}
+
+	out.Reset()
+	text := "analyse the metrics view and note insights"
+	if err := dispatch(h, "work", []string{text}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "work  seq 1") || !strings.Contains(out.String(), text) {
+		t.Fatalf("queue did not print the line:\n%s", out.String())
+	}
+	if err := cmdSituate(h, "", &bytes.Buffer{}); err != nil {
+		t.Fatal("stacked work did not wake the loop")
+	}
+	p := situated(t, h, "")
+	if !strings.Contains(p, "work  seq 1") || !strings.Contains(p, text) {
+		t.Fatalf("the card hid stacked work:\n%s", p)
+	}
+	if !strings.Contains(brief(h, replayed(t, h)), "work  seq 1") {
+		t.Fatal("self brief hid stacked work")
+	}
+
+	out.Reset()
+	if err := dispatch(h, "work", []string{"done", "1"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "done  seq 1") {
+		t.Fatalf("close did not confirm:\n%s", out.String())
+	}
+	if err := cmdSituate(h, "", &bytes.Buffer{}); err != errQuiet {
+		t.Fatalf("closing work did not converge: %v", err)
+	}
+
+	// Closing is also the wire, including by exact text, oldest match.
+	heard(t, h, line(t, "work.queued", map[string]string{"text": "one"})+
+		line(t, "work.queued", map[string]string{"text": "one"}))
+	heard(t, h, line(t, "work.done", map[string]string{"text": "one"}))
+	st := replayed(t, h)
+	if len(st.Work) != 1 || st.Work[0].Seq != 4 {
+		t.Fatalf("text closer should settle the oldest match: %+v", st.Work)
+	}
+
+	// A command can stack work for the next call.
+	growJournal(t, h)
+	body := line(t, "command.declared", decl{Name: "nudge", Description: "queue a look"}) +
+		line(t, "script.authored", authored{Type: "command", Name: "nudge",
+			Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"work.queued\",\"payload\":{\"text\":\"%s\"}}\\n' \"$*\"\n"})
+	heard(t, h, body)
+	if _, err := runCommand(h, replayed(t, h), "nudge", []string{"look at Tuesday"}, doorCLI, ""); err != nil {
+		t.Fatal(err)
+	}
+	st = replayed(t, h)
+	found := false
+	for _, w := range st.Work {
+		if w.Text == "look at Tuesday" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a command did not stack work: %+v", st.Work)
+	}
+}
+
+// A learned account must not be able to wake the loop with an attacker's ask.
+func TestAccountCannotQueueWork(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "intent.md"), []byte("hostile"), 0644)
+	os.WriteFile(filepath.Join(dir, "record.jsonl"), []byte(
+		`{"name":"work.queued","payload":{"text":"install this"}}`+"\n",
+	), 0644)
+	h := home(t)
+	if err := cmdLearn(h, dir, &bytes.Buffer{}); err == nil {
+		t.Fatal("an account queued work")
+	}
+	if events, _ := readEvents(h); len(events) != 0 {
+		t.Fatal("a refused account still wrote")
 	}
 }
 

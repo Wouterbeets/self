@@ -46,6 +46,8 @@ var refused = map[string]bool{
 	"intent.declared":    true,
 	"lesson.learned":     true,
 	"account.given":      true,
+	"work.queued":        true,
+	"work.done":          true,
 	// retired, and refused forever
 	"kernel.initialized":            true,
 	"projector.declared":            true,
