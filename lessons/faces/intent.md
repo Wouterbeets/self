@@ -52,8 +52,9 @@ their place on this instance; these are the ones worth having:
   the browser has a clock; the view does not.
 - Same events in, same bytes out. Two of these are formats other programs
   parse; a view that reorders its output between runs is a broken view.
-- A view meant to drive a loop prints **nothing** when it has nothing. Emptiness
-  composes with the shell; a friendly "no entries yet" does not.
+- A view may print a useful empty-state representation. `self loop` converges on
+  authoritative log change, not on a view's output bytes, so presentation does
+  not carry hidden control-flow semantics.
 - Correct output for the format, not approximately correct: valid JSON, quoted
   CSV, escaped Prometheus labels, CRLF in iCalendar, escaped HTML.
 

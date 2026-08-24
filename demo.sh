@@ -83,12 +83,8 @@ SELF_HOME="$other" self learn "$account" | "$mind" | SELF_HOME="$other" self hea
 say "the intervention is visible in the receiving log, forever"
 SELF_HOME="$other" self view log | grep lesson.learned
 
-say "convergence: bare self exits 3 when the kernel has nothing pending"
-if self >/dev/null; then
-  printf 'there is still work pending\n'
-else
-  printf 'OK — exit %d: quiet. `while ask=$(self); do ... ; done` would stop here.\n' $?
-fi
+say "convergence: one complete mind turn leaves authoritative state unchanged"
+self loop --max-passes 1 -- sh -c 'cat >/dev/null'
 
 say "the log is the whole truth — this is all that was kept"
 self view log

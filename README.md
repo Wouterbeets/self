@@ -3,8 +3,8 @@
 `self` is a local-first runtime that grows its own capabilities, and to the
 shell it is a filter with a memory. One append-only event log is its only
 authoritative state. Every capability and every view is a deterministic replay
-of that log. The kernel holds no model and spawns nothing: intelligence enters
-through a shell pipe, where the mind is whatever process you put beside it.
+of that log. The kernel holds no resident model: intelligence is whatever
+process you pipe beside it or name to `self loop`.
 
 ```sh
 self "I want to track long-running goals here" | claude -p | self hear
@@ -15,27 +15,55 @@ exists, what is pending, what broke — and **appends nothing**. The mind does
 durable work through installed commands and prints events. `self hear` lands
 them: ordinary events are appended, and a script a mind authored installs under
 a receipt the kernel signs with a key only it holds. A declaration without a
-script stays pending and rides the next prompt, so the loop converges.
+script stays pending and rides every situated prompt until a mind authors it.
 
-That is the strange loop, and it is one shell idiom:
-
-```sh
-while ask=$(self); do printf '%s\n' "$ask" | claude -p | self hear; done
-```
-
-`loop.sh` is that idiom as a script: the same wire, plus the policy the kernel
-refuses to own — a pass cap, a stall cap, a per-pass timeout, a rotated log —
-and any mind behind it:
+That is the strange loop:
 
 ```sh
-./loop.sh                                 # the default mind is claude -p
-MIND="opencode run -m <model> --auto" ./loop.sh
+self loop -- claude -p
+self loop -- pi --provider github-copilot --model gpt-5.6-luna --no-session -p
 ```
 
-It stops on its own: bare `self` exits 3 when nothing is pending. A loop that
-works toward something is a different shape, driven by a view rather than by the
-kernel — `while [ -n "$(self view goals)" ]` — because the kernel cannot know
-what matters here, and should not pretend to.
+Each pass presents the same naked situated surface. The mind discovers pending
+capabilities and domain state through the brief and views. The kernel repeats
+after any append and stops after the first complete turn that leaves the
+authoritative log unchanged; it never needs to know what a goal or task means.
+
+The mind is argv after `--`, executed directly rather than parsed as a shell
+command. It inherits your working directory and environment, reads the situated
+prompt on stdin, and writes the event wire on stdout:
+
+```sh
+self loop --max-passes 12 --timeout 30m -- \
+  pi --provider github-copilot --model gpt-5.6-luna --no-session -p
+```
+
+`--max-passes` bounds consecutive changing turns; `--timeout` bounds each mind
+process. Progress and mind stderr go to stderr. Run `self loop --help` for the
+complete invocation.
+
+Pin a preferred mind once and `self loop` needs no arguments:
+
+```sh
+export SELF_LOOP_MIND='pi --provider github-copilot --model gpt-5.6-luna --no-session -p'
+export SELF_LOOP_MAX_PASSES=12
+export SELF_LOOP_TIMEOUT=30m
+self loop
+```
+
+The mind environment value is a shell command string. Explicit argv after `--`
+is the safer form and overrides it; CLI limits override environment limits.
+
+This supersedes the pre-fixed-point v2 shell loop. The primitives still compose:
+
+```sh
+self "add a mood tracker" | claude -p | self hear
+```
+
+But a hand-written `while ask=$(self)` loop no longer converges: bare `self`
+always orients successfully because the kernel cannot infer whether domain work
+exists. Use `self loop`. The retained `loop.sh` is only a compatibility wrapper
+for callers that still supply a `MIND` shell string.
 
 ## Three laws
 

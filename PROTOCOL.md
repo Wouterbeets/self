@@ -157,10 +157,6 @@ of those events** — same events in, same bytes out. Do not read the clock, the
 network, or anything not on stdin. A view is never materialized to disk; it is
 replayed on demand.
 
-A view meant to drive a loop should print **nothing** when there is nothing to
-report. Emptiness composes with the shell; a friendly "no goals yet" does not,
-and `while [ -n "$(self view goals)" ]` then never terminates.
-
 ## Answering
 
 You are expected to have tools. The prompt is a wake-up card, not a context
@@ -310,58 +306,78 @@ Every verb names a different primitive. There is no sugar: no `ask`, no
 `reply`, no `author`, no `retire` — those are the wire.
 
 ```
-self                        situate the default ask: resolve whatever is pending (READ)
+self                        situate the naked default ask and full instance brief (READ)
 self <ask…>                 situate that ask (READ)
 … | self hear               hear: event lines land, scripts install (WRITE)
 self brief                  the state card: what exists, what is pending, what broke
 self run <cmd> [args…]      execute a command capability
 self view <name> [args…]    replay a view to stdout ("log" is built in, shadowable)
+self loop [opts] -- <mind>  orient and run a mind until one turn leaves the log unchanged
 self learn <dir>            deposit an account, print its learning prompt
 self give <sel> <dir>       write an account from the log
 self rehydrate              make cap/ match the log exactly
 self help                   this file
 ```
 
+## The loop
+
+Capability work and domain work are both state a mind discovers by exploring
+the brief and its views. The kernel does not decide which state counts as work.
+Bare `self` therefore always prints the situated surface, even when no
+declaration is pending.
+
+`self loop` drives that surface to an append fixed point:
+
+```sh
+self loop -- claude -p
+self loop -- pi --provider github-copilot --model gpt-5.6-luna --no-session -p
+```
+
+Each pass gives the mind a naked situated prompt, hears its stdout through the
+normal write door, and then checks authoritative state internally. It repeats
+after any append — whether the append came back on stdout or a tool-capable mind
+called `self run` itself — and stops after the first complete turn that leaves
+the log unchanged. Users do not hash or inspect the log; witnessing change is
+kernel work. The loop knows nothing about goals, tasks, or declarations.
+
+The mind command is required after `--`; there is no resident or default model.
+Driver policy is explicit and generic:
+
+```sh
+self loop --max-passes 12 --timeout 30m -- <mind> [args…]
+```
+
+The mind is executed directly, not through a shell. It inherits the caller's
+working directory and environment (including `SELF_HOME` and `SELF_CALLER`),
+receives the situated prompt on stdin, and returns the ordinary event wire on
+stdout. Mind stderr and loop progress go to stderr; `hear` output goes to the
+loop's stdout. Use a shell explicitly only when shell syntax is intended:
+
+```sh
+self loop -- sh -c 'my-mind --flag'
+```
+
+For a pinned local setup, environment defaults make the short form complete:
+
+```sh
+export SELF_LOOP_MIND='pi --provider github-copilot --model gpt-5.6-luna --no-session -p'
+export SELF_LOOP_MAX_PASSES=12
+export SELF_LOOP_TIMEOUT=30m
+self loop
+```
+
+`SELF_LOOP_MIND` is necessarily a shell command string and runs through
+`sh -c`; explicit argv after `--` is safer and takes precedence. CLI
+`--max-passes` and `--timeout` likewise override their environment defaults.
+
+Reaching the pass cap while state still changes, a mind failure, a timeout, or a
+hear failure exits non-zero. A converged fixed point exits zero.
+
 ## Exit codes
 
-`0` did the thing. `1` did not. `3` nothing to do — bare `self` exits 3 when no
-declaration is pending and no refusal stands. That is the loop's convergence
-signal, and the way to use it is command substitution, not a pipeline:
-
-```sh
-while ask=$(self); do printf '%s\n' "$ask" | claude -p | self hear; done
-```
-
-A pipeline would swallow it. `self | mind | self hear` exits with the status of
-`self hear`, so the left-hand `self`'s 3 is lost unless the shell has
-`pipefail` — and `sh` (dash) does not have `pipefail` at all, so
-`set -o pipefail` inside a `sh -c` is silently a no-op. Command substitution
-puts the exit code where the loop can see it and works in POSIX sh.
-
-Quiet means *the kernel* has nothing pending. It does not mean there is nothing
-to do in the world: unfinished domain work lives in this instance's own views,
-and only a mind reading them can see it. That is the correct division — the
-kernel cannot know what matters here, and should not pretend to.
-
-So there are two loops, different shapes on purpose. The one above grows the
-instance and converges when it has finished building itself. A loop that works
-toward something is driven by a **view**, because a view is just bytes:
-
-```sh
-while [ -n "$(self view goals)" ]; do
-  self "advance the open goals" | claude -p | self hear
-done
-```
-
-Nothing in the kernel knows what a goal is, and nothing needs to. Whatever an
-instance has learned to track can be looped on the same way — which is why a
-view that drives a loop must go silent when it is done.
-
-A mind with its own tools does not need the trailing `self hear` at all: it
-writes through the same doors you do (`self run …`, `… | self hear`) and the
-loop is just `self "<ask>" | claude -p`. The trailing `hear` is what lets a mind
-with **no** tools — a bare completion endpoint — still grow the instance, by
-returning its events on stdout. Both are the same loop; only the mind differs.
+`0` did the thing. `1` did not. Bare orientation is always a successful read;
+`self loop` reports convergence or failure rather than overloading an exit code
+with the kernel's opinion about whether domain work exists.
 
 ## Environment
 
@@ -370,6 +386,9 @@ SELF_HOME    the instance: a directory holding events.jsonl and .secret
              (default: the current directory; pin one in your shell rc)
 SELF_CALLER  your claim, recorded verbatim as `by` on events you cause and
              signed into the receipts of scripts you author
+SELF_LOOP_MIND          default shell command for `self loop` when `--` is absent
+SELF_LOOP_MAX_PASSES    default loop pass cap (12 when unset)
+SELF_LOOP_TIMEOUT       default per-mind timeout (30m when unset)
 ```
 
 Any other `SELF_*` variable is passed through to capability scripts.
@@ -412,9 +431,10 @@ workaround — the protocol being its own migration path is the claim.
 - **Appends are locked; operations are not transactions.** One `hear` body is
   one critical section, but a command that emits several events and a
   concurrent operation can still interleave.
-- **Nothing is timed out.** A capability script that hangs hangs the invocation,
-  and inside a `while ask=$(self)` loop it hangs the loop. Wrap it with
-  `timeout` if that matters to you; the kernel does not own that policy.
+- **Capability scripts are not timed out.** A capability that hangs still hangs
+  its invocation. `self loop` times out the external mind process because that
+  is explicit driver policy; it does not impose timeouts on capabilities the
+  mind invokes.
 - **The last line of the log is judged by whether it is a whole event.**
   Terminated by a newline, it is a record. Unterminated but parsing as an event,
   it is also a record — complete, missing only its terminator, which is what an

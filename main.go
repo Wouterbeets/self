@@ -1,8 +1,8 @@
 // self — a local-first, event-sourced runtime, and to the shell a filter with a
 // memory. One append-only log is the only authoritative state; every capability
-// and every view is a deterministic replay of it. The kernel holds no model and
-// spawns nothing: intelligence enters through a shell pipe, where the mind is
-// whatever process you put beside it.
+// and every view is a deterministic replay of it. The kernel holds no resident
+// model: intelligence is whatever process a caller pipes beside it or names to
+// `self loop`.
 //
 //	self "add a mood tracker" | claude -p | self hear
 //
@@ -11,8 +11,8 @@
 // commands and prints events. `self hear` lands them: events append, and
 // authored scripts install under receipts the kernel signs with a key only it
 // holds. A declaration without a script stays pending and rides the next
-// prompt, so the loop converges — that is the strange loop, one shell pass at a
-// time.
+// prompt. `self loop` repeats complete situated turns until one leaves the
+// authoritative log unchanged.
 //
 // Reads project. Writes append. Orientation is a read.
 //
@@ -25,13 +25,33 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"unicode/utf8"
 )
+
+const cliUsage = `self — local-first event-sourced runtime
+
+Usage:
+  self [ask...]                 situate an ask; bare self presents the naked surface
+  self hear                     ingest event JSONL or authored scripts from stdin
+  self brief                    show capabilities, pending work, and refusals
+  self run <command> [args...]  execute a command capability and append its events
+  self view <name> [args...]    replay a pure view; built-in log is always available
+  self loop [opts] [-- mind...] run situated turns to an unchanged-state fixed point
+  self learn <account-dir>      deposit an account and print its learning prompt
+  self give <selector> <dir>    write an event or capability account
+  self rehydrate                rebuild derived capability files from the log
+  self help                     print the complete protocol
+
+Loop:
+  self loop --help
+  SELF_LOOP_MIND='<shell command>' self loop
+
+Environment:
+  SELF_HOME, SELF_CALLER, SELF_LOOP_MIND, SELF_LOOP_MAX_PASSES, SELF_LOOP_TIMEOUT`
 
 func main() {
 	home := homeDir()
@@ -42,11 +62,7 @@ func main() {
 	}
 
 	err := dispatch(home, verb, args, os.Stdout)
-	switch {
-	case err == nil:
-	case errors.Is(err, errQuiet):
-		os.Exit(3) // nothing to do — the loop's convergence signal
-	default:
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "self: %s\n", err)
 		os.Exit(1)
 	}
@@ -126,6 +142,9 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		_, err = out.Write(page)
 		return err
 
+	case "loop":
+		return cmdLoop(home, args, out, os.Stderr)
+
 	case "learn":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: self learn <account-dir>")
@@ -141,7 +160,11 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 	case "rehydrate":
 		return rehydrate(home)
 
-	case "help", "-h", "--help":
+	case "-h", "--help":
+		_, err := io.WriteString(out, cliUsage+"\n")
+		return err
+
+	case "help":
 		_, err := io.WriteString(out, protocolDoc)
 		return err
 
@@ -151,7 +174,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		// more likely a mistyped verb than a question, and silently answering a
 		// typo with a prompt would hide it.
 		if len(args) == 0 && !strings.ContainsAny(verb, " \t\n") {
-			return fmt.Errorf("unknown verb %q — verbs: hear brief run view learn give rehydrate help; to ask a question, quote it: self %q", verb, verb)
+			return fmt.Errorf("unknown verb %q — verbs: hear brief run view loop learn give rehydrate help; to ask a question, quote it: self %q", verb, verb)
 		}
 		return cmdSituate(home, strings.Join(append([]string{verb}, args...), " "), out)
 	}
@@ -214,7 +237,7 @@ func brief(home string, st *state) string {
 			fmt.Fprintf(&b, "- %s (seq %d): %s\n", where, r.Seq, oneLine(r.Reason))
 		}
 	}
-	if st.quiet() {
+	if st.capabilitiesReady() {
 		b.WriteString("\nnothing pending, nothing refused.\n")
 	}
 

@@ -148,8 +148,8 @@ func replay(events []Event, key []byte) *state {
 			// A successful install closes the refusal it supersedes — and every
 			// refusal that names nothing a declaration or a retirement could
 			// ever match. Those cannot be closed on their own key, so without
-			// this the instance never reports quiet again and the documented
-			// loop spins forever.
+			// this the refusal remains permanently prominent in every situated
+			// turn.
 			delete(rejects, r.Type+"/"+r.Name)
 			for k, rej := range rejects {
 				if !validCapability(rej.Type, rej.Name) {
@@ -211,9 +211,10 @@ func (st *state) pending() []*capability {
 	return out
 }
 
-// quiet reports the loop's convergence: nothing declared awaits a script and no
-// refusal stands. It is what bare `self` turns into exit code 3.
-func (st *state) quiet() bool { return len(st.pending()) == 0 && len(st.Reject) == 0 }
+// capabilitiesReady is deliberately narrower than loop convergence: it says
+// only that no declaration awaits a script and no refusal stands. Domain work
+// is visible through views; the fixed-point loop witnesses authoritative change.
+func (st *state) capabilitiesReady() bool { return len(st.pending()) == 0 && len(st.Reject) == 0 }
 
 // exemplar returns the most recently installed script, skipping the
 // capabilities currently being asked about so a re-author is never anchored to

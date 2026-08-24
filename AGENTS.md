@@ -27,7 +27,7 @@ it your events are indistinguishable from every other caller's, so on a shared
 instance nobody can tell which agent wrote a line and you cannot filter your own
 writes out of what you read back.
 
-**The five things you can do**
+**The six things you can do**
 
 | | |
 |---|---|
@@ -36,6 +36,7 @@ writes out of what you read back.
 | grow | declare a capability and author its script in one body — see `self help`. Only a kernel-signed receipt installs, and only for something this log declared. |
 | learn | `self learn <account-dir>` deposits an account's record and prints its learning prompt; answer it yourself or pipe it to another mind. |
 | ask | `self "<question>"` prints the situated prompt a mind would receive. Useful for seeing what another mind would be told. It appends nothing. |
+| loop | `self loop -- <mind> [args…]` presents naked situated turns until one leaves authoritative state unchanged. Set `SELF_LOOP_MIND` to make bare `self loop` use a pinned shell command. |
 
 **Escaping a script into JSON by hand is miserable. Don't:**
 

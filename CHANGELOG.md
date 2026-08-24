@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased — one fixed-point loop
+
+### New: `self loop`
+
+```sh
+self loop -- <mind> [args...]
+self loop --max-passes 12 --timeout 30m -- \
+  pi --provider github-copilot --model gpt-5.6-luna --no-session -p
+```
+
+Capability growth and domain work are no longer separate loop shapes. Each pass
+presents the same naked situated surface; the mind discovers pending scripts,
+refusals, goals, tasks, or any other state through the brief and views. The
+kernel repeats after any authoritative append and converges after the first
+complete mind turn that leaves the append-only log unchanged. The revision
+representation stays private to the kernel.
+
+The mind is executed directly from argv after `--`, inherits the caller's
+working directory and environment, reads the situated prompt on stdin, and
+writes the normal event wire on stdout. Defaults are 12 passes and 30 minutes
+per mind process; both are configurable. There is no default or resident model.
+`SELF_LOOP_MIND`, `SELF_LOOP_MAX_PASSES`, and `SELF_LOOP_TIMEOUT` can pin those
+defaults so bare `self loop` works. Because an environment value cannot preserve
+argv boundaries, `SELF_LOOP_MIND` runs through `sh -c`; explicit argv after `--`
+takes precedence.
+
+### Breaking: bare orientation no longer exits 3
+
+Bare `self` now always prints the situated surface and exits zero. The previous
+v2 loop therefore no longer converges:
+
+```sh
+# retired: bare self no longer signals capability-only readiness with exit 3
+while ask=$(self); do printf '%s\n' "$ask" | mind | self hear; done
+```
+
+Use `self loop -- <mind> [args...]`. Explicit ask pipelines, `self hear`,
+commands, views, learning, giving, and rehydration are unchanged. `loop.sh`
+remains as a compatibility wrapper over the built-in verb.
+
+### New: parameterized views
+
+`self view <name> [args...]` passes trailing arguments as view argv while
+preserving receipt-filtered stdin, scratch working directory, scrubbed
+environment, and non-ingested stdout. This permits pure reads such as
+`self view context <goal>` instead of append-on-read query commands.
+
 ## v2.0.0 — the kernel that stopped guessing
 
 A rewrite. The log format is compatible; nothing else is. If you have a grown

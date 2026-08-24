@@ -50,18 +50,10 @@ func wireContract() string {
 	return strings.TrimSpace(body)
 }
 
-// defaultAsk is what bare `self` situates: not a face, just the text used when
-// nobody supplied one. Pending work is already in the brief, so this does not
-// need a priority queue — it needs to point at what is there.
-const defaultAsk = `No specific ask. Look at the brief above, then decide.
-
-1. If declarations are pending, author them. That is the work of this pass.
-2. If a refusal stands, resolve it: author the capability correctly, or retire it.
-3. Otherwise read this instance's views — ` + "`self view <name>`" + ` — and act on
-   what they show. Unfinished domain work is real work, and the kernel cannot see
-   it: only the views can.
-4. If nothing there needs doing, choose ONE small improvement to this instance
-   and make it, or print nothing. Silence is a valid turn.`
+// defaultAsk is what bare `self` situates: not a priority policy, only an
+// invitation to inspect the instance-owned surface. The mind decides whether
+// capability or domain state warrants durable action.
+const defaultAsk = `No specific ask. Orient from this instance, explore its views, and act only if something warrants durable action. Silence is valid.`
 
 // ──────────────────────────────── the seam ──────────────────────────────────
 //
@@ -86,16 +78,8 @@ func cmdSituate(home string, ask string, out io.Writer) error {
 	if _, err := io.WriteString(out, situate(home, st, ask)); err != nil {
 		return err
 	}
-	if empty && st.quiet() {
-		return errQuiet
-	}
 	return nil
 }
-
-// errQuiet is exit code 3: the read succeeded and there was nothing to do — the
-// loop's convergence signal. PROTOCOL.md's Exit codes section carries the shell
-// idiom that reads it, and the reason a pipeline cannot.
-var errQuiet = fmt.Errorf("nothing pending")
 
 // cmdHear is the write face — the only door a mind's output enters through.
 // Event lines land and install; every other line is ignored, echoed, and

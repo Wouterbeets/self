@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,7 @@ func situated(t *testing.T, h, ask string) string {
 	t.Helper()
 	var out bytes.Buffer
 	err := cmdSituate(h, ask, &out)
-	if err != nil && err != errQuiet {
+	if err != nil {
 		t.Fatalf("situate: %v", err)
 	}
 	return out.String()
@@ -381,13 +382,13 @@ func TestLastSeqScansOnlyTheTail(t *testing.T) {
 func TestStrangeLoop(t *testing.T) {
 	h := home(t)
 	st := replayed(t, h)
-	if !st.quiet() {
-		t.Fatal("a fresh instance is not quiet")
+	if !st.capabilitiesReady() {
+		t.Fatal("a fresh instance is not capability-ready")
 	}
 
 	heard(t, h, line(t, "command.declared", decl{Name: "entry", Description: "append an entry"}))
 	st = replayed(t, h)
-	if len(st.pending()) != 1 || st.quiet() {
+	if len(st.pending()) != 1 || st.capabilitiesReady() {
 		t.Fatalf("a declaration did not become pending work: %d pending", len(st.pending()))
 	}
 	// The pending ask must carry the declaration, so a cold mind can act on it.
@@ -398,7 +399,7 @@ func TestStrangeLoop(t *testing.T) {
 	heard(t, h, line(t, "script.authored", authored{Type: "command", Name: "entry",
 		Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"journal.entry\",\"payload\":{\"text\":\"%s\"}}\\n' \"$*\"\n"}))
 	st = replayed(t, h)
-	if len(st.pending()) != 0 || !st.quiet() {
+	if len(st.pending()) != 0 || !st.capabilitiesReady() {
 		t.Fatal("authoring did not converge the loop")
 	}
 
@@ -428,8 +429,8 @@ func TestACapabilityCanDeclareCapabilities(t *testing.T) {
 			Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"view.declared\",\"payload\":{\"name\":\"%s\",\"description\":\"proposed from inside\",\"consumes\":[\"*\"]}}\\n' \"$1\"\n"})
 	heard(t, h, body)
 	st := replayed(t, h)
-	if !st.quiet() {
-		t.Fatal("the instance should be quiet before it proposes anything")
+	if !st.capabilitiesReady() {
+		t.Fatal("the instance should be capability-ready before it proposes anything")
 	}
 
 	if _, err := runCommand(h, st, "propose", []string{"census"}, doorCLI, ""); err != nil {
@@ -440,7 +441,7 @@ func TestACapabilityCanDeclareCapabilities(t *testing.T) {
 	if len(pending) != 1 || pending[0].key() != "view/census" {
 		t.Fatalf("the instance's own declaration is not pending work: %v", pending)
 	}
-	if st.quiet() {
+	if st.capabilitiesReady() {
 		t.Fatal("work the instance asked for did not wake the loop")
 	}
 	// It rides the prompt like any other pending declaration.
@@ -450,7 +451,7 @@ func TestACapabilityCanDeclareCapabilities(t *testing.T) {
 	// And it closes the same way.
 	heard(t, h, line(t, "script.authored", authored{Type: "view", Name: "census",
 		Script: "#!/bin/sh\nwc -l\n"}))
-	if !replayed(t, h).quiet() {
+	if !replayed(t, h).capabilitiesReady() {
 		t.Fatal("authoring the instance's own proposal did not converge the loop")
 	}
 	page, err := runView(h, replayed(t, h), "census")
@@ -494,7 +495,7 @@ func TestUndeclaredScriptIsRefused(t *testing.T) {
 	if len(st.Reject) != 1 || !strings.Contains(st.Reject[0].Reason, "not declared") {
 		t.Fatalf("the refusal was not recorded: %+v", st.Reject)
 	}
-	if st.quiet() {
+	if st.capabilitiesReady() {
 		t.Fatal("a standing refusal must keep the loop awake")
 	}
 }
@@ -971,16 +972,16 @@ func TestReplayedReceiptCannotUndoARetirement(t *testing.T) {
 }
 
 // A refusal that names nothing a declaration or retirement could ever match had
-// no way to close, so the instance never reported quiet again and the documented
+// no way to close, so the instance never reported capability-ready again and the documented
 // loop spun forever.
 func TestUnkeyedRefusalDoesNotWedgeTheLoop(t *testing.T) {
 	h := home(t)
 	heard(t, h, line(t, "script.authored", authored{Type: "banana", Name: "x", Script: "#!/bin/sh\ntrue\n"}))
-	if replayed(t, h).quiet() {
+	if replayed(t, h).capabilitiesReady() {
 		t.Fatal("a refusal did not wake the loop")
 	}
 	growJournal(t, h)
-	if !replayed(t, h).quiet() {
+	if !replayed(t, h).capabilitiesReady() {
 		t.Fatal("a bogus refusal wedged the loop permanently")
 	}
 }
@@ -1407,18 +1408,79 @@ func TestBuiltinLogViewIsShadowable(t *testing.T) {
 	}
 }
 
-// The convergence signal: bare `self` exits 3 exactly when there is no work.
-func TestQuietIsTheConvergenceSignal(t *testing.T) {
+// Bare orientation always presents the body. Whether anything warrants action
+// belongs to the mind; convergence belongs to `self loop`, which can witness
+// every append without pretending to understand domain state.
+func TestBareSituateAlwaysOrients(t *testing.T) {
 	h := home(t)
-	if err := cmdSituate(h, "", &bytes.Buffer{}); err != errQuiet {
-		t.Fatalf("a fresh instance is not quiet: %v", err)
+	var out bytes.Buffer
+	if err := cmdSituate(h, "", &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "No specific ask") {
+		t.Fatalf("bare orientation lost its ask:\n%s", out.String())
 	}
 	if err := cmdSituate(h, "an actual ask", &bytes.Buffer{}); err != nil {
-		t.Fatalf("an explicit ask reported quiet: %v", err)
+		t.Fatal(err)
 	}
-	heard(t, h, line(t, "command.declared", decl{Name: "entry", Description: "x"}))
-	if err := cmdSituate(h, "", &bytes.Buffer{}); err != nil {
-		t.Fatal("pending work did not wake the loop")
+}
+
+func TestLoopRunsOnceAndConvergesOnUnchangedState(t *testing.T) {
+	h := home(t)
+	var out, diag bytes.Buffer
+	err := cmdLoop(h, []string{"--max-passes", "2", "--timeout", "5s", "--", "/bin/sh", "-c", "cat >/dev/null"}, &out, &diag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diag.String(), "converged after 1 pass") {
+		t.Fatalf("loop did not run one naked turn:\n%s", diag.String())
+	}
+	if len(replayed(t, h).Events) != 0 {
+		t.Fatal("silent loop turn appended")
+	}
+}
+
+func TestLoopRepeatsAfterAppendThenConverges(t *testing.T) {
+	h := home(t)
+	script := `prompt=$(cat); case "$prompt" in *"log: 0 events"*) printf '%s\n' '{"name":"note.added","payload":{"text":"one"}}';; esac`
+	var out, diag bytes.Buffer
+	err := cmdLoop(h, []string{"--max-passes", "3", "--timeout", "5s", "--", "/bin/sh", "-c", script}, &out, &diag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diag.String(), "pass 1 changed authoritative state") || !strings.Contains(diag.String(), "converged after 2 pass") {
+		t.Fatalf("loop did not reach the append fixed point:\n%s", diag.String())
+	}
+	events := replayed(t, h).Events
+	if len(events) != 1 || events[0].Name != "note.added" {
+		t.Fatalf("loop landed unexpected events: %+v", events)
+	}
+}
+
+func TestLoopUsesEnvironmentDefaults(t *testing.T) {
+	h := home(t)
+	t.Setenv("SELF_LOOP_MIND", "cat >/dev/null")
+	t.Setenv("SELF_LOOP_MAX_PASSES", "2")
+	t.Setenv("SELF_LOOP_TIMEOUT", "5s")
+	var out, diag bytes.Buffer
+	if err := cmdLoop(h, nil, &out, &diag); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diag.String(), "pass 1/2") || !strings.Contains(diag.String(), "converged after 1 pass") {
+		t.Fatalf("loop ignored environment defaults:\n%s", diag.String())
+	}
+}
+
+func TestLoopCLIOverridesEnvironmentDefaults(t *testing.T) {
+	t.Setenv("SELF_LOOP_MIND", "exit 9")
+	t.Setenv("SELF_LOOP_MAX_PASSES", "9")
+	t.Setenv("SELF_LOOP_TIMEOUT", "9m")
+	opts, err := parseLoopOptions([]string{"--max-passes", "2", "--timeout", "5s", "--", "/bin/true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.MaxPasses != 2 || opts.Timeout != 5*time.Second || len(opts.Mind) != 1 || opts.Mind[0] != "/bin/true" {
+		t.Fatalf("CLI did not override loop environment: %+v", opts)
 	}
 }
 
@@ -1430,11 +1492,35 @@ func TestUnknownVerbIsNotSilentlyAnAsk(t *testing.T) {
 		t.Fatal("a mistyped verb was answered as a question")
 	}
 	var out bytes.Buffer
-	if err := dispatch(h, "what", []string{"is", "going", "on"}, &out); err != nil && err != errQuiet {
+	if err := dispatch(h, "what", []string{"is", "going", "on"}, &out); err != nil {
 		t.Fatalf("a multi-word ask was not an ask: %v", err)
 	}
 	if !strings.Contains(out.String(), "what is going on") {
 		t.Fatal("the ask was lost")
+	}
+}
+
+func TestCLIHelpNamesTheLoopAndProtocol(t *testing.T) {
+	var out bytes.Buffer
+	if err := dispatch(home(t), "--help", nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"self loop --help", "SELF_LOOP_MIND", "self help", "self view <name> [args...]"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("CLI help is missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestLoopHelpDocumentsDefaultsAndExecution(t *testing.T) {
+	var out bytes.Buffer
+	if err := cmdLoop(home(t), []string{"--help"}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"default 12", "default 30m", "SELF_LOOP_MIND", "executed directly", "sh -c"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("loop help is missing %q:\n%s", want, out.String())
+		}
 	}
 }
 
