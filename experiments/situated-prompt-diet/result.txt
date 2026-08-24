@@ -14,7 +14,7 @@ control
   passes: 2 (pending authoring, then unchanged-state check)
   artifacts: prompt-1.txt prompt-2.txt log.txt
 treatment
-  pass 1 prompt bytes: 2527
+  pass 1 prompt bytes: 3153
   pass 2 prompt bytes: 1343
   appended event lines: 2
   pass 1 mind output lines: 1

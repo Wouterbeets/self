@@ -118,6 +118,15 @@ For a parameterized view, make the zero-argument form its discoverable index:
 print concise usage plus the valid keys or actionable items a reader can choose.
 Valid arguments render detail. Fail only on malformed or excess arguments, not
 because the reader omitted a key they could not yet know.
+
+When a capability manages stable named records rather than an unbounded stream,
+give future minds the complete append-only lifecycle by default: create/add,
+revise/update, and remove/retire via a tombstone event, with reads supplied by
+views. Use one stable key across those events. A tombstone never erases history;
+it makes the record non-live until a later explicit create or restore. Without
+revision and tombstone paths, stale records remain permanently actionable and
+future minds cannot distinguish current state from history. Do not invent CRUD
+for journals or other event streams whose history is itself the domain.
 <!-- prompt:growth:end -->
 
 Escaping a script into JSON by hand is miserable. Don't:
