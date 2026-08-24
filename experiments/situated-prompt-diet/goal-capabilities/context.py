@@ -2,17 +2,11 @@
 import json
 import sys
 
-if len(sys.argv) != 2:
-    print("usage: self view context <goal>", file=sys.stderr)
+if len(sys.argv) > 2:
+    print("usage: self view context [goal]", file=sys.stderr)
     raise SystemExit(2)
-target = sys.argv[1]
 events = [json.loads(line) for line in sys.stdin if line.strip()]
 payload = lambda event: event.get("payload") if isinstance(event.get("payload"), dict) else {}
-rows = [event for event in events if payload(event).get("goal") == target]
-created = next((event for event in rows if event.get("name") == "goal.created"), None)
-if not created:
-    print(f"No goal found: {target}")
-    raise SystemExit(0)
 
 goals, removed = {}, set()
 for event in events:
@@ -29,6 +23,41 @@ for event in events:
         removed.add(goal)
 done = {"closed", "done", "completed", "cancelled", "removed"}
 closed = lambda goal: goal in removed or str(goals.get(goal, {}).get("status", "active")).lower() in done
+
+if len(sys.argv) == 1:
+    active = {goal for goal in goals if not closed(goal)}
+    parents = {goals[goal].get("parent") for goal in active if goals[goal].get("parent") in active}
+    leaves = active - parents
+    blockers = {goal: [dependency for dependency in goals[goal].get("depends_on", []) if not closed(dependency)] for goal in leaves}
+    actionable = sorted(goal for goal in leaves if not blockers[goal])
+    waiting = sorted(goal for goal in leaves if blockers[goal])
+    other = sorted(active - leaves)
+    print("# Goal context guide")
+    print("Inspect one bounded goal history: `self view context <goal>`")
+    print("Use `self view next` for outcomes and latest state, or `self view tree` for hierarchy.")
+    print(f"\n{len(active)} active goals; {len(actionable)} actionable leaves; {len(waiting)} blocked leaves.")
+    print("\n## Actionable")
+    for goal in actionable[:20]:
+        print(f"- {goal}: {goals[goal].get('title', '')}")
+    if len(actionable) > 20:
+        print(f"- ... {len(actionable) - 20} more; use `self view next`")
+    if waiting:
+        print("\n## Blocked")
+        for goal in waiting[:20]:
+            print(f"- {goal} <- {', '.join(blockers[goal])}")
+    if other:
+        print("\n## Active parents")
+        for goal in other[:20]:
+            print(f"- {goal}: {goals[goal].get('title', '')}")
+    raise SystemExit(0)
+
+target = sys.argv[1]
+rows = [event for event in events if payload(event).get("goal") == target]
+created = next((event for event in rows if event.get("name") == "goal.created"), None)
+if not created:
+    print(f"No goal found: {target}")
+    raise SystemExit(0)
+
 base = payload(created)
 dependencies = goals[target].get("depends_on", [])
 blockers = [dependency for dependency in dependencies if not closed(dependency)]

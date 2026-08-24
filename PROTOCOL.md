@@ -113,6 +113,11 @@ working directory; stdout must be new event JSONL. Views receive argv and only
 their signed `consumes` events on stdin, with no `SELF_HOME` and an empty scratch
 directory; stdout is read-only bytes. Scripts may use a standard-library
 language with a shebang.
+
+For a parameterized view, make the zero-argument form its discoverable index:
+print concise usage plus the valid keys or actionable items a reader can choose.
+Valid arguments render detail. Fail only on malformed or excess arguments, not
+because the reader omitted a key they could not yet know.
 <!-- prompt:growth:end -->
 
 Escaping a script into JSON by hand is miserable. Don't:
