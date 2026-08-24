@@ -726,6 +726,25 @@ func TestViewSeesOnlyWhatItConsumes(t *testing.T) {
 	}
 }
 
+func TestViewReceivesArgumentsWithoutAppending(t *testing.T) {
+	h := home(t)
+	body := line(t, "view.declared", decl{Name: "lookup", Description: "look up one key", Consumes: []string{"note.added"}}) +
+		line(t, "script.authored", authored{Type: "view", Name: "lookup", Script: "#!/bin/sh\nprintf '%s\\n' \"$1\"\n"})
+	heard(t, h, body)
+	before := len(replayed(t, h).Events)
+
+	var out bytes.Buffer
+	if err := dispatch(h, "view", []string{"lookup", "chosen-key"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "chosen-key\n" {
+		t.Fatalf("view did not receive argv: %q", out.String())
+	}
+	if after := len(replayed(t, h).Events); after != before {
+		t.Fatalf("reading a parameterized view appended: before=%d after=%d", before, after)
+	}
+}
+
 // A view is fed the list its RECEIPT names, not its latest declaration.
 // Re-declaring a view with a wider consumes list leaves it pending, and until
 // it is re-authored the old script must keep seeing the stream it was signed

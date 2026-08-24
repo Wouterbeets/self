@@ -102,10 +102,10 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if len(args) != 1 {
-			// No name — or too many — is a question about what is runnable, not a
+		if len(args) < 1 {
+			// No name is a question about what is runnable, not a
 			// failure. Answer it with the names this log actually knows.
-			fmt.Fprintln(out, "usage: self view <name>")
+			fmt.Fprintln(out, "usage: self view <name> [args...]")
 			fmt.Fprintln(out)
 			fmt.Fprint(out, viewUsage(st))
 			return nil
@@ -119,7 +119,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			fmt.Fprint(out, viewUsage(st))
 			return nil
 		}
-		page, err := runView(home, st, name)
+		page, err := runView(home, st, name, args[1:]...)
 		if err != nil {
 			return err
 		}
@@ -186,7 +186,7 @@ func brief(home string, st *state) string {
 		fmt.Fprintf(&b, "- **%s** — %s%s\n", c.Name, oneLine(c.Decl.Description), pendingMark(c))
 	}
 
-	b.WriteString("\n## views — `self view <name>`\n\n")
+	b.WriteString("\n## views — `self view <name> [args…]`\n\n")
 	for _, c := range views {
 		consumes := strings.Join(c.Decl.Consumes, ", ")
 		if consumes == "" {
@@ -230,7 +230,7 @@ func brief(home string, st *state) string {
 // `brief`, because the two answer the same question: what can I read here?
 func viewUsage(st *state) string {
 	var b strings.Builder
-	b.WriteString("views on this instance — `self view <name>`:\n")
+	b.WriteString("views on this instance — `self view <name> [args…]`:\n")
 	views := st.list(kindView)
 	for _, c := range views {
 		consumes := strings.Join(c.Decl.Consumes, ", ")

@@ -595,8 +595,11 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 // not its latest declaration: re-declaring a view with a wider consumes list
 // leaves it pending, and until it is re-authored the old script must keep
 // seeing the stream it was signed against.
-func runView(home string, st *state, name string) ([]byte, error) {
+func runView(home string, st *state, name string, args ...string) ([]byte, error) {
 	if name == "log" && st.cap(kindView, "log") == nil {
+		if len(args) > 0 {
+			return nil, fmt.Errorf("built-in view %q takes no arguments", name)
+		}
 		return builtinLogView(st), nil
 	}
 	bin, err := materialize(home, st, kindView, name)
@@ -613,7 +616,7 @@ func runView(home string, st *state, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer os.RemoveAll(scratch)
-	cmd := exec.Command(bin)
+	cmd := exec.Command(bin, args...)
 	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv("", scratch), scratch, os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

@@ -31,7 +31,7 @@ writes out of what you read back.
 
 | | |
 |---|---|
-| read state | `self view <name>` — replays a view from the log. Never a command: a command's output is appended, so a query written as a command litters the log on every read. If the view you need is missing, author one. |
+| read state | `self view <name> [args…]` — replays a view from the log. Never a command: a command's output is appended, so a query written as a command litters the log on every read. If the view you need is missing, author one. |
 | write | `self run <cmd> [args…]` for an installed verb, or print events: `echo '{"name":"note.added","payload":{"text":"…"}}' \| self hear` |
 | grow | declare a capability and author its script in one body — see `self help`. Only a kernel-signed receipt installs, and only for something this log declared. |
 | learn | `self learn <account-dir>` deposits an account's record and prints its learning prompt; answer it yourself or pipe it to another mind. |

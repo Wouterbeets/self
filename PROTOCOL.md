@@ -147,8 +147,9 @@ The two kinds are told different things, and the difference is the boundary:
 log as JSONL. stdout is new events as JSONL. Exit non-zero and nothing is
 appended.
 
-**view** — never ingested: whatever it prints goes to the reader, not the log,
-and it is handed no path to the instance. stdin is exactly the events its
+**view** — never ingested: whatever it prints goes to the reader, not the log.
+argv is the arguments after `self view <name>`; the view is handed no path to
+the instance. stdin is exactly the events its
 receipt's `consumes` list names, as
 JSONL, in log order (an empty list or `["*"]` means every event). stdout is
 opaque bytes: text, HTML, JSON, whatever you like. A view is a **pure function
@@ -314,7 +315,7 @@ self <ask…>                 situate that ask (READ)
 … | self hear               hear: event lines land, scripts install (WRITE)
 self brief                  the state card: what exists, what is pending, what broke
 self run <cmd> [args…]      execute a command capability
-self view <name>            replay a view to stdout ("log" is built in, shadowable)
+self view <name> [args…]    replay a view to stdout ("log" is built in, shadowable)
 self learn <dir>            deposit an account, print its learning prompt
 self give <sel> <dir>       write an account from the log
 self rehydrate              make cap/ match the log exactly
