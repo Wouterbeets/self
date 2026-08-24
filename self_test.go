@@ -1331,7 +1331,7 @@ func TestOrdinaryPromptCarriesTheDietNotTheProtocol(t *testing.T) {
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"ephemeral mind", "working context is finite", "views are compressed perception", "event JSONL or silence", "self help"} {
+	for _, want := range []string{"ephemeral mind", "working context is finite", "views are compressed perception", "Exploration sometimes yields metis", "retaining transient glue", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}
@@ -1353,7 +1353,7 @@ func TestPendingPromptCarriesConditionalAuthoringContract(t *testing.T) {
 	h := home(t)
 	heard(t, h, line(t, "command.declared", decl{Name: "entry", Description: "append an entry"}))
 	p := situated(t, h, "")
-	for _, want := range []string{"script.authored", "Commands receive argv", "Views receive argv", "standard-library", "zero-argument form", "discoverable index", "complete append-only lifecycle", "tombstone event", "stale records remain permanently actionable", "Do not invent CRUD", "command \"entry\" declared"} {
+	for _, want := range []string{"script.authored", "Commands receive argv", "Views receive argv", "standard-library", "zero-argument form", "discoverable index", "complete append-only lifecycle", "tombstone event", "stale records remain permanently actionable", "Do not invent CRUD", "locally verified practices", "sanitized method", "not the raw session", "reads live external state is a command", "Repeated reuse", "justify automation", "command \"entry\" declared"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("pending prompt is missing %q:\n%s", want, p)
 		}
