@@ -1324,23 +1324,42 @@ func TestAccountEdgesAreRefused(t *testing.T) {
 
 // ───────────────────────────── prompts and briefs ───────────────────────────
 
-// One description of the contract, spliced rather than restated. Six
-// hand-synced copies is how the previous kernel came to print two
-// contradictory instructions back to back inside one brief.
-func TestPromptSplicesTheProtocol(t *testing.T) {
-	if !strings.Contains(protocolDoc, "<!-- prompt:begin -->") {
-		t.Fatal("PROTOCOL.md lost its splice marker")
+func TestOrdinaryPromptCarriesTheDietNotTheProtocol(t *testing.T) {
+	for _, layer := range []string{"core", "growth"} {
+		if protocolLayer(layer) == "" {
+			t.Fatalf("PROTOCOL.md lost prompt layer %q", layer)
+		}
 	}
-	w := wireContract()
-	if !strings.Contains(w, "script.authored") || !strings.Contains(w, "## Capability scripts") {
-		t.Fatalf("the spliced section is missing the contract:\n%s", trunc(w, 200))
+	p := situated(t, home(t), "an ask")
+	for _, want := range []string{"ephemeral mind", "working context is finite", "views are compressed perception", "event JSONL or silence", "self help"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
+		}
 	}
-	if strings.Contains(w, "## Accounts") {
-		t.Fatal("the splice ran past its end marker")
+	for _, absent := range []string{"## Capability scripts", "script.authored", "## Growing a capability", "## Answering"} {
+		if strings.Contains(p, absent) {
+			t.Fatalf("ordinary prompt carries conditional protocol %q", absent)
+		}
 	}
+	if !strings.Contains(p, protocolLayer("core")) {
+		t.Fatal("ordinary prompt does not splice the authoritative core layer")
+	}
+	if len(p) > 4000 {
+		t.Fatalf("empty situated prompt is %d bytes; diet regressed", len(p))
+	}
+}
+
+func TestPendingPromptCarriesConditionalAuthoringContract(t *testing.T) {
 	h := home(t)
-	if p := situated(t, h, "an ask"); !strings.Contains(p, w) {
-		t.Fatal("the prompt does not carry the spliced contract verbatim")
+	heard(t, h, line(t, "command.declared", decl{Name: "entry", Description: "append an entry"}))
+	p := situated(t, h, "")
+	for _, want := range []string{"script.authored", "Commands receive argv", "Views receive argv", "standard-library", "command \"entry\" declared"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("pending prompt is missing %q:\n%s", want, p)
+		}
+	}
+	if !strings.Contains(p, protocolLayer("growth")) {
+		t.Fatal("pending prompt does not splice the authoritative growth layer")
 	}
 }
 

@@ -31,22 +31,25 @@ import (
 	"strings"
 )
 
-// protocolDoc is the contract, embedded so a `self` on PATH describes itself
-// with no repo in sight. `self help` prints it whole; the situated prompt
-// splices the marked section. One description of the wire, in one place.
+// protocolDoc is the complete contract, embedded so a `self` on PATH describes
+// itself with no repo in sight. `self help` prints it whole. Situated turns
+// splice only marked layers, keeping one authoritative wording without carrying
+// the entire protocol into every working context.
 //
 //go:embed PROTOCOL.md
 var protocolDoc string
 
-// wireContract is PROTOCOL.md's own words about the wire, spliced rather than
-// restated. Six hand-synced copies of one contract is how the previous kernel
-// came to contradict itself inside a single brief.
-func wireContract() string {
-	_, rest, ok := strings.Cut(protocolDoc, "<!-- prompt:begin -->")
+func protocolLayer(name string) string {
+	begin := "<!-- prompt:" + name + ":begin -->"
+	end := "<!-- prompt:" + name + ":end -->"
+	_, rest, ok := strings.Cut(protocolDoc, begin)
 	if !ok {
 		return ""
 	}
-	body, _, _ := strings.Cut(rest, "<!-- prompt:end -->")
+	body, _, ok := strings.Cut(rest, end)
+	if !ok {
+		return ""
+	}
 	return strings.TrimSpace(body)
 }
 
@@ -430,16 +433,17 @@ func applyRetirements(home string, st *state, evs []Event) []string {
 
 // ───────────────────────────────── the prompt ───────────────────────────────
 
-// situate builds the situated prompt: the brief, pending work with the reason
-// each previous attempt failed, one exemplar of this instance's idiom, the wire
-// contract spliced from PROTOCOL.md, and the ask.
+// situate builds a deliberately small wake-up card: a truthful cognitive frame,
+// the instance brief, a minimal wire, conditional pending-growth detail, and the
+// ask. The complete protocol remains available through `self help`.
 func situate(home string, st *state, ask string) string {
 	var b strings.Builder
-	b.WriteString("You are the mind of a self instance. This came out of `self`; your stdout goes back into `self`.\n\n")
+	b.WriteString(protocolLayer("core"))
+	b.WriteString("\n\n")
 	b.WriteString(brief(home, st))
 	b.WriteString(pendingSection(st))
-	b.WriteString("\n")
-	b.WriteString(wireContract())
+	b.WriteString("\n## Wire\n\n")
+	b.WriteString("The core card above is the wire for this turn.")
 	b.WriteString("\n\n## The ask\n\n")
 	b.WriteString(strings.TrimSpace(ask))
 	b.WriteString("\n")
@@ -456,7 +460,8 @@ func pendingSection(st *state) string {
 	}
 	var b strings.Builder
 	b.WriteString("\n## Pending — declared, awaiting a script\n\n")
-	b.WriteString("Author each one, test it by running it, and print its script.authored line.\n")
+	b.WriteString(protocolLayer("growth"))
+	b.WriteString("\n")
 	skip := map[string]bool{}
 	for _, c := range pending {
 		skip[c.key()] = true

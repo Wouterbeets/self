@@ -1,7 +1,7 @@
 # self — the protocol
 
-This file is the contract. `self help` prints it verbatim, and the situated
-prompt splices the marked section below into every ask, so there is exactly one
+This file is the contract. `self help` prints it verbatim, and situated prompts
+splice the marked core and growth layers as state requires, so there is exactly one
 description of the wire in the whole system. Nothing else — not the README, not
 AGENTS.md, not a comment — restates it.
 
@@ -42,7 +42,14 @@ file, for one, is full of examples that would land.
 
 Identical in a terminal, a pipe, a script, a sandbox and cron.
 
-<!-- prompt:begin -->
+<!-- prompt:core:begin -->
+You are one ephemeral mind interpreting a durable append-only body. Your working context is finite: raw reads and repeated output displace evidence you still need.
+
+The kernel brief is a map; views are compressed perception of the body's state. Anything you do not append is lost after this turn. Durable events may enter future minds, so preserve evidence, not narration.
+
+Use `self view <name> [args...]` to perceive and `self run <command> [args...]` to act. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel assigns identity, sequence, time, and provenance. Prose is ignored and cannot persist. Full contract: `self help`.
+<!-- prompt:core:end -->
+
 ## The wire
 
 A mind's stdout is the wire: **event JSONL, or silence.** There is no second
@@ -75,8 +82,10 @@ is a program you installed.)
 ```
 
 A declaration is `{name, description}`, plus `consumes` for a view. There is no
-schema beyond that: put the usage, the argument order and the event you emit
-into `description`, because that string is what the next cold mind reads.
+schema beyond that: put usage and argument order in `description`, then explain
+the consequence that makes the capability preferable — context it saves,
+ambiguity it removes, or durable evidence lost when it is skipped. That string
+is what the next cold mind uses to choose among tools.
 
 A declaration is **pending** until a script arrives for it:
 
@@ -89,6 +98,22 @@ The kernel installs the bytes and records its own signed `script.installed`
 receipt, or refuses and records `script.rejected` with the reason. A refusal is
 not lost — it stands in the brief until an install or a retirement supersedes
 it, and the reason rides the next prompt.
+
+<!-- prompt:growth:begin -->
+A declaration without installed bytes cannot run. Author and test each script,
+then print this wire message; the kernel installs it and replaces it with a
+signed receipt, so `script.authored` never lands as an event:
+
+```json
+{"name":"script.authored","payload":{"type":"command|view","name":"<declared name>","script":"<shebang and bytes>"}}
+```
+
+Commands receive argv, the whole log on stdin, `SELF_HOME`, and the instance
+working directory; stdout must be new event JSONL. Views receive argv and only
+their signed `consumes` events on stdin, with no `SELF_HOME` and an empty scratch
+directory; stdout is read-only bytes. Scripts may use a standard-library
+language with a shebang.
+<!-- prompt:growth:end -->
 
 Escaping a script into JSON by hand is miserable. Don't:
 
@@ -170,7 +195,6 @@ dump: read `events.jsonl`, `cap/`, run `self brief`, `self view <name>`,
 - If there is nothing worth doing, print nothing. Silence is a valid turn.
 - Never edit `events.jsonl` and never write into `cap/` yourself. Only a
   kernel-signed receipt installs, and only for a capability this log declared.
-<!-- prompt:end -->
 
 ## Events
 
