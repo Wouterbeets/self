@@ -380,7 +380,7 @@ self <ask…>                 situate that ask (READ)
 self brief                  the state card: what exists, what is pending, what broke
 self run <cmd> [args…]      execute a command capability
 self view <name> [args…]    replay a view to stdout ("log" is built in, shadowable)
-self loop [opts] -- <mind>  orient and run a mind until one turn leaves the log unchanged
+self loop [opts] -- <mind>  run situated turns to an unchanged-state fixed point
 self learn <dir>            deposit an account, print its learning prompt
 self give <sel> <dir>       write an account from the log
 self rehydrate              make cap/ match the log exactly
@@ -415,6 +415,14 @@ Driver policy is explicit and generic:
 self loop --max-passes 12 --timeout 30m -- <mind> [args…]
 ```
 
+An optional first-pass ask directs attention without teaching the kernel domain
+semantics. It is presented only on pass one; if that turn changes state, later
+fresh passes return to the naked default ask and settle what changed:
+
+```sh
+self loop --ask 'advance backoffice-preprod-proof' -- <mind> [args…]
+```
+
 The mind is executed directly, not through a shell. It inherits the caller's
 working directory and environment (including `SELF_HOME` and `SELF_CALLER`),
 receives the situated prompt on stdin, and returns the ordinary event wire on
@@ -429,6 +437,7 @@ For a pinned local setup, environment defaults make the short form complete:
 
 ```sh
 export SELF_LOOP_MIND='pi --provider github-copilot --model gpt-5.6-luna --no-session -p'
+export SELF_LOOP_ASK='advance the one goal I selected'
 export SELF_LOOP_MAX_PASSES=12
 export SELF_LOOP_TIMEOUT=30m
 self loop
@@ -436,7 +445,8 @@ self loop
 
 `SELF_LOOP_MIND` is necessarily a shell command string and runs through
 `sh -c`; explicit argv after `--` is safer and takes precedence. CLI
-`--max-passes` and `--timeout` likewise override their environment defaults.
+`--ask`, `--max-passes`, and `--timeout` likewise override their environment
+defaults.
 
 Reaching the pass cap while state still changes, a mind failure, a timeout, or a
 hear failure exits non-zero. A converged fixed point exits zero.
@@ -455,6 +465,7 @@ SELF_HOME    the instance: a directory holding events.jsonl and .secret
 SELF_CALLER  your claim, recorded verbatim as `by` on events you cause and
              signed into the receipts of scripts you author
 SELF_LOOP_MIND          default shell command for `self loop` when `--` is absent
+SELF_LOOP_ASK           default explicit objective for pass one only
 SELF_LOOP_MAX_PASSES    default loop pass cap (12 when unset)
 SELF_LOOP_TIMEOUT       default per-mind timeout (30m when unset)
 ```

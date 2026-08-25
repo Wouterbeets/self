@@ -15,20 +15,23 @@ import (
 type loopOptions struct {
 	MaxPasses int
 	Timeout   time.Duration
+	Ask       string
 	Mind      []string
 }
 
-const loopUsage = `usage: self loop [--max-passes N] [--timeout DURATION] [-- <mind> [args...]]
+const loopUsage = `usage: self loop [--ask TEXT] [--max-passes N] [--timeout DURATION] [-- <mind> [args...]]
 
 Run naked situated turns until one complete turn leaves authoritative state unchanged.
 
 Options:
+  --ask TEXT        explicit objective for pass one; later passes are naked
   --max-passes N   fail if state changes for N consecutive passes
   --timeout D      fail when one mind process exceeds D (examples: 45s, 10m)
   -h, --help       show this help
 
 Environment defaults:
   SELF_LOOP_MIND         shell command used when no mind argv follows --
+  SELF_LOOP_ASK          default first-pass objective
   SELF_LOOP_MAX_PASSES   default 12
   SELF_LOOP_TIMEOUT      default 30m
 
@@ -54,7 +57,7 @@ func positiveDuration(value, source string) (time.Duration, error) {
 }
 
 func parseLoopOptions(args []string) (loopOptions, error) {
-	opts := loopOptions{MaxPasses: 12, Timeout: 30 * time.Minute}
+	opts := loopOptions{MaxPasses: 12, Timeout: 30 * time.Minute, Ask: os.Getenv("SELF_LOOP_ASK")}
 	if value := os.Getenv("SELF_LOOP_MAX_PASSES"); value != "" {
 		parsed, err := positiveInt(value, "SELF_LOOP_MAX_PASSES")
 		if err != nil {
@@ -78,6 +81,8 @@ func parseLoopOptions(args []string) (loopOptions, error) {
 			return opts, fmt.Errorf("%s", loopUsage)
 		}
 		switch args[0] {
+		case "--ask":
+			opts.Ask = args[1]
 		case "--max-passes":
 			value, err := positiveInt(args[1], "--max-passes")
 			if err != nil {
@@ -141,7 +146,11 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 		if err != nil {
 			return err
 		}
-		prompt := situate(home, before, defaultAsk)
+		ask := defaultAsk
+		if pass == 1 && strings.TrimSpace(opts.Ask) != "" {
+			ask = opts.Ask
+		}
+		prompt := situate(home, before, ask)
 		fmt.Fprintf(diag, "self loop: pass %d/%d\n", pass, opts.MaxPasses)
 
 		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)

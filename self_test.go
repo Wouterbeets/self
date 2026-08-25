@@ -862,7 +862,10 @@ func TestCommandGetsTheInstanceAndNothingElse(t *testing.T) {
 	}
 	var p struct{ Home, Cwd, Sneaky string }
 	json.Unmarshal(evs[0].Payload, &p)
-	if p.Home != h || p.Cwd != h {
+	// macOS reports $(pwd) through /private, so judge the cwd resolved.
+	cwd, _ := filepath.EvalSymlinks(p.Cwd)
+	want, _ := filepath.EvalSymlinks(h)
+	if p.Home != h || cwd != want {
 		t.Fatalf("a command was not told its instance: home=%q cwd=%q want %q", p.Home, p.Cwd, h)
 	}
 	if p.Sneaky != "" {
@@ -1503,6 +1506,31 @@ func TestLoopPinsResolvedHomeIntoMindEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoopAskAppliesOnlyToFirstPass(t *testing.T) {
+	h := home(t)
+	capture := filepath.Join(t.TempDir(), "asks")
+	script := `prompt=$(cat); printf '%s\n---PASS---\n' "$prompt" >> "$CAPTURE"; case "$prompt" in *"log: 0 events"*) printf '%s\n' '{"name":"note.added","payload":{"text":"changed"}}';; esac`
+	t.Setenv("CAPTURE", capture)
+	var out, diag bytes.Buffer
+	if err := cmdLoop(h, []string{"--ask", "advance selected goal", "--max-passes", "3", "--timeout", "5s", "--", "/bin/sh", "-c", script}, &out, &diag); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passes := strings.Split(string(data), "---PASS---")
+	if len(passes) < 3 {
+		t.Fatalf("mind did not receive two passes:\n%s", data)
+	}
+	if !strings.Contains(passes[0], "advance selected goal") {
+		t.Fatalf("first pass lost explicit ask:\n%s", passes[0])
+	}
+	if strings.Contains(passes[1], "advance selected goal") || !strings.Contains(passes[1], "No specific ask") {
+		t.Fatalf("later pass repeated explicit ask or lost naked ask:\n%s", passes[1])
+	}
+}
+
 func TestLoopCLIOverridesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("SELF_LOOP_MIND", "exit 9")
 	t.Setenv("SELF_LOOP_MAX_PASSES", "9")
@@ -1549,7 +1577,7 @@ func TestLoopHelpDocumentsDefaultsAndExecution(t *testing.T) {
 	if err := cmdLoop(home(t), []string{"--help"}, &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"default 12", "default 30m", "SELF_LOOP_MIND", "executed directly", "sh -c"} {
+	for _, want := range []string{"--ask TEXT", "pass one", "SELF_LOOP_ASK", "default 12", "default 30m", "SELF_LOOP_MIND", "executed directly", "sh -c"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("loop help is missing %q:\n%s", want, out.String())
 		}

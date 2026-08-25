@@ -42,10 +42,22 @@ self loop --max-passes 12 --timeout 30m -- \
 process. Progress and mind stderr go to stderr. Run `self loop --help` for the
 complete invocation.
 
+Direct the first fresh mind at one objective while keeping later passes naked:
+
+```sh
+self loop --ask 'advance backoffice-preprod-proof' -- \
+  pi --provider github-copilot --model gpt-5.6-luna --no-session -p
+```
+
+If pass one appends, subsequent fresh passes inspect and settle the changed body
+without repeating the instruction. If pass one changes nothing, the loop has
+already reached its fixed point.
+
 Pin a preferred mind once and `self loop` needs no arguments:
 
 ```sh
 export SELF_LOOP_MIND='pi --provider github-copilot --model gpt-5.6-luna --no-session -p'
+export SELF_LOOP_ASK='advance backoffice-preprod-proof'
 export SELF_LOOP_MAX_PASSES=12
 export SELF_LOOP_TIMEOUT=30m
 self loop
