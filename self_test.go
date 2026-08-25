@@ -1490,6 +1490,19 @@ func TestLoopUsesEnvironmentDefaults(t *testing.T) {
 	}
 }
 
+func TestLoopPinsResolvedHomeIntoMindEnvironment(t *testing.T) {
+	h := home(t)
+	// Simulate an explicit dispatch home while the caller environment points at
+	// another body. The loop must hand the resolved home to tool-capable minds.
+	t.Setenv("SELF_HOME", t.TempDir())
+	script := `test "$SELF_HOME" = "$EXPECTED_HOME"`
+	t.Setenv("EXPECTED_HOME", h)
+	var out, diag bytes.Buffer
+	if err := cmdLoop(h, []string{"--max-passes", "1", "--timeout", "5s", "--", "/bin/sh", "-c", script}, &out, &diag); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoopCLIOverridesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("SELF_LOOP_MIND", "exit 9")
 	t.Setenv("SELF_LOOP_MAX_PASSES", "9")

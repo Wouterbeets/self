@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -115,6 +116,17 @@ func stateRevision(st *state) string {
 	return fmt.Sprintf("%d:%d:%s", len(st.Events), last.Seq, last.ID)
 }
 
+func withEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	return append(out, prefix+value)
+}
+
 func cmdLoop(home string, args []string, out, diag io.Writer) error {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Fprintln(out, loopUsage)
@@ -134,7 +146,10 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 
 		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 		cmd := exec.CommandContext(ctx, opts.Mind[0], opts.Mind[1:]...)
-		cmd.Env = os.Environ()
+		// Tool-capable minds must act on the same body that produced their
+		// situated prompt. Pin the already-resolved home even when the caller
+		// selected it implicitly through cwd rather than SELF_HOME.
+		cmd.Env = withEnv(os.Environ(), "SELF_HOME", home)
 		cmd.Stdin = bytes.NewBufferString(prompt)
 		var stdout bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, diag
