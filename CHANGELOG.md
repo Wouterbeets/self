@@ -47,6 +47,24 @@ preserving receipt-filtered stdin, scratch working directory, scrubbed
 environment, and non-ingested stdout. This permits pure reads such as
 `self view context <goal>` instead of append-on-read query commands.
 
+### New: browser sidecars
+
+`self-serve` and `self-browse` are optional binaries, not kernel. They pipe
+over the same verbs a terminal uses:
+
+```sh
+self-browse                 # `self brief` in the system browser
+self-browse shopping        # GET /view/shopping → `self view shopping`
+self-serve                  # 127.0.0.1:8377 (PORT overrides)
+```
+
+`/` is `self brief`. `/view/` is the zero-arg view index. `/view/<name>[/<arg>…]`
+is `self view`; `/run/<cmd>/…` is `self run`. Slash-named capabilities
+(`timer/set`) resolve as one name. Clicks land with `by=browser`. Every request
+is a fresh replay; the server holds no session. This is not a return of v0
+`self serve`: views still emit opaque bytes, the kernel still has no HTTP, and
+the only thing the HTTP face adds is a two-second freshness check.
+
 ## v2.0.0 — the kernel that stopped guessing
 
 A rewrite. The log format is compatible; nothing else is. If you have a grown

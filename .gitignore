@@ -1,5 +1,7 @@
-# the compiled kernel
+# compiled binaries
 /self
+/self-serve
+/self-browse
 
 # an instance's DERIVED state — rebuilt by `self rehydrate` from the log alone
 **/cap/

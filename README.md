@@ -268,6 +268,16 @@ because nothing runnable travels. Learn it and your instance writes its own:
 self learn lessons/faces | claude -p | self hear
 ```
 
+A browser is one more reader of those bytes, not a kernel feature. `self-serve`
+and `self-browse` are sidecar binaries that exec `self view` / `self run` /
+`self brief` per request:
+
+```sh
+make build                  # self, self-serve, self-browse
+self-browse                 # orientation: the brief, as a page
+self-browse shopping        # a view, in the system browser
+```
+
 ## Limits
 
 Stated plainly, and at greater length in `self help`: there is **no human review
