@@ -1,0 +1,107 @@
+== seeding estate with mind-stub (no LLM) ==
+self: new instance /home/mindpalace/self/experiments/estate-compounding/seed-home
+self: learned "journal" — 0 event(s) deposited; pipe this prompt to a mind:  self learn /home/mindpalace/self/lessons/journal | claude -p | self hear
+heard 2 event(s): seq 3-4
+installed command/entry under a signed receipt
+installed view/journal under a signed receipt
+self loop: pass 1/6
+self loop: converged after 1 pass(es) — authoritative state unchanged
+== seed ready: 2 scripts installed ==
+== bare rep 1 ==
+{"arm":"bare","rep":1,"task":"t1","converged":true,"success":true,"ask":{"wall_s":36,"calls":1,"events":1},"loop":{"wall_s":279,"calls":2,"events":5},"wall_s":315,"mind_calls":3,"events_appended":6,"scripts_installed":2}
+{"arm":"bare","rep":1,"task":"t2","converged":true,"success":true,"ask":{"wall_s":31,"calls":1,"events":1},"loop":{"wall_s":25,"calls":1,"events":0},"wall_s":56,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+{"arm":"bare","rep":1,"task":"t3","converged":true,"success":true,"ask":{"wall_s":14,"calls":1,"events":1},"loop":{"wall_s":319,"calls":2,"events":6},"wall_s":333,"mind_calls":3,"events_appended":7,"scripts_installed":2}
+== bare rep 2 ==
+{"arm":"bare","rep":2,"task":"t1","converged":true,"success":true,"ask":{"wall_s":91,"calls":1,"events":3},"loop":{"wall_s":142,"calls":1,"events":0},"wall_s":233,"mind_calls":2,"events_appended":3,"scripts_installed":1}
+{"arm":"bare","rep":2,"task":"t2","converged":true,"success":true,"ask":{"wall_s":41,"calls":1,"events":1},"loop":{"wall_s":104,"calls":1,"events":0},"wall_s":145,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+{"arm":"bare","rep":2,"task":"t3","converged":true,"success":true,"ask":{"wall_s":33,"calls":1,"events":1},"loop":{"wall_s":662,"calls":6,"events":20},"wall_s":695,"mind_calls":7,"events_appended":21,"scripts_installed":4}
+== bare rep 3 ==
+{"arm":"bare","rep":3,"task":"t1","converged":true,"success":true,"ask":{"wall_s":20,"calls":1,"events":1},"loop":{"wall_s":350,"calls":4,"events":6},"wall_s":370,"mind_calls":5,"events_appended":7,"scripts_installed":2}
+{"arm":"bare","rep":3,"task":"t2","converged":true,"success":true,"ask":{"wall_s":12,"calls":1,"events":1},"loop":{"wall_s":117,"calls":1,"events":0},"wall_s":129,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+{"arm":"bare","rep":3,"task":"t3","converged":true,"success":true,"ask":{"wall_s":16,"calls":1,"events":1},"loop":{"wall_s":162,"calls":3,"events":2},"wall_s":178,"mind_calls":4,"events_appended":3,"scripts_installed":0}
+== grown rep 1 ==
+{"arm":"grown","rep":1,"task":"t1","converged":true,"success":true,"ask":{"wall_s":13,"calls":1,"events":1},"loop":{"wall_s":141,"calls":1,"events":0},"wall_s":154,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+{"arm":"grown","rep":1,"task":"t2","converged":true,"success":true,"ask":{"wall_s":16,"calls":1,"events":1},"loop":{"wall_s":62,"calls":1,"events":0},"wall_s":78,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+{"arm":"grown","rep":1,"task":"t3","converged":true,"success":true,"ask":{"wall_s":19,"calls":1,"events":1},"loop":{"wall_s":79,"calls":1,"events":0},"wall_s":98,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+== grown rep 2 ==
+{"arm":"grown","rep":2,"task":"t1","converged":true,"success":true,"ask":{"wall_s":27,"calls":1,"events":1},"loop":{"wall_s":110,"calls":1,"events":0},"wall_s":137,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+{"arm":"grown","rep":2,"task":"t2","converged":true,"success":true,"ask":{"wall_s":39,"calls":1,"events":1},"loop":{"wall_s":266,"calls":1,"events":0},"wall_s":305,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+{"arm":"grown","rep":2,"task":"t3","converged":true,"success":true,"ask":{"wall_s":41,"calls":1,"events":1},"loop":{"wall_s":84,"calls":1,"events":0},"wall_s":125,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+== grown rep 3 ==
+{"arm":"grown","rep":3,"task":"t1","converged":true,"success":true,"ask":{"wall_s":19,"calls":1,"events":1},"loop":{"wall_s":31,"calls":1,"events":0},"wall_s":50,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+{"arm":"grown","rep":3,"task":"t2","converged":true,"success":true,"ask":{"wall_s":14,"calls":1,"events":1},"loop":{"wall_s":110,"calls":1,"events":0},"wall_s":124,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+{"arm":"grown","rep":3,"task":"t3","converged":true,"success":true,"ask":{"wall_s":20,"calls":1,"events":1},"loop":{"wall_s":108,"calls":1,"events":0},"wall_s":128,"mind_calls":2,"events_appended":1,"scripts_installed":0}
+
+== summary (means over reps) ==
+{
+  "arm": "bare",
+  "task": "t1",
+  "n": 3,
+  "success": 1,
+  "converged": 1,
+  "ask_calls": 1,
+  "loop_calls": 2.3333333333333335,
+  "ask_wall_s": 49,
+  "loop_wall_s": 257,
+  "wall_s": 306
+}
+{
+  "arm": "bare",
+  "task": "t2",
+  "n": 3,
+  "success": 1,
+  "converged": 1,
+  "ask_calls": 1,
+  "loop_calls": 1,
+  "ask_wall_s": 28,
+  "loop_wall_s": 82,
+  "wall_s": 110
+}
+{
+  "arm": "bare",
+  "task": "t3",
+  "n": 3,
+  "success": 1,
+  "converged": 1,
+  "ask_calls": 1,
+  "loop_calls": 3.6666666666666665,
+  "ask_wall_s": 21,
+  "loop_wall_s": 381,
+  "wall_s": 402
+}
+{
+  "arm": "grown",
+  "task": "t1",
+  "n": 3,
+  "success": 1,
+  "converged": 1,
+  "ask_calls": 1,
+  "loop_calls": 1,
+  "ask_wall_s": 19.666666666666668,
+  "loop_wall_s": 94,
+  "wall_s": 113.66666666666667
+}
+{
+  "arm": "grown",
+  "task": "t2",
+  "n": 3,
+  "success": 1,
+  "converged": 1,
+  "ask_calls": 1,
+  "loop_calls": 1,
+  "ask_wall_s": 23,
+  "loop_wall_s": 146,
+  "wall_s": 169
+}
+{
+  "arm": "grown",
+  "task": "t3",
+  "n": 3,
+  "success": 1,
+  "converged": 1,
+  "ask_calls": 1,
+  "loop_calls": 1,
+  "ask_wall_s": 26.666666666666668,
+  "loop_wall_s": 90.33333333333333,
+  "wall_s": 117
+}

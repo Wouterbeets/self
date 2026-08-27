@@ -1,0 +1,12 @@
+#!/bin/sh
+# mind — one situated prompt in, one `opencode run` out.
+#
+# opencode is the agent harness: it explores the instance and acts through
+# `self view` / `self run` with its own tools (SELF_HOME is exported and the
+# kernel is on PATH; we start it inside the instance). Its reply text lands on
+# stdout, where `self hear` appends event lines and ignores prose. Each
+# invocation is one pass, counted in BENCH_METRICS when set; token accounting
+# needs llama-server started with --metrics and is skipped until then.
+[ -n "${BENCH_METRICS:-}" ] && printf '{"prompt":0,"completion":0}\n' >> "$BENCH_METRICS"
+cd "${SELF_HOME:?mind: SELF_HOME must name the instance}" || exit 1
+exec "${SELF_MIND_OPENCODE:-$HOME/.opencode/bin/opencode}" run "$(cat)"
