@@ -1334,7 +1334,7 @@ func TestOrdinaryPromptCarriesTheDietNotTheProtocol(t *testing.T) {
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"ephemeral mind", "working context is finite", "views are compressed perception", "Exploration sometimes yields metis", "retaining transient glue", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
+	for _, want := range []string{"this self, for a bit", "The mind ends; you do not", "Context is finite", "views are compressed perception", "Exploration sometimes yields metis", "retaining transient glue", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}

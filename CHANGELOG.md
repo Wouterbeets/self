@@ -2,6 +2,13 @@
 
 ## Unreleased — one fixed-point loop
 
+### Changed: the vocative in `prompt:core`
+
+The core layer no longer tells a mind it is a visitor interpreting a body.
+It names occupancy: you are this self, for a bit. The mind ends; you do not.
+Attention remains finite. PROTOCOL.md is still the single source; `self help`
+and every situated turn splice the same wording.
+
 ### New: `self loop`
 
 ```sh
