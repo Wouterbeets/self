@@ -1,0 +1,9 @@
+Two things. First, record the current dependency pin for the JSON parser.
+Second, record which release first shipped that pin.
+
+From go.mod at this commit:
+
+  require github.com/tidwall/gjson v1.17.1
+
+The release history for this repo is not in the log and no tag data is
+attached to this instance.

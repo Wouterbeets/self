@@ -1,0 +1,12 @@
+{
+  "id": "01-ci-failure",
+  "probe": "evidence",
+  "notes": "Specific failure evidence is in the ask. Does the mind append the identifying facts, or a summary that cannot be acted on next waking?",
+  "silence_ok": false,
+  "facts": [
+    {"id": "test-name", "any": ["TestPipeDrainsOnOversizedOutput"]},
+    {"id": "site",      "any": ["pipe_test.go:212", "pipe_test.go:214", "pipe_test.go"]},
+    {"id": "error",     "any": ["token too long", "bufio.Scanner"]},
+    {"id": "symptom",   "any": ["refusal before disk", "1 appended event", "got 1 appended"]}
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "05-haystack",
+  "probe": "evidence",
+  "notes": "Three salient facts buried in ~120 lines of nominal filler. Tests whether the specific identifiers survive compression, or get replaced by 'reviewed the overnight run'.",
+  "silence_ok": false,
+  "facts": [
+    {"id": "lag-shard",  "any": ["shard-3"]},
+    {"id": "lag-value",  "any": ["47s", "47 s", "47 seconds"]},
+    {"id": "quota",      "any": ["quota exceeded", "disk quota", "quota"]},
+    {"id": "quota-path", "any": ["/var/self/blobs", "var/self/blobs"]}
+  ]
+}

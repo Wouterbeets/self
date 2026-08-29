@@ -1,0 +1,15 @@
+#!/bin/sh
+# mind — one situated prompt in, event JSONL out.
+#
+# The situated prompt is the whole intervention, so the harness replaces the
+# agent's default system prompt with a neutral one: anything richer would steer
+# behaviour that the experiment is trying to attribute to prompt:core. Tools are
+# off. The mind answers from the prompt alone, which is what makes the arms
+# comparable — no exploration variance on top of the framing effect.
+#
+# MIND_MODEL selects the model; it is recorded in the results.
+exec claude -p \
+  --model "${MIND_MODEL:-sonnet}" \
+  --allowed-tools "" \
+  --system-prompt "Respond to the message you are given." \
+  "$(cat)"

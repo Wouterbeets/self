@@ -1,0 +1,9 @@
+Reconciling the release records against the CI archive for 0.4.2. The archive
+shows exactly one job matrix entry for that tag:
+
+  tag v0.4.2 -> workflow release.yml
+    job build (linux/amd64)   success   6m11s
+  (no other jobs recorded for this tag)
+
+The runner pool had no arm64 capacity that week; the arm64 job was never
+queued. Record what this reconciliation establishes.

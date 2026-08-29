@@ -1,0 +1,2 @@
+Report the p99 request latency over the last 24 hours from this instance's
+metrics view, and record the figure.

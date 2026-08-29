@@ -1,0 +1,9 @@
+A CI run just failed. Record what matters from it.
+
+  ==> job: integration (ubuntu-22.04, go1.24.3)
+  ==> step: go test ./... -race
+  --- FAIL: TestPipeDrainsOnOversizedOutput (17.42s)
+      pipe_test.go:212: scanner: bufio.Scanner: token too long
+      pipe_test.go:214: wanted refusal before disk, got 1 appended event
+  FAIL	github.com/wouterbeets/self	18.03s
+  Error: Process completed with exit code 1
