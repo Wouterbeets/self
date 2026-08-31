@@ -2,6 +2,13 @@
 
 ## Unreleased — one fixed-point loop
 
+### Changed: the protocol is named
+
+The exchange that travelled as knowledge-seed, then as the account protocol, is
+the Self Protocol. An account remains the unit that moves — intent, optional
+record, optional attestation. The runtime speaks it; [`PROTOCOL.md`](PROTOCOL.md)
+is the contract.
+
 ### Changed: the vocative in `prompt:core` and `prompt:growth`
 
 The core layer no longer tells a mind it is a visitor interpreting a body.
