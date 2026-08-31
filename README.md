@@ -82,11 +82,8 @@ for callers that still supply a `MIND` shell string.
 **Reads project. Writes append. Orientation is a read.** Looking at an instance
 never changes it. The log grows only when something was meant to persist.
 
-**Direction is structural, never sniffed.** An ask arrives as argv; what comes
-back from a mind arrives on stdin, at `self hear`. Prose alone cannot tell those
-apart — "what is going on?" and a mind's answer to it are both prose — so the
-kernel does not guess. It does not look at your terminal, and it behaves
-identically in a pipe, a script, a sandbox and cron.
+**Direction is structural, never sniffed.** An ask arrives as argv; a mind's
+reply arrives on stdin, at `self hear`.
 
 **A mind proposes; the kernel records.** Only an HMAC receipt that verifies
 under `SELF_HOME/.secret` ever installs, and only for a capability this log
@@ -181,7 +178,7 @@ injection. Moments and speakers are preserved. And the attestation records the
 sha256 of what actually landed beside what the manifest claimed, so deleting a
 line before learning — legitimate curation — is visible in both logs forever.
 
-Giving is cheap; learning is the work. That asymmetry is the protocol, and it is
+Giving is cheap; learning is the work. That asymmetry is the Self Protocol,
 specified in full in [`PROTOCOL.md`](PROTOCOL.md).
 
 ## Why
@@ -194,11 +191,10 @@ person owns — durable, inspectable, verifiable, and portable — so it can tra
 
 These are complementary. A healthy metis layer gives a frontier model
 better-grounded context, and the user keeps continuity and agency that no single
-provider mediates. This runtime is the reference implementation of a larger
-idea: the [Account
-Protocol](https://github.com/wouterbeets/knowledge-seed-protocol) says how
-records and capabilities move between sovereign minds — as accounts you read and
-learn from, never as code that runs. `self` is the runtime that speaks it.
+provider mediates. This runtime is the reference implementation of the **Self Protocol**:
+how records and capabilities move between sovereign minds — as accounts you
+read and learn from, never as code that runs. The contract is
+[`PROTOCOL.md`](PROTOCOL.md).
 
 ## Substrate, not features
 
@@ -212,11 +208,6 @@ This kernel is deliberately smaller than the one before it. What went, and why:
   and its knowledge of `chat.message`. The kernel kept a diary beside the chat
   lesson, and parsed a *lesson's* event name to decide what to do next.
   Conversation is a capability — see `lessons/chat` — not a kernel feature.
-- **`isatty` as protocol.** The previous kernel chose between five faces by
-  inspecting file descriptors. Verified consequence: run its own documented loop
-  anywhere without a terminal — a script, an agent, cron — and the mind's reply
-  was recorded as a *question* and the answer never reached you. Direction is
-  structural now.
 - **The page cache** (materialized HTML, mtime freshness, selective refresh) and
   the staging-and-rename swap for two derived trees. Cache coherence has no
   business inside a kernel whose whole claim is pure replay.
