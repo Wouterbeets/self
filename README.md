@@ -277,14 +277,19 @@ above is shaped by what that reader costs — the situated prompt is a wake-up
 card rather than a context dump, views compress so the reader does not have to,
 and reads project so orienting can never scar the log.
 
-One number says where the work still is. Two hundred domain events into a fresh
-instance move the situated prompt by **two bytes** — the digit count in
-`log: N events` — and move `self view log`, the only read that would have shown
-them, by **25 KB**. The kernel refuses to learn what a note or a goal means, and
-it is right to: that knowledge would be one kernel's opinion, inherited by every
-instance forever. So compression belongs to the instance. An instance grows a
-view that answers what a cold reader needs first, and every session reads that
-before anything else:
+Where the work still is: put six `goal.created` and two `goal.closed` in a log
+with no view over them, and the instance cannot tell you that four are open.
+`tail` and `grep` will hand back all eight records — length is a shell problem
+and the shell solved it long ago — but reconstructing which records still stand
+is a fold, and with no view every session re-derives it by hand. Meanwhile the
+state card reports *nothing pending, nothing refused*, because no capability is
+half-built. The system can say what it can do; it cannot yet say what it cannot
+see.
+
+The kernel refuses to learn what a note or a goal means, and it is right to: that
+knowledge would be one kernel's opinion, inherited by every instance forever. So
+the fold belongs to the instance. An instance grows a view that answers what a
+cold reader needs first, and every session reads that before anything else:
 
 ```sh
 self learn lessons/situation | claude -p | self hear

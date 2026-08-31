@@ -47,24 +47,68 @@ make. It is also the one currently broken, in exactly one place.
 Two hundred `note.added` events into a fresh instance with nothing pending:
 
 ```
-situated prompt   2,328 bytes      (1,737 before this branch's core-layer change)
-self brief          518 bytes
-self view log    25,292 bytes
+situated prompt            2,328 bytes   (1,737 before this branch)
+self brief                   518 bytes
+self view log             25,292 bytes
+self view log | tail -30   2,430 bytes
 ```
 
 Two hundred domain events moved the situated prompt by **two bytes** — the digit
-count in `log: N events`. They moved the only read that would have shown them by
-**25 KB**. Reproduce it: append two hundred events to a fresh home and diff
-`self` against itself before and after.
+count in `log: N events`. The string `note.added` — the only thing this instance
+has ever been about — appears nowhere in its own orientation surface. The
+commands section reads `none yet`, the views section offers the built-in log, and
+that is the whole of it. A mind woken here is told what it may *do* and nothing
+whatsoever about what *is*.
 
-Worse than the arithmetic: the string `note.added` — the only thing this
-instance has ever been about — appears nowhere in its own orientation surface.
-The commands section reads `none yet`, the views section offers the built-in log,
-and that is the whole of it. A mind woken here is told what it may *do* and
-nothing whatsoever about what *is*. Until this branch it was also pointed at the
-whole history under the words "what happened lately", which on a grown instance
-is the most expensive read available rather than the cheapest; that pointer now
-says what the read actually is, which is honesty, not a fix.
+### What that last line is not
+
+An earlier draft of this document made the 25 KB the point. It is not. A view
+prints bytes to stdout, and a mind with a shell filters bytes for free:
+
+```sh
+self view log | tail -30                              # 2,430 bytes, not 25 KB
+self view log | grep goal.
+self view log | awk '{print $3}' | sort | uniq -c     # the census, no kernel
+tail -3 events.jsonl                                  # the kernel is not involved
+```
+
+All four are measured, not assumed: `head` on a view does not break the kernel,
+the pipe exits zero, and the log file is a plain line-oriented file sitting in
+the instance directory. **Volume is a solved problem in unix, and the solution
+predates this runtime by fifty years.** Any proposal to teach the kernel
+`--tail` or `--since` is proposing a second dispatcher for something the first
+one already composes with — see D1, which is why it is now in *Rejected*.
+
+### What piping does not solve
+
+Put six `goal.created` and two `goal.closed` in a log with no view over them, and
+ask the only question anyone actually has:
+
+```
+$ self view log | grep -E 'goal\.(created|closed)'
+goal.created {"key":"g1","title":"goal 1"}      … g2 … g3 … g4 … g5 … g6
+goal.closed  {"key":"g1"}                       … g2
+```
+
+`tail` and `grep` retrieved those lines perfectly. Neither of them said **four
+open**. Reconstructing that fold — created minus closed, keyed, with the last
+write winning — is what a view is for, and with no view every waking does it by
+hand, from raw records, forever. That is not a byte cost. It is a
+**re-derivation** cost, and it is the one that compounds: bytes are one pipe
+away, but the fold is re-earned on every single waking until somebody writes it
+down as a capability.
+
+And the brief on that instance says:
+
+```
+nothing pending, nothing refused.
+```
+
+Forty-eight events across three names, the entire domain of the place
+unrendered, and the state card reports that everything is in order. That is the
+honest version of the complaint this document opens with. The problem was never
+that the log is long. It is that **the system can tell you what it can do and
+cannot tell you what it cannot yet see.**
 
 That is the whole of what this document is about. Everything below either
 explains why the rest of the system is right to be as it is, or proposes the
@@ -195,14 +239,18 @@ the next waking sees*. This is the keystone. A system where the mind can improve
 its own perception compounds; one where perception is fixed by the kernel does
 not, no matter how good the fixed version is.
 
-**P3 — Every byte the kernel prints is context.** Bound it, or the pointer to it
-is a lie. The brief called `self view log` "what happened lately" when it is in
-fact the whole history; that wording is corrected on this branch, which makes the
-pointer honest and the read no cheaper. The comment above `builtinLogView` in
-`capability.go` still says it "answers the cheapest question at every cold
-start" — true on an empty instance, false on any instance worth orienting in,
-and the divergence grows monotonically. D1 is what would make the sentence true
-again.
+**P3 — The cost that compounds is re-derivation, not volume.** A shell handles
+volume; nothing handles a fold that was never written down. Every event name with
+no view over it is a small tax levied on every future waking: reconstruct which
+records are live, which are tombstoned, what the last write said — from raw
+JSON, by hand, again. Views are where that work gets paid once. So the signal
+worth surfacing is not how big the log is; it is **which parts of it nothing can
+read yet**. The brief calls that instance clean today.
+
+The corollary for the kernel's own output: bound it because it is context, but do
+not confuse that with the pressure. The brief called `self view log` "what
+happened lately" when it is the whole history; that wording is corrected on this
+branch, which makes the pointer honest and changes nothing about the cost.
 
 **P4 — Rehearsal before commitment.** Authoring is the sharpest act in the
 system: there is no human review between authoring and signing, and the kernel
@@ -241,29 +289,51 @@ Each item: the pressure it relieves, the smallest change that relieves it, the
 invariant it must not break, and the check that proves it. Ordered by value per
 line of kernel.
 
-### D1 — a bounded built-in log read **designed** · P1, P3
+### D1 — unrendered names in the brief **designed** · P3, P6, P2
 
-`self view log` accepts an optional tail count and an optional `since:<seq>`:
+The brief gains one section, computed from data the kernel already holds: the
+event names in this log that **no live view consumes**.
 
-```sh
-self view log 50            # the last 50 events
-self view log since:1284    # everything after the seq I last saw
+```
+## unrendered — in the log, nothing reads it
+
+goal.created  6    goal.closed  2    note.added  40
+no view consumes these names. A fold nothing renders is re-derived by hand on
+every waking.
 ```
 
-The default stays the whole log: the log is authoritative and the kernel does not
-get to decide which of your records to hide by default. What changes is that a
-bounded read *exists*, and every pointer at it — the brief, `AGENTS.md`, the
-prompt — names the bounded form.
+Every receipt carries the `consumes` list its view was signed against. Every
+event carries a name. The difference between those two sets is a pure replay, it
+costs a bounded handful of lines, and it needs no idea what a goal is. It names
+exactly the hole this system currently reports as clean: the instance above has
+its entire domain in the log and a state card that says *nothing pending, nothing
+refused*.
 
-*Invariant:* purity (a tail is a pure function of the same events), and one
-dispatcher — arguments to a view are already how every other view is
-parameterized, and the growth layer already asks that the zero-argument form be
-a usable index.
+This is the item that makes the pressure structural rather than advisory. A
+missing capability already appears in the brief as **pending**; a refused one
+appears as **refused**. Domain state that nothing can read is the third kind of
+outstanding work, and it is the only one the kernel currently cannot see —
+though it has everything needed to compute it.
 
-*Check:* `self view log 50` on a 200-event instance prints 50 lines, the last
-50, in log order; `self view log since:$n` prints exactly the events after `n`;
-a declared view named `log` still shadows the built-in, arguments and all;
-malformed arguments fail rather than being ignored.
+The subtle part, and it must be decided rather than defaulted: a view declaring
+`consumes: ["*"]` is fed every name, so read literally it renders everything and
+this section is permanently silent — one `situation` view would suppress the
+whole signal.
+So the set is computed against **named** consumes only: `*` is a claim about
+appetite, not about coverage. State that in the brief's wording, because a mind
+that grows a `*` view and watches the section vanish will otherwise conclude it
+solved something.
+
+*Invariant:* pure replay; no domain semantics — the kernel compares strings it
+was given; bounded independently of how many distinct names exist; and it must
+never read as an error. An unrendered name is normal on a young instance and is
+information, not a fault.
+
+*Check:* on a log with `goal.created`/`goal.closed` and no view, both names are
+listed; after a view consuming `goal.created` installs, only `goal.closed`
+remains; a `*` view does not empty the section; the kernel's own vocabulary
+(`script.installed`, `lesson.learned`, …) is excluded, because it is read by the
+brief itself; the section is capped on a synthetic log with 500 distinct names.
 
 ### D2 — the name census in the brief **designed** · P6, P1
 
@@ -282,6 +352,15 @@ goal.closed         9   last seq 190
 Three lines of kernel-legitimate replay turn an instance from anonymous into
 legible. It is the first thing that would tell a mind woken in the measured
 instance above that the place is about notes.
+
+Honestly: a mind with a shell can already have this —
+`self view log | awk '{print $3}' | sort | uniq -c | sort -rn` — and it is one
+line. The case for putting it in the brief is not that it is otherwise
+impossible. It is that orientation should not depend on the reader thinking of
+it, and that this is better *content* in a surface that already exists rather
+than a new mechanism. If that argument does not persuade, D2 is the first item
+to cut; D1 is not derivable that way, because nothing on the outside knows what
+the receipts consume.
 
 *Invariant:* no domain semantics — the kernel counts strings, it does not know
 what a note is. Boundedness — the cap is not optional; a log with a thousand
@@ -415,12 +494,16 @@ grows by one line, not by a section.
 
 ### Sequencing
 
-D1, D2 and D6 are small, pure, and independent — they are the ones that make the
-next waking cheaper immediately. D4 is independent of all of them and is the
-largest single accuracy win. D3 is the keystone and should land after D2, so the
-census tells a mind what a good `situation` view would have to compress. D5 is
-last: it is the only item that touches the purity of orientation, and it should
-be spent only once the cheap wins are in.
+D1 first, alone if only one thing lands. It is the only item here that tells a
+mind something it cannot get from a shell one-liner, it is a dozen lines of
+replay, and it converts the central pressure from advice into a standing entry
+on the state card. D2 and D6 are small, pure and independent, and both are
+better content in a surface that already exists rather than new mechanism. D4 is
+independent of all of them and is the largest single accuracy win. D3 is the
+keystone and should land after D1, so that a mind writing a `situation` view can
+see exactly which folds are missing — and note that D1's `*` rule is what keeps
+that view from silencing the signal it was written in response to. D5 is last: it
+is the only item that touches the purity of orientation.
 
 ## Conventions that need no kernel at all
 
@@ -446,6 +529,15 @@ affordable exactly to the degree that C1 and D1 make looking cheap.
 ## Rejected, and why
 
 Kept because the cost of re-deriving these is several wakings each.
+
+**A bounded built-in log read — `self view log 50`, `self view log since:N`.**
+Carried in an earlier draft of this document as D1, and wrong. A view prints
+bytes to stdout; `self view log | tail -30` costs 2,430 bytes instead of 25,292,
+`grep` and `awk` work, `head` does not break the kernel, and `tail -3
+events.jsonl` skips the kernel entirely. Teaching the built-in view flags would
+add a second dispatcher for something the first one already composes with, and
+the same reasoning the `faces` lesson uses against a `--format` argument applies
+here. Volume was never the pressure — see *What piping does not solve*.
 
 **A `command.failed` event.** Breaks the fourth law: the failure appends, the
 loop sees changed state, wakes again, fails again. A failing command would be an

@@ -13,18 +13,29 @@ everywhere except at level 5, the situated prompt, which is the only level an
 agent actually stands on.
 
 The measurement that motivates it: two hundred `note.added` events into a fresh
-instance move the situated prompt by two bytes, and move `self view log` — the
-only read that would have shown them — by 25 KB. The string `note.added` appears
-nowhere in that instance's own orientation surface.
+instance move the situated prompt by two bytes, and the string `note.added`
+appears nowhere in that instance's own orientation surface.
 
-Six changes are designed and argued but deliberately not built: a bounded
-built-in log read, a name census in the brief, splicing an instance-authored
+Volume is explicitly *not* the pressure, and the document says so where a first
+draft said the opposite. A view prints to stdout, so `self view log | tail -30`
+costs 2,430 bytes rather than 25,292, `grep` and `awk` work, `head` does not
+break the kernel, and `tail -3 events.jsonl` skips it entirely. What no pipe
+returns is current state: six `goal.created` and two `goal.closed` are eight
+records, and none of them says *four open*. Re-deriving that fold by hand on
+every waking is the cost that compounds, and the brief calls such an instance
+*nothing pending, nothing refused* — the system can report what it can do and
+cannot report what it cannot yet see.
+
+Six changes are designed and argued but deliberately not built: **unrendered
+names in the brief** (the event names no live receipt consumes — a pure replay
+that names exactly that hole), a name census, splicing an instance-authored
 `situation` view into the prompt under a stated budget, a `self try` verb that
 rehearses a script under the exact boundary the kernel will give it, ephemeral
 turn feedback inside the loop, and cost legibility in the brief. Each carries the
 pressure it relieves, the invariant it must not break, and the check that would
-prove it. Seven proposals are recorded as refused, with reasons, so the next mind
-to have the same idea reads the answer instead of re-deriving it.
+prove it. Eight proposals are recorded as refused, with reasons — among them a
+bounded `self view log 50`, which unix already does and which would put a second
+dispatcher beside the one that composes.
 
 ### New: the fourth law, which the kernel already obeyed
 
@@ -37,12 +48,13 @@ and is a consequence. Two otherwise reasonable proposals died on it.
 ### Changed: the core prompt layer orients in cost order
 
 Every situated turn now carries four facts it was missing: reading appends
-nothing, so orienting cannot scar the log and what it spends is context; a
-compressing view beats raw history, and `self view log` is the most expensive
-read on a grown instance rather than the cheapest; a cold waking cannot recall
+nothing, so orienting cannot scar the log and what it spends is context; views
+print to stdout, so filter them where you stand (`self view log | tail -30`) —
+and filtering returns records rather than current state, so when a name in the
+log has no view, writing one is the durable work; a cold waking cannot recall
 what an earlier one did, so state must be witnessed before it is appended; and a
 turn that leaves the log unchanged is what settles the instance and ends a loop
-over it. The ordinary prompt grows from 1,737 to 2,326 bytes — the diet's
+over it. The ordinary prompt grows from 1,737 to 2,396 bytes — the diet's
 4,000-byte ceiling still holds, and the room the diet bought is being spent on
 what the mind cannot infer.
 

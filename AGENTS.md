@@ -38,12 +38,25 @@ question, and reach for the last one rarely.
 | 2 | `self view situation` | bounded, if the instance grew one | what is live and what the last session left open |
 | 3 | `self view` (no name) | a line per view | what this log can show you at all |
 | 4 | `self view <name> [args…]` | one slice | the specific thing you came for |
-| 5 | `self view log` | **the entire history** | everything, at the price of everything |
+| 5 | `self view log` | the entire history — pipe it | every record, uninterpreted |
 
-`self view log` replays every event ever recorded here. It is the authoritative
-read and the most expensive one, and it grows for as long as the instance is
-useful — an instance with 200 small events already prints 25 KB. Use it to
-audit, never to orient.
+Views print to stdout, so length is a shell problem and the shell already solved
+it. Filter where you stand:
+
+```sh
+self view log | tail -30                            # what happened lately
+self view log | grep goal.
+self view log | awk '{print $3}' | sort | uniq -c   # what this log is made of
+tail -3 events.jsonl                                # reading the file is fine; editing is not
+```
+
+What no amount of filtering returns is **current state**. Six `goal.created` and
+two `goal.closed` are eight records; `tail` will hand you all eight and none of
+them says *four open*. Reconstructing that fold is what a view is for, and where
+no view exists you will do it by hand on every session, forever. So when you
+find yourself folding raw records to answer a question you will have again,
+stop: **the view you are simulating is the durable work**, and writing it is
+worth more than the answer you were about to give.
 
 A parameterized view's zero-argument form is its index: run it bare and it lists
 the keys you may pass. You should never have to know an identifier before the
@@ -51,7 +64,9 @@ view will teach it to you.
 
 **If orienting here is expensive, that is not a reason to skip it.** It is the
 instance telling you which view it is missing, and growing that view is durable
-work the next session inherits.
+work the next session inherits. `self brief` reporting *nothing pending, nothing
+refused* means no capability is half-built; it does not mean everything in the
+log can be read.
 
 ### The six things you can do
 
