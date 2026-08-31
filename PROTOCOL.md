@@ -1,6 +1,6 @@
 # self — the protocol
 
-This file is the contract. `self help` prints it verbatim, and situated prompts
+This file is the Self Protocol. It is the contract. `self help` prints it verbatim, and situated prompts
 splice the marked core and growth layers as state requires, so there is exactly one
 description of the wire in the whole system. Nothing else — not the README, not
 AGENTS.md, not a comment — restates it.
@@ -16,8 +16,7 @@ capability, every view — is a replay of it.
 
 ## The dispatcher
 
-`self` is a filter with two faces, and which one runs is **structural** — never a
-terminal, never a heuristic:
+`self` is a filter with two faces, and which one runs is **structural**:
 
 ```
 self [ask…]           situate: print the brief + the ask. Reads no stdin, appends nothing.  (READ)
@@ -25,10 +24,8 @@ self [ask…]           situate: print the brief + the ask. Reads no stdin, appe
 ```
 
 An ask arrives as **argv**; what comes back from a mind arrives on **stdin**, at
-`self hear`. Prose alone cannot tell those apart — "what is going on?" and a
-mind's answer to it are both prose — which is why the previous kernel reached for
-`isatty` and got the loop wrong everywhere an agent actually runs. The read face
-never touches stdin, so it also cannot block at the head of a pipeline.
+`self hear`. The read face never touches stdin, so it also cannot block at the
+head of a pipeline.
 
 A line is an event when it is a JSON object with a dotted lowercase `name` and a
 `payload` key — both halves, so a mind reporting `{"name":"notes","status":"ok"}`
@@ -366,7 +363,7 @@ Four rules keep the exchange honest, all mechanical:
 4. **Only the local key installs.** An account cannot install anything, ever.
    It can only be read.
 
-Giving is cheap; learning is the work. That asymmetry is the protocol.
+Giving is cheap; learning is the work. That asymmetry is the Self Protocol.
 
 ## The CLI
 
