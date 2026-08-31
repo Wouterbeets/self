@@ -19,7 +19,6 @@ it as events. Anything not in the log is lost when your context ends.
 export SELF_CALLER="<who you are>"   # recorded verbatim as `by` on what you write
 self brief                           # what exists, what is pending, what broke
 self help                            # the complete protocol — read it once
-self view log                        # what happened here lately, and who says so
 ```
 
 Set `SELF_CALLER` before you write. It is the only attribution there is: without
@@ -27,7 +26,34 @@ it your events are indistinguishable from every other caller's, so on a shared
 instance nobody can tell which agent wrote a line and you cannot filter your own
 writes out of what you read back.
 
-**The six things you can do**
+### Orient in cost order
+
+Every rung is a read, so none of them can scar the log. What they spend is the
+context you still need for the work — so stop at the first rung that answers the
+question, and reach for the last one rarely.
+
+| rung | read | costs | tells you |
+|---|---|---|---|
+| 1 | `self brief` | a few hundred bytes | what exists, what is pending, what stands refused |
+| 2 | `self view situation` | bounded, if the instance grew one | what is live and what the last session left open |
+| 3 | `self view` (no name) | a line per view | what this log can show you at all |
+| 4 | `self view <name> [args…]` | one slice | the specific thing you came for |
+| 5 | `self view log` | **the entire history** | everything, at the price of everything |
+
+`self view log` replays every event ever recorded here. It is the authoritative
+read and the most expensive one, and it grows for as long as the instance is
+useful — an instance with 200 small events already prints 25 KB. Use it to
+audit, never to orient.
+
+A parameterized view's zero-argument form is its index: run it bare and it lists
+the keys you may pass. You should never have to know an identifier before the
+view will teach it to you.
+
+**If orienting here is expensive, that is not a reason to skip it.** It is the
+instance telling you which view it is missing, and growing that view is durable
+work the next session inherits.
+
+### The six things you can do
 
 | | |
 |---|---|
@@ -45,21 +71,41 @@ jq -nc --arg t command --arg n note --rawfile s /tmp/note.sh \
   '{name:"script.authored",payload:{type:$t,name:$n,script:$s}}' | self hear
 ```
 
+Run the script first, under the boundary the kernel will give it — a view fed
+only its consumed events, from an empty directory, with no `SELF_HOME`; a
+command fed the log on stdin. There is no review step between authoring and
+signing, so the run you do beforehand is the only one there is.
+
+### Write like a stranger will read it
+
+You are one of several sessions on this instance, and the next one remembers
+nothing you did not append.
+
+- **Read before you write.** You cannot recall whether an earlier session
+  already recorded this; witness current state through a view first, or you will
+  record it twice.
+- **Announce, then account.** Say who you are at the start, and before your
+  context ends write what you did and what you left open — through a command, so
+  a view can lead with it. Prose in a transcript nobody re-reads is not memory.
+- **Preserve the practice, not the transcript.** What is worth keeping is a
+  locally verified response to a situation a future reader can recognize: its
+  trigger, the method that worked, the local constraints, and the evidence it
+  worked. Not the failed attempts, not the tool output, not the secrets.
+- **Compress when history stops informing decisions.** Write a summary through a
+  command so views can lead with it. The log keeps everything; summaries keep
+  readers cheap.
+
 **Established instances carry conventions.** A long-lived instance usually has
 capabilities for memory, work logs, or session hand-off. Check `self brief` and
-use what is there: announce yourself at the start, record what you did before
-your context ends, and leave durable facts where a future cold reader will
-actually look — a view — rather than in prose nobody re-reads. When a thread's
-history stops informing decisions, write a summary through a command so views
-can lead with it; the log keeps everything, summaries keep readers cheap.
+use what is there before inventing a parallel one.
 
-**Two things not to do.** Do not edit `events.jsonl`, and do not write into
-`cap/` — installed bytes are content-addressed against a signed receipt and your
-edit will simply be overwritten the next time the capability runs. Do not reach
-for a harness session store (`claude -p --continue` and its kin) as memory: it
-chains state outside the log, where `rehydrate` cannot replay it and no audit can
-see it. If a cold start feels slow, that is design pressure pointed at the right
-target — improve the views.
+### Two things not to do
+
+Do not edit `events.jsonl`, and do not write into `cap/` — installed bytes are
+content-addressed against a signed receipt and your edit will simply be
+overwritten the next time the capability runs. Do not reach for a harness session
+store (`claude -p --continue` and its kin) as memory: it chains state outside the
+log, where `rehydrate` cannot replay it and no audit can see it.
 
 **The log is authoritative** over any view, any note, and this card.
 `self rehydrate` rebuilds the instance from `events.jsonl` + `.secret`; what
@@ -71,3 +117,10 @@ survives that is the actual state.
 agent, because there is no internal mind. Everything intelligent stands in the
 same shell pipe, acts through the same primitives, reads the same replayed
 state, and leaves receipts signed by the instance carrying its own claim.*
+
+*Rung 2 above is a convention, not a kernel feature: an instance grows a view
+called `situation` that compresses what a cold reader needs first, and every
+session reads it before anything else. [`lessons/situation`](lessons/situation)
+is the account that teaches it. [`DESIGN.md`](DESIGN.md) argues why perception
+belongs to the instance rather than to the kernel, and what the kernel still
+owes an agent driving it.*

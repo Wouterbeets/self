@@ -269,6 +269,34 @@ self-browse                 # orientation: the brief, as a page
 self-browse shopping        # a view, in the system browser
 ```
 
+## The reader it is built for
+
+What drives an instance is usually not a person at a prompt. It is a mind in a
+pipe: cold, bounded, with no memory of the last time it was here. Everything
+above is shaped by what that reader costs — the situated prompt is a wake-up
+card rather than a context dump, views compress so the reader does not have to,
+and reads project so orienting can never scar the log.
+
+One number says where the work still is. Two hundred domain events into a fresh
+instance move the situated prompt by **two bytes** — the digit count in
+`log: N events` — and move `self view log`, the only read that would have shown
+them, by **25 KB**. The kernel refuses to learn what a note or a goal means, and
+it is right to: that knowledge would be one kernel's opinion, inherited by every
+instance forever. So compression belongs to the instance. An instance grows a
+view that answers what a cold reader needs first, and every session reads that
+before anything else:
+
+```sh
+self learn lessons/situation | claude -p | self hear
+self view situation
+```
+
+[`DESIGN.md`](DESIGN.md) is the argument in full: the tower of abstractions this
+runtime actually is, read from the seat of the thing that drives it; what the
+kernel still owes an agent; and the proposals that were considered and refused,
+with reasons, so they are not re-derived. [`AGENTS.md`](AGENTS.md) is the short
+operating card for an agent already living in a session here.
+
 ## Limits
 
 Stated plainly, and at greater length in `self help`: there is **no human review

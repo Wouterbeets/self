@@ -243,7 +243,7 @@ func brief(home string, st *state) string {
 
 	b.WriteString("\n## where\n\n")
 	b.WriteString("`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n")
-	b.WriteString("`self help` the protocol · `self view log` what happened lately\n")
+	b.WriteString("`self help` the protocol · `self view` what this log can show you · `self view log` every event, oldest first\n")
 	return b.String()
 }
 

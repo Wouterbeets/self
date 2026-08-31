@@ -2,6 +2,92 @@
 
 ## Unreleased — one fixed-point loop
 
+### New: `DESIGN.md`, the agent-facing design
+
+`PROTOCOL.md` says what holds; `DESIGN.md` says why it has this shape, read from
+the seat of the thing that drives an instance. It names the three properties the
+system is built for — intuitive, ergonomic, accretive — with a checkable signal
+for each; sets out the runtime as a tower of nine levels, each a pure function of
+the one below with exactly one door in; and shows that the tower is finished
+everywhere except at level 5, the situated prompt, which is the only level an
+agent actually stands on.
+
+The measurement that motivates it: two hundred `note.added` events into a fresh
+instance move the situated prompt by two bytes, and move `self view log` — the
+only read that would have shown them — by 25 KB. The string `note.added` appears
+nowhere in that instance's own orientation surface.
+
+Six changes are designed and argued but deliberately not built: a bounded
+built-in log read, a name census in the brief, splicing an instance-authored
+`situation` view into the prompt under a stated budget, a `self try` verb that
+rehearses a script under the exact boundary the kernel will give it, ephemeral
+turn feedback inside the loop, and cost legibility in the brief. Each carries the
+pressure it relieves, the invariant it must not break, and the check that would
+prove it. Seven proposals are recorded as refused, with reasons, so the next mind
+to have the same idea reads the answer instead of re-deriving it.
+
+### New: the fourth law, which the kernel already obeyed
+
+**Only intended persistence appends.** `self loop` converges when a complete turn
+leaves the log unchanged, so the log is the state *and* the termination
+condition. That is why diagnostics go to stderr and why a command's runtime
+failure is an exit code rather than an event — behaviour that read as an omission
+and is a consequence. Two otherwise reasonable proposals died on it.
+
+### Changed: the core prompt layer orients in cost order
+
+Every situated turn now carries four facts it was missing: reading appends
+nothing, so orienting cannot scar the log and what it spends is context; a
+compressing view beats raw history, and `self view log` is the most expensive
+read on a grown instance rather than the cheapest; a cold waking cannot recall
+what an earlier one did, so state must be witnessed before it is appended; and a
+turn that leaves the log unchanged is what settles the instance and ends a loop
+over it. The ordinary prompt grows from 1,737 to 2,326 bytes — the diet's
+4,000-byte ceiling still holds, and the room the diet bought is being spent on
+what the mind cannot infer.
+
+### Changed: the growth layer asks for rehearsal
+
+Authoring is the sharpest act in the system: there is no review between authoring
+and signing, and the kernel runs a script under a boundary that is easy to miss
+by hand. The layer now asks for the script to be rehearsed under exactly that
+boundary — a view fed only its consumed events from an empty directory with no
+`SELF_HOME`, run twice to confirm identical bytes; a command fed the log on
+stdin — because a script that worked only in the author's shell fails after it is
+signed, and by then the receipt is in the log. It also asks that events be named
+`<domain>.<verb>`, reusing existing names where they fit: the set of names is
+what a later waking reads as the index of everything here.
+
+### New: an orientation ladder in `Answering`
+
+Five rungs in cost order, with the instruction to stop at the first one that
+answers the question and to reach for the raw log to audit rather than to orient.
+And the corollary that makes it accretive: if orienting here is expensive, that
+is the instance naming the view it is missing, and growing that view is durable
+work.
+
+### New: `lessons/situation`
+
+The account that grows the missing rung — a `handoff` command and a bounded
+`situation` view that answers what is live, what the last waking left open, and
+which view to spend the next read on. It routes rather than dumps, holds a fixed
+budget as the log grows tenfold, and pays the whole replay so every reader after
+it does not. Works today with no kernel change; `DESIGN.md` proposes that the
+kernel eventually stop making the instance pay the round trip for it.
+
+### Fixed: the brief no longer mis-sells the log view
+
+`self view log` was advertised in the brief's footer as "what happened lately".
+It replays every event ever recorded. The footer now points at `self view` — the
+list of what this log can show you, which nothing documented — and describes the
+log view as what it is.
+
+### Changed: `AGENTS.md` is a working driver's card
+
+Rewritten around the loop an agent actually runs: orient in cost order (a table
+of five rungs and what each costs), rehearse before authoring, read before
+writing, announce and account, preserve the practice rather than the transcript.
+
 ### Changed: the protocol is named
 
 The exchange that travelled as knowledge-seed, then as the account protocol, is

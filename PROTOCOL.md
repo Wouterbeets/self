@@ -14,6 +14,13 @@ meant to persist. There is no hidden state: no session store, no cache, no
 sidecar. What is not in the log did not happen, and everything else — every
 capability, every view — is a replay of it.
 
+And its consequence, because `self loop` converges when a complete turn leaves
+the log unchanged: **only intended persistence appends.** The log is the state
+*and* the termination condition, so anything that is not deliberate durable work
+must leave it untouched. That is why diagnostics go to stderr, why a command's
+runtime failure is an exit code rather than an event, and why a kernel that
+recorded its own activity would be a kernel that never converged.
+
 ## The dispatcher
 
 `self` is a filter with two faces, and which one runs is **structural**:
@@ -46,7 +53,9 @@ The brief is a map; views are compressed perception of what you have appended. A
 
 Exploration sometimes yields metis: a locally verified response to a recognizable situation. Re-deriving it wastes future context; retaining transient glue does too. Preserve the smallest practice carrying its trigger, method, constraints, and evidence when recurrence, rediscovery cost, or consequence justifies it.
 
-Use `self view <name> [args...]` to perceive and `self run <command> [args...]` to act. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel assigns identity, sequence, time, and provenance. Prose is ignored and cannot persist. Full contract: `self help`.
+Reading appends nothing, so orient until you actually know; what reading spends is context, not state. Prefer a view that compresses over raw history: `self view log` prints every event this instance ever recorded, which on a grown log is the most expensive read here, not the cheapest. You cannot recall what an earlier waking did — witness current state through a view before you append, or you will record it twice.
+
+Use `self view <name> [args...]` to perceive and `self run <command> [args...]` to act. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel assigns identity, sequence, time, and provenance. Prose is ignored and cannot persist. Silence is a complete answer: a turn that leaves the log unchanged is what settles this instance and ends a loop over it. Full contract: `self help`.
 <!-- prompt:core:end -->
 
 ## The wire
@@ -112,6 +121,14 @@ working directory; stdout must be new event JSONL. Views receive argv and only
 their signed `consumes` events on stdin, with no `SELF_HOME` and an empty scratch
 directory; stdout is read-only bytes. Scripts may use a standard-library
 language with a shebang.
+
+Rehearse under that exact boundary before you print the script — a view fed its
+consumed events from an empty directory with no `SELF_HOME`, a command fed the
+log on stdin — and run a view twice to confirm identical bytes. A script that
+worked only in your shell's environment fails after it is signed, and by then
+the receipt is already in the log. Name the events a capability appends
+`<domain>.<verb>`, reusing this log's existing names wherever they fit: the set
+of names is what a later waking reads as the index of everything here.
 
 For a parameterized view, make the zero-argument form its discoverable index:
 print concise usage plus the valid keys or actionable items a reader can choose.
@@ -228,6 +245,26 @@ replayed on demand.
 You are expected to have tools. The prompt is a wake-up card, not a context
 dump: read `events.jsonl`, `cap/`, run `self brief`, `self view <name>`,
 `self help` before you answer.
+
+Orient in cost order, and stop at the first rung that answers the question. Each
+rung is a read, so none of them can scar the log — what they spend is the
+context you still need for the work:
+
+1. **The card you were handed.** What exists, what is pending, what stands
+   refused. Free: you already have it.
+2. **A view that compresses.** A view is where this instance's own judgement
+   about what matters lives, so it is the cheapest true statement of current
+   state available. `self view` with no name lists the ones this log knows;
+   a parameterized view's zero-argument form is its index.
+3. **A targeted view with arguments.** One record, one key, one slice.
+4. **The raw log, last.** `self view log` replays every event this instance ever
+   recorded. It is the authoritative read and the most expensive one, and it
+   grows for as long as the instance is useful. Reach for it to audit, not to
+   orient.
+
+If orienting is expensive here, that is not a reason to skip it — it is the
+instance telling you which view it is missing. Growing that view is durable work
+and the next waking inherits it.
 
 - Do durable work through `self run <command> …`, or by printing events.
 - To grow the instance, print a declaration and its `script.authored` in the
