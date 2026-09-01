@@ -121,7 +121,7 @@ func view(w http.ResponseWriter, r *http.Request) {
 	case isHTML(out):
 		body = out
 	default:
-		body = []byte(page(name, "<pre>"+html.EscapeString(string(out))+"</pre>"))
+		body = []byte(page(name, linkifyTextView(string(out))))
 	}
 	reply(w, r, out, body)
 }
@@ -261,6 +261,7 @@ func resolveName(segs, names []string) (name string, args []string) {
 
 var briefItem = regexp.MustCompile(`(?m)^- \*\*([^*]+)\*\*`)
 var viewIndexItem = regexp.MustCompile(`(?m)^- ([A-Za-z0-9_][A-Za-z0-9_./-]*) —`)
+var markdownLink = regexp.MustCompile(`\[([^\]\r\n]+)\]\((https?://[^\s<>\)]+)\)`)
 
 func knownNames(kind string) []string {
 	out, _, code, err := selfOutput("brief")
@@ -318,6 +319,12 @@ func linkifyViewIndex(raw string) string {
 		name := sub[1]
 		return `- <a href="/view/` + pathEscapeName(name) + `">` + name + `</a> —`
 	})
+	return "<pre>" + esc + "</pre>"
+}
+
+func linkifyTextView(raw string) string {
+	esc := html.EscapeString(raw)
+	esc = markdownLink.ReplaceAllString(esc, `<a href="$2">$1</a>`)
 	return "<pre>" + esc + "</pre>"
 }
 

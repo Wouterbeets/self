@@ -129,6 +129,9 @@ func TestHTTPOverKernel(t *testing.T) {
 		if !strings.Contains(body, "<pre>") {
 			t.Fatal("text view was not wrapped")
 		}
+		if !strings.Contains(body, `<a href="https://example.com/pull/450">#450</a>`) {
+			t.Fatalf("markdown link was not rendered: %s", body)
+		}
 	})
 
 	t.Run("silent view is named empty", func(t *testing.T) {
@@ -259,7 +262,7 @@ EOF
     fi
     case "$2" in
       menu) printf '%s\n' '<!doctype html><html><body><h1>menu-doc</h1></body></html>' ;;
-      board) printf '%s\n' 'now (1)' ;;
+	      board) printf '%s\n' 'now (1) [#450](https://example.com/pull/450)' ;;
       quiet) ;;
       echo) shift 2; printf '%s\n' "$*" ;;
       *) echo "no view $2" >&2; exit 1 ;;
