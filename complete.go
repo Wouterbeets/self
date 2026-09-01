@@ -172,6 +172,11 @@ func runCompleter(home string, st *state, name string, args []string) []string {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env, cmd.Dir = scriptEnv("", scratch), scratch
+	// Killing the script does not kill what it spawned. A grandchild that
+	// inherited stdout keeps the pipe open, and Wait would sit on that pipe long
+	// past the deadline: the frozen shell this deadline exists to prevent. Stop
+	// waiting on the pipe when the process is gone.
+	cmd.WaitDelay = completerTimeout
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil
