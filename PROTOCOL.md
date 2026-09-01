@@ -381,8 +381,35 @@ self loop [opts] -- <mind>  run situated turns to an unchanged-state fixed point
 self learn <dir>            deposit an account, print its learning prompt
 self give <sel> <dir>       write an account from the log
 self rehydrate              make cap/ match the log exactly
+self completion <shell>     print a completion shim (zsh|bash|fish)
 self help                   this file
 ```
+
+### Completion
+
+`self completion zsh` (or `bash`, `fish`) prints a static shim; source it or
+install it where the shell expects. The shim is dumb on purpose: every
+candidate comes from `self __complete <words…>` — the words typed after
+`self`, the last being the partial word under the cursor — so capabilities
+grown after the shim was installed complete without reinstalling anything.
+`__complete` prints one candidate per line, optionally `candidate<TAB>description`,
+and degrades to silence: it never errors into a prompt line.
+
+The kernel completes what it already knows: verbs, then installed capability
+names for `run` and `view` (pending ones annotated), selectors for `give`.
+An argument position — `self view context <TAB>` — is domain state, and the
+kernel holds no domain model. It delegates: if a view named `complete.context`
+is installed, the kernel replays it like any view — its declared `consumes` on
+stdin, no `SELF_HOME` — passing the typed words as argv, and offers its stdout
+lines as candidates. Under a deadline, stderr discarded: a completer that
+hangs or fails costs silence, not a frozen shell.
+
+So tab-completion is a grown capability. Author `complete.<name>` beside a
+view or command whose arguments name domain things — goals, tasks, moods — and
+let it consume the same events and print the names that exist, filtered by the
+last argv word. A capability may declare capabilities, so `context`'s author
+can declare `complete.context` in the same breath, and the instance completes
+its own goals.
 
 ## The loop
 

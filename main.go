@@ -44,6 +44,7 @@ Usage:
   self learn <account-dir>      deposit an account and print its learning prompt
   self give <selector> <dir>    write an event or capability account
   self rehydrate                rebuild derived capability files from the log
+  self completion <shell>       print a completion script (zsh|bash|fish)
   self help                     print the complete protocol
 
 Loop:
@@ -160,6 +161,20 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 	case "rehydrate":
 		return rehydrate(home)
 
+	case "completion":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: self completion <zsh|bash|fish>")
+		}
+		script, err := completionScript(args[0])
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(out, script)
+		return err
+
+	case "__complete": // the machine face the shims call; PROTOCOL.md: Completion
+		return cmdComplete(home, args, out)
+
 	case "-h", "--help":
 		_, err := io.WriteString(out, cliUsage+"\n")
 		return err
@@ -174,7 +189,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		// more likely a mistyped verb than a question, and silently answering a
 		// typo with a prompt would hide it.
 		if len(args) == 0 && !strings.ContainsAny(verb, " \t\n") {
-			return fmt.Errorf("unknown verb %q — verbs: hear brief run view loop learn give rehydrate help; to ask a question, quote it: self %q", verb, verb)
+			return fmt.Errorf("unknown verb %q — verbs: hear brief run view loop learn give rehydrate completion help; to ask a question, quote it: self %q", verb, verb)
 		}
 		return cmdSituate(home, strings.Join(append([]string{verb}, args...), " "), out)
 	}

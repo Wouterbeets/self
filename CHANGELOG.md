@@ -2,6 +2,26 @@
 
 ## Unreleased — one fixed-point loop
 
+### New: shell completion, and the instance completes its own domain
+
+```sh
+source <(self completion zsh)     # bash and fish too
+```
+
+The shim is dumb and stable: every candidate comes from `self __complete`,
+which replays the log — verbs, then installed capability names for `run` and
+`view` (pending ones annotated, so the tab key doubles as a status surface),
+selectors for `give`. Grown capabilities complete without reinstalling the
+shim.
+
+Argument positions are domain state the kernel cannot know, so it delegates:
+`self view context <TAB>` replays an installed view named `complete.context` —
+declared `consumes` on stdin, the typed words as argv, its stdout lines offered
+as candidates, under a deadline and with stderr discarded. Tab-completion for
+goals is therefore a capability the instance grows through the ordinary loop,
+not behavior the kernel ships. PROTOCOL.md documents the convention under
+"Completion".
+
 ### Changed: the protocol is named
 
 The exchange that travelled as knowledge-seed, then as the account protocol, is
