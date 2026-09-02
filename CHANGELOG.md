@@ -2,6 +2,16 @@
 
 ## Unreleased — one fixed-point loop
 
+### Changed: the repository is only the kernel and its demo
+
+`experiments/` (two finished measurement harnesses, results preserved in git
+history), `loop.sh` (the pre-fixed-point compatibility wrapper) and
+`lessons/faces` are gone. What remains is what `demo.sh` and the quick start
+need: the kernel, the two sidecars, `examples/mind-stub`, and three small
+accounts (`journal`, `chat`, `memory`). The README is rewritten to say plainly
+what the prompt already says in one sentence: you are this self, for a bit.
+The kernel history it used to narrate lives here, in the changelog.
+
 ### New: shell completion, and the instance completes its own domain
 
 ```sh
