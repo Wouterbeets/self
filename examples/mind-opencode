@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""mind-opencode — `opencode run` as a mind, with a live trace on stderr.
+
+A mind reads a situated prompt on stdin and prints event JSONL on stdout.
+`opencode run` takes its prompt as an argument and prints its whole session —
+tool calls, commentary, answer — on stdout, so it cannot stand in the pipe raw.
+This wrapper hands it the prompt, asks for the JSON event stream, renders every
+text block, tool call and tool result to stderr as they happen, and prints only
+the final step's text to stdout as the wire. The loop already routes mind stderr
+to the terminal, so:
+
+    self loop --ask "…" -- examples/mind-opencode -m amazon-bedrock/global.openai.gpt-5.6-luna
+
+Anything after the script name is passed to `opencode run` verbatim: -m for the
+model, --variant for reasoning effort, --agent, and so on. No session is
+continued: every waking is a fresh session, and the log is the only memory.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+DIM, BOLD, RESET = "\033[2m", "\033[1m", "\033[0m"
+if not sys.stderr.isatty():
+    DIM = BOLD = RESET = ""
+
+RESULT_CAP = int(os.environ.get("MIND_OPENCODE_RESULT_CAP", "600"))
+
+OPENCODE = os.environ.get("MIND_OPENCODE_BIN") or shutil.which("opencode") or os.path.expanduser("~/.opencode/bin/opencode")
+
+
+def say(line):
+    sys.stderr.write(line + "\n")
+    sys.stderr.flush()
+
+
+def one_line(value, cap):
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    text = " ".join(text.split())
+    return text if len(text) <= cap else text[: cap - 1] + "…"
+
+
+def describe_call(state):
+    inp = state.get("input") if isinstance(state, dict) else None
+    if isinstance(inp, dict):
+        for key in ("command", "filePath", "file_path", "pattern", "query", "description", "patchText"):
+            if key in inp:
+                return one_line(inp[key], 240)
+        return one_line(inp, 200)
+    return one_line(state.get("title", ""), 200) if isinstance(state, dict) else ""
+
+
+def main():
+    prompt = sys.stdin.read()
+    argv = [OPENCODE, "run", "--format", "json", "--title", "self waking", *sys.argv[1:], prompt]
+    say(f"{DIM}mind-opencode: body {os.environ.get('SELF_HOME') or os.getcwd()}{RESET}")
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)
+
+    step_text = []   # text parts of the current step; the last step's text is the answer
+    cost = 0.0
+    steps = 0
+    failed = False
+    for raw in proc.stdout:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            say(f"{DIM}  ? {one_line(raw, 200)}{RESET}")
+            continue
+        kind = event.get("type")
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        if kind == "step_start":
+            steps += 1
+            step_text = []
+        elif kind == "text":
+            text = part.get("text", "")
+            if text.strip():
+                step_text.append(text)
+                for line in text.strip().splitlines():
+                    say(f"  {line}")
+        elif kind == "tool_use":
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            say(f"{BOLD}▸ {part.get('tool', 'tool')}{RESET} {describe_call(state)}")
+            output = state.get("output")
+            if output:
+                flag = "" if state.get("status") in (None, "completed") else f" ({state.get('status')})"
+                say(f"{DIM}  ↳{flag} {one_line(output, RESULT_CAP)}{RESET}")
+            elif state.get("status") not in (None, "completed"):
+                say(f"{DIM}  ↳ ({state.get('status')}){RESET}")
+        elif kind == "step_finish":
+            c = part.get("cost")
+            if isinstance(c, (int, float)):
+                cost += c
+        elif kind == "error":
+            failed = True
+            err = event.get("error", {})
+            data = err.get("data", {}) if isinstance(err, dict) else {}
+            say(f"{BOLD}mind-opencode: error{RESET} {one_line(data.get('message') or err, 400)}")
+        else:
+            say(f"{DIM}  · {kind}{RESET}")
+    code = proc.wait()
+    say(f"{DIM}mind-opencode: done · {steps} step(s) · ${cost:.4f}{RESET}")
+    # Only event-shaped lines reach the wire. The prose is already in the trace,
+    # and forwarding it too made `hear` echo it a second time as pass-through.
+    if step_text and not failed:
+        for line in "\n".join(step_text).splitlines():
+            candidate = line.strip().strip("`").strip()
+            try:
+                obj = json.loads(candidate)
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and isinstance(obj.get("name"), str) and "payload" in obj:
+                sys.stdout.write(candidate + "\n")
+        sys.stdout.flush()
+    sys.exit(code if code else (1 if failed else 0))
+
+
+if __name__ == "__main__":
+    main()

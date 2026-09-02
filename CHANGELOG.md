@@ -42,6 +42,9 @@ error".
 the stream-json trace, renders text, tool calls and tool results to stderr as
 they happen — which the loop already routes to the terminal — and hands only the
 final answer to stdout, so the wire is unchanged and a waking is watchable.
+`examples/mind-opencode` is the same seam for `opencode run`, which takes its
+prompt as an argument: the JSON event stream is rendered live, and only
+event-shaped lines from the final step reach the wire.
 
 ### Changed: the repository is only the kernel and its demo
 

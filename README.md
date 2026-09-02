@@ -104,6 +104,10 @@ self loop --ask "make this body somewhere worth waking up in" \
   -- examples/mind-claude --allowedTools Bash Read Write Glob Grep
 ```
 
+`examples/mind-opencode` does the same for `opencode run`, which takes its
+prompt as an argument and prints its whole session on stdout: pass `-m
+provider/model` after the script name.
+
 ## What an instance is
 
 ```
