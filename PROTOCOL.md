@@ -442,8 +442,9 @@ second chance before the body rests. Users do not hash or inspect the log;
 witnessing change is kernel work. The loop knows nothing about goals, tasks, or
 declarations.
 
-The loop's ask is this layer, under a line of facts the kernel writes — the
-waking number, the wakings left, and what woke the body:
+The loop's ask is this layer, under a few lines of facts the kernel writes — the
+waking number, the wakings left, how long this waking may last, and what woke
+the body:
 
 <!-- prompt:loop:begin -->
 You are being woken in a series. Each waking reads what the last one left and

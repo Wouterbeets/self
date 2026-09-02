@@ -44,7 +44,10 @@ they happen — which the loop already routes to the terminal — and hands only
 final answer to stdout, so the wire is unchanged and a waking is watchable.
 `examples/mind-opencode` is the same seam for `opencode run`, which takes its
 prompt as an argument: the JSON event stream is rendered live, and only
-event-shaped lines from the final step reach the wire.
+event-shaped lines from the final step reach the wire. `examples/mind-grok` is
+the grok CLI in the same seam, decoding its byte-array tool results for the
+trace. All three wrappers forward only event-shaped lines, so `hear` no longer
+echoes the mind's prose a second time as pass-through.
 
 ### Changed: the repository is only the kernel and its demo
 

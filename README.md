@@ -106,7 +106,8 @@ self loop --ask "make this body somewhere worth waking up in" \
 
 `examples/mind-opencode` does the same for `opencode run`, which takes its
 prompt as an argument and prints its whole session on stdout: pass `-m
-provider/model` after the script name.
+provider/model` after the script name. `examples/mind-grok` does it for the
+grok CLI, which runs with the permission mode in `~/.grok/config.toml`.
 
 ## What an instance is
 

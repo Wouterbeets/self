@@ -161,7 +161,7 @@ func withEnv(env []string, key, value string) []string {
 // waking was quiet — and then the loop layer from PROTOCOL.md. The facts are
 // what changes between passes when the mind changes nothing, so a body is never
 // woken twice into an identical prompt and told nothing is asked of it.
-func loopAsk(pass, maxPasses, quiet, settle int, nudge string) string {
+func loopAsk(pass, maxPasses, quiet, settle int, timeout time.Duration, nudge string) string {
 	var b strings.Builder
 	remaining := maxPasses - pass
 	switch remaining {
@@ -172,6 +172,9 @@ func loopAsk(pass, maxPasses, quiet, settle int, nudge string) string {
 	default:
 		fmt.Fprintf(&b, "Waking %d of this body; at most %d more before it rests.", pass, remaining)
 	}
+	// The mind cannot know how long a waking lasts; the kernel does. A waking
+	// that built for nine minutes and appended nothing left nothing.
+	fmt.Fprintf(&b, "\nThis waking ends after %s. Only what is appended by then persists; a declaration left pending is safe, a script still on disk is not.", timeout)
 	if nudge = strings.TrimSpace(nudge); nudge != "" {
 		fmt.Fprintf(&b, "\nWhat woke this body: %s", nudge)
 		if pass == 1 {
@@ -214,7 +217,7 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 		if err != nil {
 			return err
 		}
-		prompt := situate(home, before, loopAsk(pass, opts.MaxPasses, quiet, opts.Settle, opts.Ask))
+		prompt := situate(home, before, loopAsk(pass, opts.MaxPasses, quiet, opts.Settle, opts.Timeout, opts.Ask))
 		fmt.Fprintf(diag, "self loop: waking %d/%d\n", pass, opts.MaxPasses)
 
 		ctx, cancel := context.WithTimeout(sigCtx, opts.Timeout)

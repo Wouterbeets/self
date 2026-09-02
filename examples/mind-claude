@@ -5,8 +5,8 @@ A mind reads a situated prompt on stdin and prints event JSONL on stdout, and
 `self loop` buffers that stdout until the process exits — so a plain `claude -p`
 is silent for the whole waking and you learn what it did only when it is over.
 This wrapper asks claude for its stream-json trace instead, renders every text
-block, tool call and tool result to stderr as they happen, and hands only the
-final answer to stdout. The loop already routes mind stderr to the terminal, so:
+block, tool call and tool result to stderr as they happen, and forwards only
+the event-shaped lines of the final answer to stdout. The loop already routes mind stderr to the terminal, so:
 
     self loop --ask "…" -- examples/mind-claude
 
@@ -135,8 +135,17 @@ def main():
         if event.get("type") == "result":
             answer = event.get("result")
     code = proc.wait()
-    if isinstance(answer, str) and answer.strip():
-        sys.stdout.write(answer if answer.endswith("\n") else answer + "\n")
+    # Only event-shaped lines reach the wire. The prose is already in the trace,
+    # and forwarding it too made `hear` echo it a second time as pass-through.
+    if isinstance(answer, str):
+        for line in answer.splitlines():
+            candidate = line.strip().strip("`").strip()
+            try:
+                obj = json.loads(candidate)
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and isinstance(obj.get("name"), str) and "payload" in obj:
+                sys.stdout.write(candidate + "\n")
         sys.stdout.flush()
     sys.exit(code)
 

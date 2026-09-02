@@ -1616,6 +1616,9 @@ func TestLoopNudgeStandsOnEveryWaking(t *testing.T) {
 	if !strings.Contains(passes[0], "at most 3 more") || !strings.Contains(passes[2], "at most one more") {
 		t.Fatal("the remaining budget is not counted down")
 	}
+	if !strings.Contains(passes[0], "This waking ends after 5s") {
+		t.Fatalf("the time budget is not in the waking facts:\n%s", passes[0])
+	}
 }
 
 // A refused script must not end the loop. The refusal is in the log and its
