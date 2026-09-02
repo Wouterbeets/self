@@ -5,9 +5,9 @@ A mind reads a situated prompt on stdin and prints event JSONL on stdout.
 `opencode run` takes its prompt as an argument and prints its whole session —
 tool calls, commentary, answer — on stdout, so it cannot stand in the pipe raw.
 This wrapper hands it the prompt, asks for the JSON event stream, renders every
-text block, tool call and tool result to stderr as they happen, and prints only
-the final step's text to stdout as the wire. The loop already routes mind stderr
-to the terminal, so:
+text block, tool call and tool result to stderr as they happen, and forwards
+only the event-shaped lines of the final step to stdout as the wire. The loop
+already routes mind stderr to the terminal, so:
 
     self loop --ask "…" -- examples/mind-opencode -m amazon-bedrock/global.openai.gpt-5.6-luna
 
