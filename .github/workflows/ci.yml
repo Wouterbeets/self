@@ -1,0 +1,46 @@
+name: ci
+
+# release.yml runs these same checks, but only on a tag — by then a break is
+# already history. This is the same gate, early.
+#
+# push is scoped to main so a branch that is under review does not run twice;
+# pull_request covers the branches themselves.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: gofmt
+        # A diff here is the whole failure; say which files and stop.
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            printf 'not gofmt-clean:\n%s\n' "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        # -race because the kernel's claims are about concurrency: one hear body
+        # is one critical section, and .secret must not race on a fresh home.
+        run: go test -race ./...
+
+      - name: prove the thesis offline
+        # No model, no network, no API key. If this stops passing, the README
+        # is lying.
+        run: ./demo.sh
