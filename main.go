@@ -40,7 +40,7 @@ Usage:
   self brief                    show capabilities, pending work, and refusals
   self run <command> [args...]  execute a command capability and append its events
   self view <name> [args...]    replay a pure view; built-in log is always available
-  self loop [opts] [-- mind...] run situated turns to an unchanged-state fixed point
+  self loop [opts] [-- mind...] wake a mind on this body until it rests (quiet wakings in a row)
   self learn <account-dir>      deposit an account and print its learning prompt
   self give <selector> <dir>    write an event or capability account
   self rehydrate                rebuild derived capability files from the log
@@ -52,7 +52,7 @@ Loop:
   SELF_LOOP_MIND='<shell command>' self loop
 
 Environment:
-  SELF_HOME, SELF_CALLER, SELF_LOOP_MIND, SELF_LOOP_ASK, SELF_LOOP_MAX_PASSES, SELF_LOOP_TIMEOUT`
+  SELF_HOME, SELF_CALLER, SELF_LOOP_MIND, SELF_LOOP_ASK, SELF_LOOP_MAX_PASSES, SELF_LOOP_SETTLE, SELF_LOOP_TIMEOUT`
 
 func main() {
 	home := homeDir()

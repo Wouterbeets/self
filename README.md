@@ -82,15 +82,27 @@ leaves a signed receipt. There is no other install path.
 self loop -- claude -p
 ```
 
-Each pass presents the same situated prompt. The mind discovers pending
-capabilities and domain state through the brief and the views. The kernel
-repeats after any append and stops after the first complete turn that leaves
-the log unchanged. It never needs to know what a goal or a task means.
+Each pass is a waking. The mind is told which waking it is and how many remain,
+sees the ask that woke the body on every waking, and is invited to leave the
+next waking something: a declaration it has not built, a half-formed view, a
+note. The kernel repeats after any append and rests after two quiet wakings in
+a row, the second of them asked plainly whether there is anything else. A
+refused script does not end the run; its reason rides the next waking. The
+kernel never needs to know what a goal or a task means.
 
 The mind is argv after `--`, executed directly. It inherits your working
-directory and environment. `--ask <text>` directs the first pass only; later
-passes are naked. `--max-passes` and `--timeout` bound it. `SELF_LOOP_MIND`
-pins a mind so `self loop` needs no arguments. `self loop --help` has the rest.
+directory and environment. `--ask <text>` is what woke the body. `--max-passes`,
+`--settle` and `--timeout` bound it. `SELF_LOOP_MIND` pins a mind so `self loop`
+needs no arguments. `self loop --help` has the rest.
+
+A plain `claude -p` is silent until its waking ends. `examples/mind-claude`
+wraps it so every tool call and text block streams to your terminal as it
+happens while only the final answer reaches the wire:
+
+```sh
+self loop --ask "make this body somewhere worth waking up in" \
+  -- examples/mind-claude --allowedTools Bash Read Write Glob Grep
+```
 
 ## What an instance is
 

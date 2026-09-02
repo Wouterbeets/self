@@ -25,6 +25,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,6 +53,13 @@ func protocolLayer(name string) string {
 	}
 	return strings.TrimSpace(body)
 }
+
+// errRefused is the outcome `hear` reports when at least one authored script
+// was refused. Every event in the body still landed and every refusal is in the
+// log as script.rejected; the error is the pipeline's exit code, and `self loop`
+// tests for it by identity so a refusal can teach the next waking instead of
+// ending the run.
+var errRefused = errors.New("authored script(s) refused")
 
 // defaultAsk is what bare `self` situates: not a priority policy, only an
 // invitation to inspect the instance-owned surface. The mind decides whether
@@ -344,7 +352,7 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 		fmt.Fprintf(out, "pending: %s\n", strings.Join(names, ", "))
 	}
 	if len(refused) > 0 {
-		return fmt.Errorf("%d authored script(s) refused", len(refused))
+		return fmt.Errorf("%d %w", len(refused), errRefused)
 	}
 	return nil
 }
@@ -381,6 +389,13 @@ func install(home string, st *state, a authored, by string) (receipt, error) {
 	}
 	if strings.TrimSpace(a.Script) == "" {
 		return receipt{}, fmt.Errorf("script.authored carries no script")
+	}
+	// The kernel execs the blob directly, so the first two bytes decide whether
+	// it can run at all. Refusing here turns an "exec format error" at the
+	// first `self run` — after the receipt was signed — into a reason that
+	// rides the next prompt.
+	if !strings.HasPrefix(a.Script, "#!") {
+		return receipt{}, fmt.Errorf("script has no shebang: its first line must name an interpreter, like #!/bin/sh or #!/usr/bin/env python3")
 	}
 	c := st.cap(typ, name)
 	if c == nil {

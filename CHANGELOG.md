@@ -2,6 +2,47 @@
 
 ## Unreleased — one fixed-point loop
 
+### Changed: `self loop` wakes a body instead of polling a fixed point
+
+Driving the loop on an empty instance showed it settling in two passes every
+time, and not because the model was timid: four forces in the kernel all pointed
+at silence. The default ask ended "act only if something warrants durable
+action. Silence is valid" — the fixed point stated as an instruction. `--ask`
+was shown on pass one only, so a nudge evaporated after the turn it caused. The
+growth layer said "author and test each script, then print", telling the mind to
+close every declaration in the same breath and leave nothing pending — and
+pending work is the only thing the kernel treats as unfinished. And nothing
+changed between passes except the mind's own writes.
+
+Each pass is now a **waking**. The kernel writes a line of facts it alone knows
+— waking number, wakings left, what woke the body, whether the last waking was
+quiet — and then splices a `prompt:loop` layer from PROTOCOL.md that invites the
+mind to leave the next waking something: a declaration it has not built, a view
+half-formed, a note. The ask stands on every waking. The growth layer now says a
+declaration without a script is an intention carried forward, not a failure.
+
+`--settle N` (default 2, `SELF_LOOP_SETTLE`) is how many quiet wakings in a row
+rest the body; the last of them is asked plainly whether there is anything else.
+A refused script no longer ends the loop: `hear` reports it as a typed error the
+loop recognises, the refusal lands as `script.rejected`, and its reason rides the
+next waking. Reaching `--max-passes` on a quiet waking is a rest, not a failure.
+
+Killing `self loop` now kills the waking. Each mind runs in its own process
+group and the whole group is signalled on timeout or on SIGINT/SIGTERM to the
+loop; before, an interrupted loop left the mind running as an orphan, still
+writing to the body through its own `self run` calls with its answer going to a
+closed pipe, and a grandchild holding stdout could keep the timeout from ever
+returning.
+
+`install` now refuses a script whose first bytes are not `#!`, with a reason,
+instead of signing it and letting the first `self run` fail with "exec format
+error".
+
+`examples/mind-claude` is `claude -p` as a mind with a live trace: it asks for
+the stream-json trace, renders text, tool calls and tool results to stderr as
+they happen — which the loop already routes to the terminal — and hands only the
+final answer to stdout, so the wire is unchanged and a waking is watchable.
+
 ### Changed: the repository is only the kernel and its demo
 
 `experiments/` (two finished measurement harnesses, results preserved in git

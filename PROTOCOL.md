@@ -99,9 +99,12 @@ not lost — it stands in the brief until an install or a retirement supersedes
 it, and the reason rides the next prompt.
 
 <!-- prompt:growth:begin -->
-A declaration without installed bytes cannot run. Author and test each script,
-then print this wire message; the kernel installs it and replaces it with a
-signed receipt, so `script.authored` never lands as an event:
+A declaration without installed bytes cannot run, and it is not a failure: it
+is an intention this body carries to its next waking, where it rides the prompt
+as pending work. Declare what you want to exist. Author and test what you can
+verify in this waking, then print this wire message; the kernel installs it and
+replaces it with a signed receipt, so `script.authored` never lands as an event.
+Leave the rest declared and unbuilt for a later waking:
 
 ```json
 {"name":"script.authored","payload":{"type":"command|view","name":"<declared name>","script":"<shebang and bytes>"}}
@@ -230,8 +233,10 @@ dump: read `events.jsonl`, `cap/`, run `self brief`, `self view <name>`,
 `self help` before you answer.
 
 - Do durable work through `self run <command> …`, or by printing events.
-- To grow the instance, print a declaration and its `script.authored` in the
-  same body — test the script by running it before you print it.
+- To grow the instance, print a declaration and, when you can verify the script
+  now, its `script.authored` in the same body — test the script by running it
+  before you print it. A declaration left without a script is pending work for
+  the next waking, not a mistake.
 - If a pending declaration lists a previous rejection, do not repeat it.
 - If there is nothing worth doing, print nothing. Silence is a valid turn.
 - Never edit `events.jsonl` and never write into `cap/` yourself. Only a
@@ -425,23 +430,45 @@ self loop -- claude -p
 self loop -- pi --provider github-copilot --model gpt-5.6-luna --no-session -p
 ```
 
-Each pass gives the mind a naked situated prompt, hears its stdout through the
-normal write door, and then checks authoritative state internally. It repeats
-after any append — whether the append came back on stdout or a tool-capable mind
-called `self run` itself — and stops after the first complete turn that leaves
-the log unchanged. Users do not hash or inspect the log; witnessing change is
-kernel work. The loop knows nothing about goals, tasks, or declarations.
+Each pass is a **waking**. The mind is told which waking this is and how many
+remain, hears the ask that woke the body on every waking rather than only the
+first, and is invited to leave the next waking something. Its stdout is heard
+through the normal write door, and then the kernel checks authoritative state.
+It repeats after any append — whether the append came back on stdout or a
+tool-capable mind called `self run` itself — and rests after `--settle`
+consecutive wakings (default 2) that leave the log unchanged. The last of those
+is asked plainly whether there is anything else, so a half-formed idea gets a
+second chance before the body rests. Users do not hash or inspect the log;
+witnessing change is kernel work. The loop knows nothing about goals, tasks, or
+declarations.
+
+The loop's ask is this layer, under a line of facts the kernel writes — the
+waking number, the wakings left, and what woke the body:
+
+<!-- prompt:loop:begin -->
+You are being woken in a series. Each waking reads what the last one left and
+leaves something for the next: a declaration you have not built yet, a view
+half-formed, a question or a note written as an event. A pending declaration is
+how this body carries an intention across wakings; the kernel asks the next
+waking to build it. Build what you can verify now, and look at what already
+exists before adding to it — revising is as valid as growing. If, having looked,
+you want nothing more for this body, append nothing and it rests.
+<!-- prompt:loop:end -->
+
+A refused script does not end the loop. The refusal is recorded as
+`script.rejected`, its reason rides the next waking beside the declaration, and
+the loop continues: a refusal is the mind learning, not the driver failing.
 
 The mind command is required after `--`; there is no resident or default model.
 Driver policy is explicit and generic:
 
 ```sh
-self loop --max-passes 12 --timeout 30m -- <mind> [args…]
+self loop --max-passes 12 --settle 2 --timeout 30m -- <mind> [args…]
 ```
 
-An optional first-pass ask directs attention without teaching the kernel domain
-semantics. It is presented only on pass one; if that turn changes state, later
-fresh passes return to the naked default ask and settle what changed:
+An optional ask directs attention without teaching the kernel domain semantics.
+It is what woke the body: pass one is told to start there, and every later
+waking still sees it, so a nudge does not evaporate after the turn it caused:
 
 ```sh
 self loop --ask 'advance backoffice-preprod-proof' -- <mind> [args…]
@@ -463,17 +490,20 @@ For a pinned local setup, environment defaults make the short form complete:
 export SELF_LOOP_MIND='pi --provider github-copilot --model gpt-5.6-luna --no-session -p'
 export SELF_LOOP_ASK='advance the one goal I selected'
 export SELF_LOOP_MAX_PASSES=12
+export SELF_LOOP_SETTLE=2
 export SELF_LOOP_TIMEOUT=30m
 self loop
 ```
 
 `SELF_LOOP_MIND` is necessarily a shell command string and runs through
 `sh -c`; explicit argv after `--` is safer and takes precedence. CLI
-`--ask`, `--max-passes`, and `--timeout` likewise override their environment
-defaults.
+`--ask`, `--max-passes`, `--settle`, and `--timeout` likewise override their
+environment defaults.
 
-Reaching the pass cap while state still changes, a mind failure, a timeout, or a
-hear failure exits non-zero. A converged fixed point exits zero.
+Reaching the pass cap while the last waking still changed state, a mind failure,
+a timeout, or a hear failure other than a refused script exits non-zero. A
+converged fixed point exits zero — including a pass cap reached on a quiet
+waking, since the log did not move.
 
 ## Exit codes
 
@@ -491,6 +521,7 @@ SELF_CALLER  your claim, recorded verbatim as `by` on events you cause and
 SELF_LOOP_MIND          default shell command for `self loop` when `--` is absent
 SELF_LOOP_ASK           default explicit objective for pass one only
 SELF_LOOP_MAX_PASSES    default loop pass cap (12 when unset)
+SELF_LOOP_SETTLE        quiet wakings in a row before the body rests (2 when unset)
 SELF_LOOP_TIMEOUT       default per-mind timeout (30m when unset)
 ```
 
