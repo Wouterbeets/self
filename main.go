@@ -89,75 +89,39 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		_, err = io.WriteString(out, brief(home, st))
 		return err
 
-	case "run":
-		// No ensureSecret here. Minting a key on this path meant `self run`
-		// dropped a .secret in whatever directory it was called from — and, on a
-		// real instance whose key went missing, forged a fresh one, hiding the
-		// only honest diagnostic there is.
+	case "run", "view":
+		// Discovery only reads state: never mint a missing instance key here.
 		st, err := loadState(home)
 		if err != nil {
 			return err
 		}
-		if len(args) < 1 {
-			// No name is a question about what is runnable, not a
-			// failure. Answer it with the names this log actually knows.
-			fmt.Fprintln(out, "usage: self run <command> [args...]")
-			fmt.Fprintln(out)
-			fmt.Fprint(out, commandUsage(st))
-			return nil
+		typ, arg := kindView, "name"
+		if verb == "run" {
+			typ, arg = kindCommand, "command"
+		}
+		if len(args) == 0 {
+			_, err := fmt.Fprintf(out, "usage: self %s <%s> [args...]\n\n%s", verb, arg, capabilityList(st, typ))
+			return err
 		}
 		name := args[0]
-		// A name the log does not know at all — no command, no view by that
-		// name — is a guess. Point the reader at what is real rather than
-		// sending them to check `self brief` for the list. A view by that name
-		// falls through, so materialize is the one that says so and offers
-		// `self view`.
-		if st.cap(kindCommand, name) == nil && st.cap(kindView, name) == nil {
-			fmt.Fprintf(out, "no command %q in this log\n\n", name)
-			fmt.Fprint(out, commandUsage(st))
-			return nil
+		if verb == "view" {
+			page, err := runView(home, st, name, args[1:]...)
+			if err != nil {
+				return err
+			}
+			_, err = out.Write(page)
+			return err
 		}
 		evs, err := runCommand(home, st, name, args[1:], doorCLI, callerClaim())
 		if err != nil {
 			return err
 		}
-		if len(evs) == 0 {
-			fmt.Fprintln(out, "no events")
-			return nil
-		}
 		for _, e := range evs {
-			fmt.Fprintf(out, "%d\t%s\t%s\n", e.Seq, e.Name, trunc(compact(e.Payload), 160))
+			if _, err := fmt.Fprintf(out, "%d\t%s\t%s\n", e.Seq, e.Name, trunc(compact(e.Payload), 160)); err != nil {
+				return err
+			}
 		}
 		return nil
-
-	case "view":
-		st, err := loadState(home)
-		if err != nil {
-			return err
-		}
-		if len(args) < 1 {
-			// No name is a question about what is runnable, not a
-			// failure. Answer it with the names this log actually knows.
-			fmt.Fprintln(out, "usage: self view <name> [args...]")
-			fmt.Fprintln(out)
-			fmt.Fprint(out, viewUsage(st))
-			return nil
-		}
-		name := args[0]
-		// A name the log does not know at all — no view, no command by that name,
-		// and not the built-in log — is a guess. Point the reader at what is real
-		// rather than sending them to check `self brief` for the list.
-		if name != "log" && st.cap(kindView, name) == nil && st.cap(kindCommand, name) == nil {
-			fmt.Fprintf(out, "no view %q in this log\n\n", name)
-			fmt.Fprint(out, viewUsage(st))
-			return nil
-		}
-		page, err := runView(home, st, name, args[1:]...)
-		if err != nil {
-			return err
-		}
-		_, err = out.Write(page)
-		return err
 
 	case "loop":
 		return cmdLoop(home, args, out, os.Stderr)
@@ -230,27 +194,10 @@ func brief(home string, st *state) string {
 		b.WriteString("\n**no .secret beside this log** — no receipt can verify, so this instance has no capabilities.\n")
 	}
 
-	cmds, views := st.list(kindCommand), st.list(kindView)
-
 	b.WriteString("\n## commands — `self run <name> [args…]`\n\n")
-	if len(cmds) == 0 {
-		b.WriteString("none yet\n")
-	}
-	for _, c := range cmds {
-		fmt.Fprintf(&b, "- **%s** — %s%s\n", c.Name, oneLine(c.Decl.Description), pendingMark(c))
-	}
-
+	b.WriteString(capabilityList(st, kindCommand))
 	b.WriteString("\n## views — `self view <name> [args…]`\n\n")
-	for _, c := range views {
-		consumes := strings.Join(c.Decl.Consumes, ", ")
-		if consumes == "" {
-			consumes = "the whole log"
-		}
-		fmt.Fprintf(&b, "- **%s** — %s (consumes %s)%s\n", c.Name, oneLine(c.Decl.Description), consumes, pendingMark(c))
-	}
-	if st.cap(kindView, "log") == nil {
-		b.WriteString("- **log** — every event, one line each (built in; a declared view named `log` shadows it)\n")
-	}
+	b.WriteString(capabilityList(st, kindView))
 
 	if p := st.pending(); len(p) > 0 {
 		b.WriteString("\n## pending — declared, no script yet\n\n")
@@ -278,43 +225,26 @@ func brief(home string, st *state) string {
 	return b.String()
 }
 
-// viewUsage lists the views this instance can run, so a reader who asks for a
-// view by a name the log does not know — or asks for none at all — is pointed
-// at what actually exists instead of guessing. It mirrors the view section of
-// `brief`, because the two answer the same question: what can I read here?
-func viewUsage(st *state) string {
+// capabilityList is the same live index in orientation and command discovery.
+func capabilityList(st *state, typ string) string {
 	var b strings.Builder
-	b.WriteString("views on this instance — `self view <name> [args…]`:\n")
-	views := st.list(kindView)
-	for _, c := range views {
-		consumes := strings.Join(c.Decl.Consumes, ", ")
-		if consumes == "" {
-			consumes = "the whole log"
+	caps := st.list(typ)
+	for _, c := range caps {
+		desc := oneLine(c.Decl.Description)
+		if typ == kindView {
+			consumes := strings.Join(c.Decl.Consumes, ", ")
+			if consumes == "" {
+				consumes = "the whole log"
+			}
+			desc += " (consumes " + consumes + ")"
 		}
-		fmt.Fprintf(&b, "- %s — %s (consumes %s)%s\n", c.Name, oneLine(c.Decl.Description), consumes, pendingMark(c))
+		fmt.Fprintf(&b, "- %s — %s%s\n", c.Name, desc, pendingMark(c))
 	}
-	if st.cap(kindView, "log") == nil {
+	if typ == kindView && st.cap(kindView, "log") == nil {
 		b.WriteString("- log — every event, one line each (built in; a declared view named `log` shadows it)\n")
 	}
-	if len(views) == 0 && st.cap(kindView, "log") == nil {
-		b.WriteString("\n(no declared views yet — only the built-in log; `self help` shows how to author one)\n")
-	}
-	return b.String()
-}
-
-// commandUsage lists the commands this instance can run, so a reader who asks
-// for a command by a name the log does not know — or asks for none at all — is
-// pointed at what actually exists instead of guessing. It mirrors the command
-// section of `brief`, because the two answer the same question: what can I do here?
-func commandUsage(st *state) string {
-	var b strings.Builder
-	b.WriteString("commands on this instance — `self run <name> [args…]`:\n")
-	cmds := st.list(kindCommand)
-	for _, c := range cmds {
-		fmt.Fprintf(&b, "- %s — %s%s\n", c.Name, oneLine(c.Decl.Description), pendingMark(c))
-	}
-	if len(cmds) == 0 {
-		b.WriteString("\n(no declared commands yet — `self help` shows how to author one)\n")
+	if len(caps) == 0 {
+		fmt.Fprintf(&b, "\n(no declared %ss yet — `self help` shows how to author one)\n", typ)
 	}
 	return b.String()
 }
@@ -332,7 +262,7 @@ func pendingMark(c *capability) string {
 // ─────────────────────────────────── util ───────────────────────────────────
 
 func oneLine(s string) string {
-	s = strings.Join(strings.Fields(strings.ReplaceAll(s, "\n", " ")), " ")
+	s = strings.Join(strings.Fields(s), " ")
 	if s == "" {
 		return "(no description)"
 	}

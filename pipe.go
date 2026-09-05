@@ -271,41 +271,26 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 
 	var installed, refused []string
 	for _, a := range scripts {
-		r, err := install(home, st, a, by)
-		if err != nil {
-			rej := rejection{Type: a.Type, Name: a.Name, Reason: err.Error(), Excerpt: trunc(a.Script, excerptCap)}
-			payload, _ := json.Marshal(rej)
-			e := newEvent("script.rejected", payload)
-			e.Via = doorKernel // the refusal is the kernel's own act
-			// appendLocked assigns Seq into the slice it is given, so read the
-			// event back from there: a copy would carry seq 0 and make the
-			// capability look eternally pending.
-			batch := []Event{e}
-			if err := appendLocked(home, batch); err != nil {
-				return err
-			}
-			e = batch[0]
-			rej.Seq = e.Seq
-			st.Events = append(st.Events, e)
-			st.Reject = append(st.Reject, &rej)
-			if c := st.cap(a.Type, a.Name); c != nil {
-				c.Reject = &rej
-			}
-			refused = append(refused, fmt.Sprintf("%s/%s: %s", a.Type, a.Name, err))
-			continue
+		r, installErr := install(st, a, by)
+		name, result := "script.installed", any(r)
+		if installErr != nil {
+			name = "script.rejected"
+			result = rejection{Type: a.Type, Name: a.Name, Reason: installErr.Error(), Excerpt: trunc(a.Script, excerptCap)}
 		}
-		payload, _ := json.Marshal(r)
-		e := newEvent("script.installed", payload)
-		e.Via = doorKernel // the receipt is the kernel's own act; the author is signed inside
+		payload, _ := json.Marshal(result)
+		e := newEvent(name, payload)
+		e.Via = doorKernel
 		batch := []Event{e}
 		if err := appendLocked(home, batch); err != nil {
 			return err
 		}
-		e = batch[0]
-		st.Events = append(st.Events, e)
+		// Replay the committed batch, including its assigned sequence numbers.
+		st.apply(batch)
+		if installErr != nil {
+			refused = append(refused, fmt.Sprintf("%s/%s: %s", a.Type, a.Name, installErr))
+			continue
+		}
 		c := st.cap(r.Type, r.Name)
-		c.Receipt, c.RcptSeq, c.Reject = &r, e.Seq, nil
-		st.Reject = dropRejection(st.Reject, c.key())
 		// The receipt is the record; the file is a convenience that any later
 		// run re-derives. Failing to write it must not cost the rest of the body.
 		if _, err := materialize(home, st, r.Type, r.Name); err != nil {
@@ -379,7 +364,7 @@ func warnDroppedDeclarations(st *state, evs []Event) {
 // be declared in this log and not retired, and the kernel signs the bytes with
 // its own key. The consumes list is taken from the DECLARATION and signed with
 // the script, so what a view was signed against is what it will be fed.
-func install(home string, st *state, a authored, by string) (receipt, error) {
+func install(st *state, a authored, by string) (receipt, error) {
 	typ, name := strings.TrimSpace(a.Type), strings.TrimSpace(a.Name)
 	if typ == "" || name == "" {
 		return receipt{}, fmt.Errorf("script.authored needs both type and name")
@@ -409,16 +394,6 @@ func install(home string, st *state, a authored, by string) (receipt, error) {
 	return r, nil
 }
 
-func dropRejection(rs []*rejection, key string) []*rejection {
-	out := rs[:0]
-	for _, r := range rs {
-		if r.Type+"/"+r.Name != key {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 // applyRetirements takes retired capabilities off the readable surface as their
 // tombstones land, so disk never claims something the log has ended. Every
 // event stays; re-declaring revives it.
@@ -440,7 +415,9 @@ func applyRetirements(home string, st *state, evs []Event) []string {
 		if st.cap(t.Type, t.Name) != nil {
 			continue // a later declaration in this same body revived it
 		}
-		unlink(home, t.Type, t.Name)
+		if err := os.Remove(linkPath(home, t.Type, t.Name)); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "self: retired %s/%s but could not remove its link: %s (self rehydrate retries cleanup)\n", t.Type, t.Name, err)
+		}
 		out = append(out, t.Type+"/"+t.Name)
 	}
 	return out

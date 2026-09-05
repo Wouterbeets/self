@@ -295,21 +295,14 @@ func cmdGive(home, selector, dir string) error {
 		if refused[e.Name] {
 			e.Name = lineagePrefix + e.Name
 		}
-		enc.Encode(e)
-	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	// Curation happens in this directory, so a second give into it would
-	// silently destroy the edits and recompute the manifest over the
-	// replacement — erasing the intervention the protocol exists to make
-	// visible.
-	if _, err := os.Stat(filepath.Join(dir, "record.jsonl")); err == nil {
-		return fmt.Errorf("%s already holds a record.jsonl — curation lives in that file, so give into a fresh directory rather than overwriting it", dir)
+		if err := enc.Encode(e); err != nil {
+			return err
+		}
 	}
 	recordBytes := []byte(record.String())
-	if err := os.WriteFile(filepath.Join(dir, "record.jsonl"), recordBytes, 0644); err != nil {
-		return err
+	// An existing record is curated evidence: never replace it, even in a race.
+	if err := writeFileAtomic(filepath.Join(dir, "record.jsonl"), recordBytes, 0644, os.Link); err != nil {
+		return fmt.Errorf("give into a fresh directory; record.jsonl must not be overwritten: %w", err)
 	}
 	sum := sha256.Sum256(recordBytes)
 	m.Events, m.RecordSha256 = len(selected), hex.EncodeToString(sum[:])
@@ -321,10 +314,8 @@ func cmdGive(home, selector, dir string) error {
 	// giver's moment of curation, and it is the half a receiving mind reads
 	// first.
 	intentPath := filepath.Join(dir, "intent.md")
-	if _, err := os.Stat(intentPath); err != nil {
-		if err := os.WriteFile(intentPath, []byte(intentStub(m)), 0644); err != nil {
-			return err
-		}
+	if err := writeFileAtomic(intentPath, []byte(intentStub(m)), 0644, os.Link); err != nil && !os.IsExist(err) {
+		return err
 	}
 
 	// The giver remembers giving: if it is not an event, it did not happen.

@@ -1143,8 +1143,7 @@ func TestGiveLearnRoundTrip(t *testing.T) {
 // strange loop. Without it a deposited command.declared becomes pending work
 // and the next pass signs an attacker's script under the local key.
 func TestLearnRefusesKernelVocabularyWholesale(t *testing.T) {
-	for _, name := range []string{"command.declared", "view.declared", "script.installed",
-		"script.compiled", "projector.declared", "self.asked", "kernel.initialized"} {
+	for name := range refused {
 		dir := t.TempDir()
 		os.WriteFile(filepath.Join(dir, "intent.md"), []byte("# hostile"), 0644)
 		body, _ := json.Marshal(map[string]any{"name": name, "payload": map[string]string{"name": "pwn"}})
@@ -1405,7 +1404,7 @@ func TestBriefOnAnEmptyInstance(t *testing.T) {
 	if len(b) > 2500 {
 		t.Fatalf("the empty brief is %d bytes", len(b))
 	}
-	for _, want := range []string{"log: 0 events", "none yet", "SELF_CALLER", "nothing pending"} {
+	for _, want := range []string{"log: 0 events", "no declared commands yet", "SELF_CALLER", "nothing pending"} {
 		if !strings.Contains(b, want) {
 			t.Fatalf("the empty brief is missing %q:\n%s", want, b)
 		}
@@ -1478,37 +1477,41 @@ func TestLoopSettlesAfterQuietWakings(t *testing.T) {
 // only the wrapper left grandchildren running — and, holding stdout, they kept
 // Wait from returning at all.
 func TestLoopTimeoutKillsTheWholeMind(t *testing.T) {
-	h := home(t)
-	pidfile := filepath.Join(t.TempDir(), "pid")
-	t.Setenv("PIDFILE", pidfile)
-	// The mind backgrounds a grandchild that inherits stdout, then waits on it.
-	mind := `cat >/dev/null; sleep 60 & echo $! > "$PIDFILE"; wait`
-	var out, diag bytes.Buffer
-	start := time.Now()
-	err := cmdLoop(h, []string{"--max-passes", "1", "--timeout", "300ms", "--", "/bin/sh", "-c", mind}, &out, &diag)
-	if err == nil || !strings.Contains(err.Error(), "exceeded") {
-		t.Fatalf("timeout not reported: %v", err)
+	for name, prefix := range map[string]string{"normal": "", "ignores termination": "trap '' TERM; "} {
+		t.Run(name, func(t *testing.T) {
+			h := home(t)
+			pidfile := filepath.Join(t.TempDir(), "pid")
+			t.Setenv("PIDFILE", pidfile)
+			// The mind backgrounds a grandchild that inherits stdout, then waits on it.
+			mind := prefix + `cat >/dev/null; sleep 60 & echo $! > "$PIDFILE"; wait`
+			var out, diag bytes.Buffer
+			start := time.Now()
+			err := cmdLoop(h, []string{"--max-passes", "1", "--timeout", "300ms", "--", "/bin/sh", "-c", mind}, &out, &diag)
+			if err == nil || !strings.Contains(err.Error(), "exceeded") {
+				t.Fatalf("timeout not reported: %v", err)
+			}
+			if time.Since(start) > 10*time.Second {
+				t.Fatal("the loop waited on a grandchild's pipe past the deadline")
+			}
+			raw, rerr := os.ReadFile(pidfile)
+			if rerr != nil {
+				t.Fatalf("mind did not record its grandchild: %v", rerr)
+			}
+			pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if pid <= 0 {
+				t.Fatalf("bad pid %q", raw)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				if syscall.Kill(pid, 0) != nil {
+					return // gone
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("grandchild %d survived the end of its waking", pid)
+		})
 	}
-	if time.Since(start) > 10*time.Second {
-		t.Fatal("the loop waited on a grandchild's pipe past the deadline")
-	}
-	raw, rerr := os.ReadFile(pidfile)
-	if rerr != nil {
-		t.Fatalf("mind did not record its grandchild: %v", rerr)
-	}
-	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if pid <= 0 {
-		t.Fatalf("bad pid %q", raw)
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if syscall.Kill(pid, 0) != nil {
-			return // gone
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	syscall.Kill(pid, syscall.SIGKILL)
-	t.Fatalf("grandchild %d survived the end of its waking", pid)
 }
 
 // The pass cap arriving on a quiet waking is a rest, not a failure: the log did
@@ -1695,46 +1698,66 @@ func TestLoopCLIOverridesEnvironmentDefaults(t *testing.T) {
 
 // ─────────────────────────────── the CLI shape ──────────────────────────────
 
-// `self run` with no name is a question about what is runnable, and a name the
-// log does not know is a guess: both are answered with the commands this log
-// actually holds — including declared-but-pending ones, marked — rather than an
-// error that sends the reader to `self brief` for the list. A view by the
-// missing name is not silently listed as the answer: run falls through, and
-// materialize offers `self view` instead.
-func TestRunExposesInstalledCommands(t *testing.T) {
+// Discovery must preserve the run/view distinction: absent names list the
+// requested kind, unknown names fail, wrong-kind names suggest the other verb, and only view has
+// a built-in log. None of those lookups should append events.
+func TestCapabilityDiscovery(t *testing.T) {
 	h := home(t)
 	growJournal(t, h)
-	heard(t, h, line(t, "command.declared", decl{Name: "later", Description: "not built yet"}))
-
-	var out bytes.Buffer
-	if err := dispatch(h, "run", nil, &out); err != nil {
+	heard(t, h, line(t, "command.declared", decl{Name: "later", Description: "not built yet"})+
+		line(t, "view.declared", decl{Name: "later", Description: "not built yet"}))
+	before, err := os.ReadFile(logPath(h))
+	if err != nil {
 		t.Fatal(err)
 	}
-	bare := out.String()
-	for _, want := range []string{
-		"usage: self run <command> [args...]",
-		"- entry — append an entry",
-		"- later — not built yet",
-		"pending — no script yet",
+	for _, tt := range []struct {
+		verb string
+		args []string
+		want string
+		fail bool
+	}{
+		{"run", nil, "usage: self run <command> [args...]", false},
+		{"view", nil, "usage: self view <name> [args...]", false},
+		{"run", []string{"missing"}, `no command "missing" in this log`, true},
+		{"view", []string{"missing"}, `no view "missing" in this log`, true},
+		{"run", []string{"journal"}, "there is a view by that name", true},
+		{"view", []string{"entry"}, "there is a command by that name", true},
+		{"run", []string{"log"}, `no command "log" in this log`, true},
+		{"view", []string{"log"}, "command.declared", false},
+		{"view", []string{"log", "extra"}, "takes no arguments", true},
 	} {
-		if !strings.Contains(bare, want) {
-			t.Fatalf("bare self run is missing %q:\n%s", want, bare)
-		}
+		t.Run(tt.verb+"/"+strings.Join(tt.args, "/"), func(t *testing.T) {
+			var out bytes.Buffer
+			err := dispatch(h, tt.verb, tt.args, &out)
+			if (err != nil) != tt.fail {
+				t.Fatalf("error = %v, want failure %v", err, tt.fail)
+			}
+			got := out.String()
+			if err != nil {
+				if out.Len() != 0 {
+					t.Fatalf("failed lookup wrote to stdout: %q", out.String())
+				}
+				got = err.Error()
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("missing %q in %s", tt.want, got)
+			}
+			if len(tt.args) == 0 {
+				want := "- entry — append an entry"
+				if tt.verb == "view" {
+					want = "- journal —"
+				}
+				for _, item := range []string{want, "- later — not built yet", "pending — no script yet"} {
+					if !strings.Contains(got, item) {
+						t.Fatalf("index missing %q: %s", item, got)
+					}
+				}
+			}
+		})
 	}
-
-	out.Reset()
-	if err := dispatch(h, "run", []string{"entirely-missing"}, &out); err != nil {
-		t.Fatal(err)
-	}
-	miss := out.String()
-	if !strings.Contains(miss, `no command "entirely-missing" in this log`) || !strings.Contains(miss, "- entry — append an entry") {
-		t.Fatalf("a mistyped command name did not point at what exists:\n%s", miss)
-	}
-
-	out.Reset()
-	err := dispatch(h, "run", []string{"journal"}, &out)
-	if err == nil || !strings.Contains(err.Error(), "there is a view by that name") {
-		t.Fatalf("running a view name should fall through to materialize's hint, got %v", err)
+	after, err := os.ReadFile(logPath(h))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("discovery changed the log: %v", err)
 	}
 }
 
@@ -1825,10 +1848,9 @@ func TestNoFileShowsThePipelineThatDiscardsTheAsk(t *testing.T) {
 					break
 				}
 				after := strings.TrimLeft(rest[i+len(needle):], " \t")
-				// A pipeline into `self hear` is the write door and correct.
-				// Anything else — end of line, a comment, a redirect, another
-				// pipe — is the loop that throws the ask away.
-				if !strings.HasPrefix(after, "hear") {
+				// Explicit verbs are also shown in menus separated by pipes.
+				// Flag the implicit ask face, not those named operations.
+				if !explicitPipelineVerb(after) {
 					offences = append(offences,
 						fmt.Sprintf("%s:%d: %s", path, n+1, strings.TrimSpace(ln)))
 				}
@@ -1843,6 +1865,36 @@ func TestNoFileShowsThePipelineThatDiscardsTheAsk(t *testing.T) {
 	if len(offences) > 0 {
 		t.Fatalf("a pipeline ending in a bare `self` discards its ask — the write door is `self hear`:\n  %s",
 			strings.Join(offences, "\n  "))
+	}
+}
+
+func explicitPipelineVerb(after string) bool {
+	word := strings.TrimSpace(after)
+	if end := strings.IndexAny(word, " \t`\"'<>|;()#\\"); end >= 0 {
+		word = word[:end]
+	}
+	for _, verb := range verbCandidates {
+		if word == verb.name {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPipelineLintRecognizesExplicitVerbs(t *testing.T) {
+	for _, tc := range []struct {
+		suffix   string
+		explicit bool
+	}{
+		{"hear", true}, {"hear`", true}, {`hear
+`, true}, {"view next | self view tree", true},
+		{"run goal own <goal>", true}, {"", false}, {"# comment", false},
+		{"> output", false}, {"| cat", false}, {"hearing", false}, {"# hear", false}, {"| hear", false},
+		{"what happened", false},
+	} {
+		if got := explicitPipelineVerb(tc.suffix); got != tc.explicit {
+			t.Errorf("suffix %q: explicit = %v, want %v", tc.suffix, got, tc.explicit)
+		}
 	}
 }
 

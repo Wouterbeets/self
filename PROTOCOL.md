@@ -460,7 +460,10 @@ A refused script does not end the loop. The refusal is recorded as
 `script.rejected`, its reason rides the next waking beside the declaration, and
 the loop continues: a refusal is the mind learning, not the driver failing.
 
-The mind command is required after `--`; there is no resident or default model.
+The mind command is required unless `SELF_LOOP_MIND` is set; there is no resident
+model. Options stop at `--` or the first positional argument. Everything after
+that is the mind command and its arguments, executed directly. Use `--` to make
+the boundary explicit. Options accept both `--timeout 5s` and `--timeout=5s`.
 Driver policy is explicit and generic:
 
 ```sh
@@ -474,6 +477,10 @@ waking still sees it, so a nudge does not evaporate after the turn it caused:
 ```sh
 self loop --ask 'advance backoffice-preprod-proof' -- <mind> [args…]
 ```
+
+On timeout or interruption, the loop kills the mind's process group with
+SIGKILL. It gives no shutdown grace period. A process that deliberately leaves
+that group is outside this mechanism.
 
 The mind is executed directly, not through a shell. It inherits the caller's
 working directory and environment (including `SELF_HOME` and `SELF_CALLER`),
@@ -499,7 +506,8 @@ self loop
 `SELF_LOOP_MIND` is necessarily a shell command string and runs through
 `sh -c`; explicit argv after `--` is safer and takes precedence. CLI
 `--ask`, `--max-passes`, `--settle`, and `--timeout` likewise override their
-environment defaults.
+environment defaults. Only the final values are validated, so a valid CLI
+override replaces even an invalid environment default.
 
 Reaching the pass cap while the last waking still changed state, a mind failure,
 a timeout, or a hear failure other than a refused script exits non-zero. A
@@ -508,7 +516,13 @@ waking, since the log did not move.
 
 ## Exit codes
 
-`0` did the thing. `1` did not. Bare orientation is always a successful read;
+`0` did the thing. `1` did not. `self run` and `self view` without a name
+list available capabilities; requesting an unknown or unrunnable capability
+fails, with diagnostics on stderr and no output on stdout. A command that
+emits no events succeeds silently. Output write failures also fail; events
+already committed by a command remain committed.
+
+Bare orientation is a read; read or output errors still fail.
 `self loop` reports convergence or failure rather than overloading an exit code
 with the kernel's opinion about whether domain work exists.
 
@@ -520,7 +534,7 @@ SELF_HOME    the instance: a directory holding events.jsonl and .secret
 SELF_CALLER  your claim, recorded verbatim as `by` on events you cause and
              signed into the receipts of scripts you author
 SELF_LOOP_MIND          default shell command for `self loop` when `--` is absent
-SELF_LOOP_ASK           default explicit objective for pass one only
+SELF_LOOP_ASK           default explicit objective for every waking
 SELF_LOOP_MAX_PASSES    default loop pass cap (12 when unset)
 SELF_LOOP_SETTLE        quiet wakings in a row before the body rests (2 when unset)
 SELF_LOOP_TIMEOUT       default per-mind timeout (30m when unset)

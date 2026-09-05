@@ -1,0 +1,7 @@
+[Unit]
+Description=Converge this self instance with its other bodies
+
+[Service]
+Type=oneshot
+# One tick at a time: a slow or sleeping peer must not overlap the next firing.
+ExecStart=/usr/bin/flock -n /home/wouter/.self/sync/.tick.lock /bin/sh /home/wouter/.local/bin/self-sync

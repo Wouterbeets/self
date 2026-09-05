@@ -1,0 +1,12 @@
+[Unit]
+Description=Converge this self instance with its other bodies, continuously
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+# A laptop that was shut has missed ticks; catch up once rather than never.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

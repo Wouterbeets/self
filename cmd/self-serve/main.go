@@ -95,7 +95,7 @@ func view(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name, args := resolveName(segs, knownNames("views"))
+	name, args := resolveName(segs, knownNames("view"))
 	if !nameSegmentsOK(name) {
 		http.Error(w, "unknown view: "+name, http.StatusBadRequest)
 		return
@@ -136,7 +136,7 @@ func run(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "usage: /run/<command> [<args…>]", http.StatusBadRequest)
 		return
 	}
-	name, args := resolveName(segs, knownNames("commands"))
+	name, args := resolveName(segs, knownNames("run"))
 	if !nameSegmentsOK(name) {
 		http.Error(w, "bad command name", http.StatusBadRequest)
 		return
@@ -259,30 +259,22 @@ func resolveName(segs, names []string) (name string, args []string) {
 	return best, segs[bestN:]
 }
 
-var briefItem = regexp.MustCompile(`(?m)^- \*\*([^*]+)\*\*`)
+var briefItem = regexp.MustCompile(`(?m)^- (?:\*\*)?([A-Za-z0-9_][A-Za-z0-9_./-]*)(?:\*\*)?`)
 var viewIndexItem = regexp.MustCompile(`(?m)^- ([A-Za-z0-9_][A-Za-z0-9_./-]*) —`)
 var markdownLink = regexp.MustCompile(`\[([^\]\r\n]+)\]\((https?://[^\s<>\)]+)\)`)
 
-func knownNames(kind string) []string {
-	out, _, code, err := selfOutput("brief")
+// Routing consumes the machine interface; the brief is display text only.
+func knownNames(verb string) []string {
+	out, _, code, err := selfOutput("__complete", verb, "")
 	if err != nil || code != 0 {
 		return nil
 	}
-	return namesInSection(string(out), "## "+kind)
-}
-
-func namesInSection(brief, heading string) []string {
-	start := strings.Index(brief, heading)
-	if start < 0 {
-		return nil
-	}
-	section := brief[start:]
-	if i := strings.Index(section[2:], "\n## "); i >= 0 {
-		section = section[:i+2]
-	}
 	var names []string
-	for _, m := range briefItem.FindAllStringSubmatch(section, -1) {
-		names = append(names, m[1])
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name, _, _ := strings.Cut(line, "\t")
+		if nameSegmentsOK(name) {
+			names = append(names, name)
+		}
 	}
 	return names
 }

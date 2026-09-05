@@ -8,14 +8,18 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -91,18 +95,24 @@ func loadState(home string) (*state, error) {
 // a directory holding a log but no .secret has no capabilities, which is the
 // truth about it.
 func replay(events []Event, key []byte) *state {
-	st := &state{Events: events, Key: key, byKey: map[string]*capability{}}
+	// Reuse the loaded event slice; apply appends it without copying the log.
+	st := &state{Events: events[:0], Key: key, byKey: map[string]*capability{}}
+	st.apply(events)
+	return st
+}
+
+// apply uses the same transitions for a cold replay and newly committed events.
+func (st *state) apply(events []Event) {
+	st.Events = append(st.Events, events...)
 	rejects := map[string]*rejection{}
+	for _, r := range st.Reject {
+		rejects[r.Type+"/"+r.Name] = r
+	}
 
 	forget := func(k string) {
 		delete(st.byKey, k)
 		delete(rejects, k)
-		for i, c := range st.Caps {
-			if c.key() == k {
-				st.Caps = append(st.Caps[:i], st.Caps[i+1:]...)
-				break
-			}
-		}
+		st.Caps = slices.DeleteFunc(st.Caps, func(c *capability) bool { return c.key() == k })
 	}
 	live := func(typ, name string) *capability {
 		k := typ + "/" + name
@@ -139,7 +149,7 @@ func replay(events []Event, key []byte) *state {
 			// A receipt for a capability no declaration mentions still
 			// installs: rehydrate must be able to rebuild from receipts alone.
 			// It can only exist if someone held the key.
-			r, ok := verifyReceipt(key, e.Payload)
+			r, ok := verifyReceipt(st.Key, e.Payload)
 			if !ok {
 				continue
 			}
@@ -182,11 +192,11 @@ func replay(events []Event, key []byte) *state {
 	for _, c := range st.Caps {
 		c.Reject = rejects[c.key()]
 	}
+	st.Reject = st.Reject[:0]
 	for _, r := range rejects {
 		st.Reject = append(st.Reject, r)
 	}
 	sort.Slice(st.Reject, func(i, j int) bool { return st.Reject[i].Seq < st.Reject[j].Seq })
-	return st
 }
 
 func (st *state) cap(typ, name string) *capability { return st.byKey[typ+"/"+name] }
@@ -320,7 +330,7 @@ func materialize(home string, st *state, typ, name string) (string, error) {
 		if err == nil {
 			fmt.Fprintf(os.Stderr, "self: %s/%s: blob %s did not match its own hash — restored from the receipt at seq %d\n", typ, name, hexsum[:12], c.RcptSeq)
 		}
-		if err := writeFileAtomic(blob, []byte(script), 0755); err != nil {
+		if err := writeFileAtomic(blob, []byte(script), 0755, os.Rename); err != nil {
 			return "", err
 		}
 	}
@@ -330,10 +340,9 @@ func materialize(home string, st *state, typ, name string) (string, error) {
 	return blob, nil
 }
 
-// writeFileAtomic writes through a temp file and a rename, so a reader — or an
-// exec — never sees a partial script, and a running process keeps the inode it
-// started with.
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+// writeFileAtomic stages complete bytes in the destination directory. Rename
+// replaces derived files; Link publishes authoritative files only if absent.
+func writeFileAtomic(path string, data []byte, mode os.FileMode, publish func(string, string) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -353,7 +362,7 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return publish(tmp.Name(), path)
 }
 
 // linkBlob points the readable path at a blob. The symlink is for humans and
@@ -384,20 +393,6 @@ func linkBlob(home, typ, name, sum string) error {
 	return os.Rename(staged, link)
 }
 
-// unlink removes a retired capability's readable path. Its blob stays until
-// rehydrate collects it — blobs are shared and cheap; a dangling one is inert.
-func unlink(home, typ, name string) {
-	link := linkPath(home, typ, name)
-	os.Remove(link)
-	dir := filepath.Dir(link)
-	for dir != capDir(home) && dir != "/" && dir != "." {
-		if os.Remove(dir) != nil { // succeeds only when empty
-			break
-		}
-		dir = filepath.Dir(dir)
-	}
-}
-
 // rehydrate makes cap/ match the log exactly: materialize what live verified
 // receipts require, remove every readable path they do not, and collect
 // unreferenced blobs. It is the only thing allowed to delete, and it needs
@@ -416,68 +411,51 @@ func rehydrate(home string) error {
 	if err != nil {
 		return err
 	}
-	keepLinks := map[string]bool{}
-	keepBlobs := map[string]bool{}
-	installed, failed := 0, 0
+	keep := map[string]bool{}
+	var failures error
+	installed, removed := 0, 0
 	for _, c := range st.Caps {
 		if c.Receipt == nil {
 			continue
 		}
+		// Protect every required path even if materialization fails. Cleanup
+		// must not delete a live blob just because its link could not be made.
+		sum := sha256.Sum256([]byte(c.Receipt.Script))
+		for _, path := range []string{linkPath(home, c.Type, c.Name), blobPath(home, hex.EncodeToString(sum[:]))} {
+			for path != capDir(home) {
+				keep[path] = true
+				path = filepath.Dir(path)
+			}
+		}
 		if _, err := materialize(home, st, c.Type, c.Name); err != nil {
-			// One capability the filesystem cannot hold must not brick the
-			// audit path: say so and keep reconciling the rest.
-			fmt.Fprintf(os.Stderr, "self: %s could not be materialized: %s\n", c.key(), err)
-			failed++
+			failures = errors.Join(failures, fmt.Errorf("%s: %w", c.key(), err))
 			continue
 		}
-		sum := sha256.Sum256([]byte(c.Receipt.Script))
-		keepLinks[linkPath(home, c.Type, c.Name)] = true
-		keepBlobs[hex.EncodeToString(sum[:])] = true
 		installed++
 	}
-
-	removed := 0
-	for _, typ := range []string{kindCommand, kindView} {
-		root := filepath.Join(capDir(home), typ)
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
+	// One traversal rule covers links, blobs, and empty directories. WalkDir
+	// never follows symlinks; unneeded subtrees are removed as a unit.
+	for _, kind := range []string{kindCommand, kindView, "blob"} {
+		err := filepath.WalkDir(filepath.Join(capDir(home), kind), func(path string, entry fs.DirEntry, err error) error {
+			if os.IsNotExist(err) {
 				return nil
 			}
-			// "Exactly" means exactly: a file under cap/<type>/ that no live
-			// receipt puts there is stale, whatever it is called.
-			if !keepLinks[path] {
-				os.Remove(path)
-				removed++
+			if err != nil || keep[path] {
+				return err
+			}
+			if err := os.RemoveAll(path); err != nil {
+				return err
+			}
+			removed++
+			if entry.IsDir() {
+				return filepath.SkipDir
 			}
 			return nil
 		})
-		pruneEmpty(root)
+		failures = errors.Join(failures, err)
 	}
-	blobs, _ := os.ReadDir(blobDir(home))
-	for _, b := range blobs {
-		if !keepBlobs[b.Name()] {
-			os.Remove(filepath.Join(blobDir(home), b.Name()))
-			removed++
-		}
-	}
-	fmt.Fprintf(os.Stderr, "self: %d capabilit(ies) materialized from the log, %d stale file(s) removed\n", installed, removed)
-	if failed > 0 {
-		return fmt.Errorf("%d capabilit(ies) in the log could not be materialized (see above)", failed)
-	}
-	return nil
-}
-
-func pruneEmpty(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			pruneEmpty(filepath.Join(dir, e.Name()))
-		}
-	}
-	os.Remove(dir) // succeeds only when empty
+	fmt.Fprintf(os.Stderr, "self: %d capabilit(ies) materialized from the log, %d stale path(s) removed\n", installed, removed)
+	return failures
 }
 
 // ───────────────────────────── running scripts ──────────────────────────────
@@ -515,7 +493,9 @@ func feed(w io.WriteCloser, events []Event) {
 	go func() {
 		enc := json.NewEncoder(w)
 		for i := range events {
-			enc.Encode(events[i])
+			if err := enc.Encode(events[i]); err != nil {
+				break // the consumer closed stdin; stop replaying the log
+			}
 		}
 		w.Close()
 	}()
@@ -555,11 +535,8 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 		}
 		// Only name and payload are read: everything else about an event is
 		// the kernel's to say.
-		var p struct {
-			Name    string          `json:"name"`
-			Payload json.RawMessage `json:"payload"`
-		}
-		if err := json.Unmarshal([]byte(line), &p); err != nil {
+		var p wireLine
+		if err := json.Unmarshal([]byte(line), &p); err != nil || p.Payload == nil {
 			parseErr = fmt.Errorf("command %q printed a line that is not an event: %s", name, trunc(line, 120))
 			continue
 		}
@@ -603,6 +580,12 @@ func runView(home string, st *state, name string, args ...string) ([]byte, error
 		}
 		return builtinLogView(st), nil
 	}
+	return executeView(context.Background(), home, st, name, args, os.Stderr, 0)
+}
+
+// executeView owns receipt resolution, input, environment and scratch lifetime.
+// Callers choose only cancellation, diagnostics and the pipe-drain deadline.
+func executeView(ctx context.Context, home string, st *state, name string, args []string, diag io.Writer, waitDelay time.Duration) ([]byte, error) {
 	bin, err := materialize(home, st, kindView, name)
 	if err != nil {
 		return nil, err
@@ -617,22 +600,20 @@ func runView(home string, st *state, name string, args ...string) ([]byte, error
 		return nil, err
 	}
 	defer os.RemoveAll(scratch)
-	cmd := exec.Command(bin, args...)
-	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv("", scratch), scratch, os.Stderr
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv("", scratch), scratch, diag
+	// Bound inherited pipes when a timed-out producer leaves children behind.
+	cmd.WaitDelay = waitDelay
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
 	}
-	var out strings.Builder
-	cmd.Stdout = &out
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
 	feed(stdin, consumed(st.Events, st.cap(kindView, name).Receipt.Consumes))
-	if err := cmd.Wait(); err != nil {
+	out, err := cmd.Output()
+	if err != nil {
 		return nil, fmt.Errorf("view %q exited: %w", name, err)
 	}
-	return []byte(out.String()), nil
+	return out, nil
 }
 
 // consumed filters the log to a view's declared inputs. An empty list — or

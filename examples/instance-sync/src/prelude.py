@@ -1,0 +1,154 @@
+# --- sync core: identical bytes in every sync capability on every body -------
+# The fingerprint is the reconciliation key. `id` cannot be: the kernel mints 16
+# random bytes on every append and `learn` re-mints them, so two bodies holding
+# the same moment hold different ids. What survives transport verbatim is
+# (name, occurred_at, by, payload) — so that tuple, canonicalised, IS the key.
+import hashlib
+import json
+import re
+import sys
+
+FP_DOMAIN = b"self-sync-fp-v1\n"
+
+# The kernel's frozen refused set: these names never travel raw. Copied here
+# because a view has no path to the kernel — and frozen there, so it cannot rot.
+REFUSED = frozenset([
+    "command.declared", "view.declared", "script.authored", "script.installed",
+    "script.rejected", "capability.retired", "intent.declared", "lesson.learned",
+    "account.given", "kernel.initialized", "projector.declared", "script.compiled",
+    "self.asked", "self.replied", "self.reflected", "learn.orchestrated",
+    "capability.revision.requested",
+])
+LINEAGE = "lineage."
+NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$")
+
+
+def wire_name(name):
+    """The name this event carries once it has crossed, or None if it never can.
+
+    Policy-free and identical on every body, because it defines the fingerprint
+    namespace: if one side computed a different wire name than the other, the
+    same moment would fingerprint twice and sync forever. Renaming mirrors what
+    `self give` does — refused vocabulary and pre-dotted v1 names land inert as
+    lineage.*, so a peer's history is reference material and never pending work.
+    """
+    if not isinstance(name, str) or not name:
+        return None
+    cand = name
+    if name in REFUSED or not NAME_RE.match(name):
+        cand = LINEAGE + name
+    if cand in REFUSED or not NAME_RE.match(cand):
+        return None
+    return cand
+
+
+def canon(payload):
+    """Sorted keys, no whitespace. `give` compacts payloads through Go's encoder
+    but keeps key order and number text, so canonicalising both sides makes the
+    pre-transport and post-transport bytes agree."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def fingerprint(wname, occurred_at, by, payload):
+    h = hashlib.sha256()
+    h.update(FP_DOMAIN)
+    for part in (wname, occurred_at, by or "", canon(payload)):
+        b = part.encode("utf-8")
+        # Length-prefixed: without it, ("a","bc") and ("ab","c") collide.
+        h.update(("%d\n" % len(b)).encode("ascii"))
+        h.update(b)
+    return h.hexdigest()
+
+
+TS_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$")
+
+
+def tskey(s):
+    """RFC3339Nano to a fixed-width comparable key, or None if unparseable.
+
+    Go strips trailing zeros from the fraction, so the raw strings do NOT sort
+    lexicographically: ".2Z" > ".25Z" by byte order and 0.2 < 0.25 by clock.
+    Padding to nanoseconds is exact; parsing to a float would lose them."""
+    m = TS_RE.match(s or "")
+    if not m:
+        return None
+    frac = (m.group(7) or "")[:9].ljust(9, "0")
+    return "".join(m.group(i) for i in range(1, 7)) + frac
+
+
+def read_log(stream):
+    for line in stream:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and isinstance(e.get("name"), str):
+            yield e
+
+
+def shippable(e):
+    """(wire name, fingerprint) for an event that can cross, else (None, None)."""
+    w = wire_name(e.get("name"))
+    if w is None:
+        return None, None
+    oa = e.get("occurred_at")
+    if not isinstance(oa, str) or not oa:
+        return None, None
+    return w, fingerprint(w, oa, e.get("by") or "", e.get("payload", {}))
+
+
+def is_local(e):
+    """Testimony this body witnessed itself, as opposed to a peer's, which
+    arrives through a learn:<peer> door. The door is the only honest local fact
+    on a deposited event: seq is re-assigned and by/occurred_at are the peer's."""
+    return not str(e.get("via") or "").startswith("learn:")
+
+
+# Prefixes held back by default, shared by every capability that decides what
+# crosses so the two directions cannot disagree:
+#
+#   - dead v1 vocabulary that lands inert and costs megabytes, and one
+#     high-volume "nothing happened" observation;
+#   - the bookkeeping a sync itself writes. Without this last group a sync never
+#     goes quiet: giving N moments appends an observation and a pair of learn
+#     receipts, which are themselves new moments to give, so the next tick has
+#     work again forever. Excluding them is what makes convergence terminate.
+DEFAULT_EXCLUDE = ("script.compiled", "projector.declared", "agent.reclaim_skipped",
+                   "sync.observed", "intent.declared", "lesson.learned", "account.given")
+
+
+def excluded(name, wname, prefixes):
+    """Prefix match against both the local and the wire name, and against each
+    with a lineage. prefix stripped — otherwise a name held back here would come
+    straight back as lineage.<name> on the next tick and never settle."""
+    cands = set()
+    for s in (name or "", wname or ""):
+        cands.add(s)
+        if s.startswith(LINEAGE):
+            cands.add(s[len(LINEAGE):])
+    for c in cands:
+        for p in prefixes:
+            if c.startswith(p):
+                return True
+    return False
+
+
+def to_record(e, prefixes):
+    """The four portable fields, under the wire name, or None if it stays home."""
+    name = e.get("name")
+    w = wire_name(name)
+    oa = e.get("occurred_at")
+    if w is None or not isinstance(oa, str) or not oa or excluded(name, w, prefixes):
+        return None
+    rec = {"name": w, "occurred_at": oa, "payload": e.get("payload", {})}
+    by = e.get("by")
+    if by:
+        rec["by"] = by
+    return rec
+
+
+def record_line(rec):
+    return json.dumps(rec, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

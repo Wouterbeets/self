@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,31 +36,13 @@ func TestResolveName(t *testing.T) {
 	}
 }
 
-func TestNamesInSection(t *testing.T) {
-	brief := `# self — /tmp/x
-
-## commands — ` + "`self run <name> [args…]`" + `
-
-- **capture** — Capture a task
-- **timer/set** — Schedule an intention
-
-## views — ` + "`self view <name> [args…]`" + `
-
-- **menu** — HTML menu
-- **board** — task board
-- **log** — every event
-
-## pending — declared, no script yet
-
-- view/later (declared at seq 1)
-`
-	cmds := namesInSection(brief, "## commands")
-	if strings.Join(cmds, ",") != "capture,timer/set" {
-		t.Fatalf("commands: %v", cmds)
+func TestKnownNamesUsesCompletion(t *testing.T) {
+	t.Setenv("SELF_BIN", writeStub(t))
+	if got := strings.Join(knownNames("run"), ","); got != "capture,timer/set" {
+		t.Fatalf("commands: %s", got)
 	}
-	views := namesInSection(brief, "## views")
-	if strings.Join(views, ",") != "menu,board,log" {
-		t.Fatalf("views: %v", views)
+	if got := strings.Join(knownNames("view"), ","); got != "menu,board,echo,quiet,log" {
+		t.Fatalf("views: %s", got)
 	}
 }
 
@@ -228,6 +211,12 @@ dir=${0%/*}
 printf '%s\n' "$SELF_CALLER" > "$dir/caller"
 printf '%s\n' "$*" > "$dir/argv"
 case "$1" in
+  __complete)
+    case "$2" in
+      run) printf 'capture\tCapture a task\ntimer/set\tSchedule an intention\n' ;;
+      view) printf 'menu\tHTML menu\nboard\ttask board\necho\techo argv\nquiet\tsilence\nlog\tevery event\n' ;;
+    esac
+    ;;
   brief)
     cat <<'EOF'
 # self — /tmp/x
@@ -300,4 +289,32 @@ func read(t *testing.T, res *http.Response) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// Exercise the actual CLI format, rather than a stub repeating an old brief.
+func TestHTTPWithRealKernel(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "self")
+	if out, err := exec.Command("go", "build", "-o", binary, "../..").CombinedOutput(); err != nil {
+		t.Fatalf("build kernel: %v: %s", err, out)
+	}
+	t.Setenv("SELF_BIN", binary)
+	t.Setenv("SELF_HOME", t.TempDir())
+	cmd := exec.Command(binary, "hear")
+	cmd.Stdin = strings.NewReader(`{"name":"view.declared","payload":{"name":"nested/page"}}
+{"name":"script.authored","payload":{"type":"view","name":"nested/page","script":"#!/bin/sh\ncat >/dev/null\nprintf '<html><body>%s</body></html>' \"$1\"\n"}}
+`)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("install view: %v: %s", err, out)
+	}
+	for _, tc := range []struct{ path, want string }{
+		{"/", `href="/view/nested/page"`},
+		{"/view/", `href="/view/nested/page"`},
+		{"/view/nested/page/chosen", "<body>chosen"},
+	} {
+		response := httptest.NewRecorder()
+		handler().ServeHTTP(response, httptest.NewRequest("GET", tc.path, nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.want) {
+			t.Errorf("%s: status %d, missing %q in %s", tc.path, response.Code, tc.want, response.Body.String())
+		}
+	}
 }

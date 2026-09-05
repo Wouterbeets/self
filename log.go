@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,7 +62,7 @@ func validEventName(s string) bool { return eventName.MatchString(s) }
 
 // callerClaim is the speaker a local invocation claims to be — verbatim, empty
 // when nothing was claimed.
-func callerClaim() string { return strings.TrimSpace(os.Getenv("SELF_CALLER")) }
+func callerClaim() string { return os.Getenv("SELF_CALLER") }
 
 func newEvent(name string, payload json.RawMessage) Event {
 	b := make([]byte, 16)
@@ -158,6 +159,9 @@ func appendEvents(home string, evs []Event) error {
 // appendLocked is appendEvents' body for callers already holding the lock (a
 // hear body, which must resolve declared-ness between its own appends).
 func appendLocked(home string, evs []Event) error {
+	if len(evs) == 0 {
+		return nil
+	}
 	// Every append passes through here, so this is where the log's two
 	// well-formedness rules live: a lowercase dotted name, and a payload that
 	// is valid UTF-8. A RawMessage is written through verbatim, so raw bytes
@@ -180,11 +184,6 @@ func appendLocked(home string, evs []Event) error {
 	if err != nil {
 		return err
 	}
-	// If the file does not end in a newline, its tail is an uncommitted
-	// fragment. Drop it before appending.
-	if err := dropFragment(home); err != nil {
-		return err
-	}
 	var buf bytes.Buffer
 	for i := range evs {
 		last++
@@ -196,6 +195,10 @@ func appendLocked(home string, evs []Event) error {
 		buf.Write(line)
 		buf.WriteByte('\n')
 	}
+	// Validate and encode the whole batch before repairing an interrupted write.
+	if err := dropFragment(home); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(logPath(home), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return err
@@ -204,14 +207,12 @@ func appendLocked(home string, evs []Event) error {
 	// way — roll the file back to where it started, still under the lock, so a
 	// torn tail never exists. dropFragment is the backstop for the writes that
 	// never reach here at all (a kill, a power cut), not the plan.
-	base := int64(0)
-	if st, serr := f.Stat(); serr == nil {
-		base = st.Size()
+	st, err := f.Stat()
+	if err != nil {
+		return errors.Join(err, f.Close())
 	}
 	if _, err := f.Write(buf.Bytes()); err != nil {
-		f.Truncate(base)
-		f.Close()
-		return err
+		return errors.Join(err, f.Truncate(st.Size()), f.Close())
 	}
 	return f.Close()
 }
@@ -244,30 +245,25 @@ func dropFragment(home string) error {
 	if err != nil || st.Size() == 0 {
 		return err
 	}
-	// How many trailing bytes follow the last newline?
-	const window = 1024 * 1024
+	// Grow backwards until the last line is whole. Wire records can exceed
+	// one megabyte, so recovery must not impose a smaller fixed window.
 	size := st.Size()
-	read := int64(window)
-	if read > size {
-		read = size
-	}
-	buf := make([]byte, read)
-	if _, err := f.ReadAt(buf, size-read); err != nil {
-		return err
-	}
-	i := bytes.LastIndexByte(buf, '\n')
-	if i == int(read)-1 {
-		return nil // already ends on a record boundary
-	}
-	tail := buf[i+1:] // i == -1 gives the whole window, which is the whole file below
+	var tail []byte
 	var keep int64
-	if i < 0 {
-		if read < size {
-			return fmt.Errorf("events.jsonl has no newline in its last %d bytes; refusing to guess where the last record ends", window)
+	for window := int64(64 * 1024); ; window *= 4 {
+		window = min(window, size)
+		buf := make([]byte, window)
+		if _, err := f.ReadAt(buf, size-window); err != nil {
+			return err
 		}
-		keep = 0 // the whole file is one unterminated line
-	} else {
-		keep = size - read + int64(i) + 1
+		i := bytes.LastIndexByte(buf, '\n')
+		if i == len(buf)-1 {
+			return nil // already ends on a record boundary
+		}
+		if i >= 0 || window == size {
+			tail, keep = buf[i+1:], size-window+int64(i)+1
+			break
+		}
 	}
 
 	// Whole record, missing only its terminator? Give it one.
@@ -285,10 +281,8 @@ func dropFragment(home string) error {
 // of the log — appends stay O(1) as the log grows, and no sidecar file can drift
 // from it: the log is the only record of where it ends.
 //
-// It applies readEvents' rule. A final line with no newline was never committed,
-// so the batch about to be written must not inherit its sequence; the same goes
-// for a tail that is terminated but unreadable. Walk back to the last line that
-// is genuinely a record. Call under the lock.
+// Complete events count even without a final newline, as in readEvents.
+// Unreadable lines cannot supply a sequence number. Call under the lock.
 func lastSeq(home string) (int, error) {
 	f, err := os.Open(logPath(home))
 	if err != nil {
@@ -395,26 +389,13 @@ func ensureSecret(home string) ([]byte, error) {
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(home, 0755); err != nil {
-		return nil, err
-	}
-	// O_EXCL, so exactly one of two selves racing on a fresh home creates the
-	// key and the other reads it. Losing that race silently used to mean
-	// signing receipts under a key the instance would then throw away.
-	f, err := os.OpenFile(secretPath(home), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
+	// Publish complete key bytes without replacing a concurrent winner.
+	if err := writeFileAtomic(secretPath(home), []byte(hex.EncodeToString(key)), 0600, os.Link); err != nil {
 		if os.IsExist(err) {
 			if existing := secret(home); existing != nil {
 				return existing, nil
 			}
 		}
-		return nil, err
-	}
-	if _, err := f.WriteString(hex.EncodeToString(key)); err != nil {
-		f.Close()
-		return nil, err
-	}
-	if err := f.Close(); err != nil {
 		return nil, err
 	}
 	fmt.Fprintf(os.Stderr, "self: new instance %s\n", home)

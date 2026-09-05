@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -49,8 +49,9 @@ Each waking is told which number it is and how many remain. A refused script
 does not end the loop: the refusal is recorded and its reason rides the next
 waking. The mind is executed directly, without a shell. It inherits the caller's
 working directory and environment, receives the situated prompt on stdin, and
-returns the event wire on stdout. Diagnostics go to stderr. Use -- before the
-mind command. SELF_LOOP_MIND is necessarily a shell string and runs as:
+returns the event wire on stdout. Diagnostics go to stderr. Options stop at --
+or the first positional argument; the rest is the mind command and its argv.
+Use -- to make that boundary explicit. SELF_LOOP_MIND is a shell string run as:
 sh -c "$SELF_LOOP_MIND".`
 
 func positiveInt(value, source string) (int, error) {
@@ -70,59 +71,38 @@ func positiveDuration(value, source string) (time.Duration, error) {
 }
 
 func parseLoopOptions(args []string) (loopOptions, error) {
-	opts := loopOptions{MaxPasses: 12, Settle: 2, Timeout: 30 * time.Minute, Ask: os.Getenv("SELF_LOOP_ASK")}
-	for _, e := range []struct {
-		key string
-		dst *int
-	}{{"SELF_LOOP_MAX_PASSES", &opts.MaxPasses}, {"SELF_LOOP_SETTLE", &opts.Settle}} {
-		if value := os.Getenv(e.key); value != "" {
-			parsed, err := positiveInt(value, e.key)
-			if err != nil {
-				return opts, err
-			}
-			*e.dst = parsed
+	opts := loopOptions{Ask: os.Getenv("SELF_LOOP_ASK")}
+	flags := flag.NewFlagSet("loop", flag.ContinueOnError)
+	flags.SetOutput(io.Discard) // the caller owns diagnostics
+	flags.StringVar(&opts.Ask, "ask", opts.Ask, "")
+	for name, fallback := range map[string]string{"max-passes": "12", "settle": "2", "timeout": "30m"} {
+		if value := os.Getenv("SELF_LOOP_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))); value != "" {
+			fallback = value
 		}
+		flags.String(name, fallback, "")
 	}
-	if value := os.Getenv("SELF_LOOP_TIMEOUT"); value != "" {
-		parsed, err := positiveDuration(value, "SELF_LOOP_TIMEOUT")
+	if err := flags.Parse(args); err != nil {
+		return opts, fmt.Errorf("loop options: %w — %s", err, loopUsage)
+	}
+	opts.Mind = flags.Args()
+	// Validate after applying CLI overrides, so an overridden environment
+	// default cannot reject an otherwise valid invocation.
+	for _, option := range []struct {
+		name string
+		dst  *int
+	}{
+		{"max-passes", &opts.MaxPasses}, {"settle", &opts.Settle},
+	} {
+		value, err := positiveInt(flags.Lookup(option.name).Value.String(), "--"+option.name)
 		if err != nil {
 			return opts, err
 		}
-		opts.Timeout = parsed
+		*option.dst = value
 	}
-	for len(args) > 0 {
-		if args[0] == "--" {
-			opts.Mind = args[1:]
-			break
-		}
-		if len(args) < 2 {
-			return opts, fmt.Errorf("%s", loopUsage)
-		}
-		switch args[0] {
-		case "--ask":
-			opts.Ask = args[1]
-		case "--max-passes":
-			value, err := positiveInt(args[1], "--max-passes")
-			if err != nil {
-				return opts, err
-			}
-			opts.MaxPasses = value
-		case "--settle":
-			value, err := positiveInt(args[1], "--settle")
-			if err != nil {
-				return opts, err
-			}
-			opts.Settle = value
-		case "--timeout":
-			value, err := positiveDuration(args[1], "--timeout")
-			if err != nil {
-				return opts, err
-			}
-			opts.Timeout = value
-		default:
-			return opts, fmt.Errorf("unknown loop option %q — %s", args[0], loopUsage)
-		}
-		args = args[2:]
+	var err error
+	opts.Timeout, err = positiveDuration(flags.Lookup("timeout").Value.String(), "--timeout")
+	if err != nil {
+		return opts, err
 	}
 	if len(opts.Mind) == 0 {
 		if mind := os.Getenv("SELF_LOOP_MIND"); mind != "" {
@@ -143,17 +123,6 @@ func stateRevision(st *state) string {
 	}
 	last := st.Events[len(st.Events)-1]
 	return fmt.Sprintf("%d:%d:%s", len(st.Events), last.Seq, last.ID)
-}
-
-func withEnv(env []string, key, value string) []string {
-	prefix := key + "="
-	out := make([]string, 0, len(env)+1)
-	for _, item := range env {
-		if !strings.HasPrefix(item, prefix) {
-			out = append(out, item)
-		}
-	}
-	return append(out, prefix+value)
 }
 
 // loopAsk is the ask a waking receives: a line of facts the kernel alone knows
@@ -195,8 +164,8 @@ func loopAsk(pass, maxPasses, quiet, settle int, timeout time.Duration, nudge st
 
 func cmdLoop(home string, args []string, out, diag io.Writer) error {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprintln(out, loopUsage)
-		return nil
+		_, err := fmt.Fprintln(out, loopUsage)
+		return err
 	}
 	opts, err := parseLoopOptions(args)
 	if err != nil {
@@ -225,18 +194,17 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 		// Tool-capable minds must act on the same body that produced their
 		// situated prompt. Pin the already-resolved home even when the caller
 		// selected it implicitly through cwd rather than SELF_HOME.
-		cmd.Env = withEnv(os.Environ(), "SELF_HOME", home)
-		cmd.Stdin = bytes.NewBufferString(prompt)
-		var stdout bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &stdout, diag
+		cmd.Env = append(os.Environ(), "SELF_HOME="+home)
+		cmd.Stdin, cmd.Stderr = strings.NewReader(prompt), diag
 		// The mind is a tree — a wrapper, a model process, the shells it spawns
 		// — so it gets its own process group and the whole group is killed
 		// together. Killing only the wrapper left grandchildren holding stdout,
-		// and Wait sat on that pipe long after the deadline.
+		// and Wait sat on that pipe long after the deadline. SIGKILL also stops
+		// children that ignore SIGTERM; Cmd's fallback only kills the leader.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 		cmd.WaitDelay = 5 * time.Second
-		err = cmd.Run()
+		stdout, err := cmd.Output()
 		cancel()
 		if sigCtx.Err() != nil {
 			return fmt.Errorf("interrupted on waking %d — the mind was stopped with the loop; whatever it appended stands", pass)
@@ -250,7 +218,7 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 		// A refused script is recorded as script.rejected and its reason rides
 		// the next waking. Ending the loop here would be the one way a mind
 		// could never learn from the refusal it just earned.
-		if err := cmdHear(home, stdout.Bytes(), out); err != nil {
+		if err := cmdHear(home, stdout, out); err != nil {
 			if !errors.Is(err, errRefused) {
 				return fmt.Errorf("hearing waking %d: %w", pass, err)
 			}

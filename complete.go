@@ -11,8 +11,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -159,39 +157,13 @@ func runCompleter(home string, st *state, name string, args []string) []string {
 	if c == nil || c.Receipt == nil {
 		return nil
 	}
-	bin, err := materialize(home, st, kindView, name)
-	if err != nil {
-		return nil
-	}
-	scratch, err := os.MkdirTemp("", "self-complete-")
-	if err != nil {
-		return nil
-	}
-	defer os.RemoveAll(scratch)
-
 	ctx, cancel := context.WithTimeout(context.Background(), completerTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env, cmd.Dir = scriptEnv("", scratch), scratch
-	// Killing the script does not kill what it spawned. A grandchild that
-	// inherited stdout keeps the pipe open, and Wait would sit on that pipe long
-	// past the deadline: the frozen shell this deadline exists to prevent. Stop
-	// waiting on the pipe when the process is gone.
-	cmd.WaitDelay = completerTimeout
-	stdin, err := cmd.StdinPipe()
+	out, err := executeView(ctx, home, st, name, args, io.Discard, completerTimeout)
 	if err != nil {
 		return nil
 	}
-	var buf strings.Builder
-	cmd.Stdout = &buf
-	if cmd.Start() != nil {
-		return nil
-	}
-	feed(stdin, consumed(st.Events, c.Receipt.Consumes))
-	if cmd.Wait() != nil {
-		return nil
-	}
-	lines := strings.Split(strings.ReplaceAll(buf.String(), "\r", ""), "\n")
+	lines := strings.Split(strings.ReplaceAll(string(out), "\r", ""), "\n")
 	if len(lines) > completerMaxLines {
 		lines = lines[:completerMaxLines]
 	}

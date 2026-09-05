@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+import json
+import sys
+
+USAGE = "usage: goal create <id> <title> <outcome> [project] [parent] [depends_on...] | depends <id> [dependency...] | delegate <id> <owner> | own <id> | hold <id> <reason...> | resume <id> [note...] | update|progress|compact|project|complete|milestone|kpi|close|delete ..."
+args = sys.argv[1:]
+if not args:
+    print(USAGE, file=sys.stderr)
+    raise SystemExit(2)
+
+events = []
+for line in sys.stdin:
+    try:
+        event = json.loads(line)
+    except (TypeError, ValueError):
+        continue
+    if isinstance(event, dict):
+        events.append(event)
+
+# This self has more than one body, and `seq` is assigned per body: a moment
+# learned from the other one today lands with a higher seq than everything
+# written here yesterday. Folding "last wins" over log order, or sorting by
+# seq, therefore renders a different answer on each body. occurred_at travels
+# with the moment; name and payload break ties the same way on both sides.
+import re as _re
+_MOMENT = _re.compile(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$")
+
+
+def moment(event):
+    stamp = _MOMENT.match(str((event or {}).get("occurred_at") or ""))
+    return ("".join(stamp.group(i) for i in range(1, 7)) + (stamp.group(7) or "")[:9].ljust(9, "0")
+            if stamp else "",
+            str((event or {}).get("name") or ""),
+            json.dumps((event or {}).get("payload") or {}, sort_keys=True, separators=(",", ":")))
+
+
+def origin(event):
+    """Which body witnessed this. The door is the only honest local fact on a
+    deposited event: seq is re-assigned and by/occurred_at belong to the peer."""
+    door = str((event or {}).get("via") or "")
+    return door[6:] if door.startswith("learn:") else "here"
+
+
+events.sort(key=moment)
+
+
+def emit(name, payload):
+    print(json.dumps({"name": name, "payload": payload}, ensure_ascii=False))
+
+
+goals = {}
+removed = set()
+latest_progress = {}
+latest_compaction = {}
+latest_completion = {}
+latest_milestones = {}
+latest_kpis = {}
+for event in events:
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        continue
+    goal = payload.get("goal")
+    if event.get("name") == "goal.created" and isinstance(goal, str):
+        goals.setdefault(goal, dict(payload))
+    elif event.get("name") == "goal.updated" and goal in goals:
+        if payload.get("status"):
+            goals[goal]["status"] = payload["status"]
+        if isinstance(payload.get("depends_on"), list):
+            goals[goal]["depends_on"] = payload["depends_on"]
+        if "owner" in payload:
+            goals[goal]["owner"] = payload["owner"]
+    elif event.get("name") == "goal.removed" and isinstance(goal, str):
+        removed.add(goal)
+    elif event.get("name") == "goal.progress" and isinstance(goal, str):
+        latest_progress[goal] = payload.get("report")
+    elif event.get("name") == "goal.compacted" and isinstance(goal, str):
+        latest_compaction[goal] = payload.get("summary")
+    elif event.get("name") == "goal.completion.requested" and isinstance(goal, str):
+        latest_completion[goal] = payload
+    elif event.get("name") == "goal.milestone" and isinstance(goal, str):
+        latest_milestones[(goal, payload.get("milestone"))] = payload.get("status")
+    elif event.get("name") == "goal.kpi" and isinstance(goal, str):
+        latest_kpis[(goal, payload.get("name"))] = (payload.get("value"), payload.get("target"))
+
+closed = {"closed", "done", "completed", "cancelled", "removed"}
+
+
+def require_goal(goal):
+    if goal not in goals or goal in removed:
+        print(f"unknown goal: {goal}", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def require_open(goal):
+    require_goal(goal)
+    if is_closed(goal):
+        print(f"goal {goal} is closed", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def no_change():
+    print("no changes", file=sys.stderr)
+    raise SystemExit(0)
+
+
+def effective_owner(goal):
+    current, seen = goal, set()
+    while current in goals and current not in seen:
+        seen.add(current)
+        if "owner" in goals[current]:
+            return str(goals[current].get("owner") or "")
+        current = goals[current].get("parent")
+    return ""
+
+
+def held_by(goal):
+    current, seen = goal, set()
+    while current in goals and current not in seen:
+        seen.add(current)
+        if str(goals[current].get("status", "active")).lower() == "on_hold":
+            return current
+        current = goals[current].get("parent")
+    return ""
+
+
+def is_closed(goal):
+    return goal in removed or str(goals.get(goal, {}).get("status", "active")).lower() in closed
+
+
+def blockers(goal):
+    return [dependency for dependency in goals.get(goal, {}).get("depends_on", []) if not is_closed(dependency)]
+
+
+def validate_dependencies(goal, dependencies):
+    dependencies = list(dict.fromkeys(dependency for dependency in dependencies if dependency))
+    missing = [dependency for dependency in dependencies if dependency not in goals or dependency in removed]
+    if goal in dependencies:
+        print(f"goal {goal} cannot depend on itself", file=sys.stderr)
+        raise SystemExit(2)
+    if missing:
+        print("unknown dependencies: " + ", ".join(missing), file=sys.stderr)
+        raise SystemExit(2)
+    graph = {name: list(item.get("depends_on", [])) for name, item in goals.items()}
+    graph[goal] = dependencies
+
+    def reaches(start, target, seen):
+        if start == target:
+            return True
+        if start in seen:
+            return False
+        seen.add(start)
+        return any(reaches(item, target, seen) for item in graph.get(start, []))
+
+    if any(reaches(dependency, goal, set()) for dependency in dependencies):
+        print(f"dependencies would create a cycle through {goal}", file=sys.stderr)
+        raise SystemExit(2)
+    return dependencies
+
+
+kind = args[0]
+if kind == "create" and len(args) >= 4:
+    goal = args[1]
+    if goal in goals:
+        candidate = {
+            "title": args[2], "outcome": args[3],
+            "project": args[4] if len(args) > 4 else "",
+            "parent": args[5] if len(args) > 5 else "",
+            "depends_on": list(dict.fromkeys(args[6:])),
+        }
+        existing = goals[goal]
+        if all(existing.get(key, [] if key == "depends_on" else "") == value for key, value in candidate.items()):
+            no_change()
+        print(f"goal {goal} already exists with a different definition", file=sys.stderr)
+        raise SystemExit(2)
+    else:
+        dependencies = validate_dependencies(goal, args[6:])
+        emit("goal.created", {"goal": goal, "title": args[2], "outcome": args[3], "project": args[4] if len(args) > 4 else "", "parent": args[5] if len(args) > 5 else "", "depends_on": dependencies, "status": "active"})
+elif kind == "depends" and len(args) >= 2:
+    require_open(args[1])
+    dependencies = validate_dependencies(args[1], args[2:])
+    if goals[args[1]].get("depends_on", []) == dependencies:
+        no_change()
+    emit("goal.updated", {"goal": args[1], "depends_on": dependencies, "note": "dependencies replaced"})
+elif kind == "delegate" and len(args) == 3:
+    require_open(args[1])
+    owner = args[2].strip()
+    if not owner or owner.lower() in {"self", "me", "wouter"}:
+        print("delegate needs an employee name; use `goal own <goal>` for Wouter-owned work", file=sys.stderr)
+        raise SystemExit(2)
+    if effective_owner(args[1]) == owner:
+        no_change()
+    emit("goal.updated", {"goal": args[1], "owner": owner, "note": f"delegated to {owner}; descendants inherit this owner unless explicitly overridden"})
+elif kind == "own" and len(args) == 2:
+    require_open(args[1])
+    if "owner" in goals[args[1]] and goals[args[1]].get("owner") == "":
+        no_change()
+    if "owner" not in goals[args[1]] and not effective_owner(args[1]):
+        no_change()
+    emit("goal.updated", {"goal": args[1], "owner": "", "note": "ownership returned to Wouter; descendants inherit unless explicitly delegated"})
+elif kind == "hold" and len(args) >= 3:
+    require_open(args[1])
+    if str(goals[args[1]].get("status", "active")).lower() == "on_hold":
+        no_change()
+    emit("goal.updated", {"goal": args[1], "status": "on_hold", "note": " ".join(args[2:])})
+elif kind == "resume" and len(args) >= 2:
+    require_goal(args[1])
+    if str(goals[args[1]].get("status", "active")).lower() != "on_hold":
+        no_change()
+    emit("goal.updated", {"goal": args[1], "status": "active", "note": " ".join(args[2:]) or "resumed"})
+elif kind == "update" and len(args) >= 3:
+    require_open(args[1])
+    emit("goal.updated", {"goal": args[1], "note": " ".join(args[2:])})
+elif kind == "progress" and len(args) >= 3:
+    require_open(args[1])
+    if held_by(args[1]):
+        print(f"goal {args[1]} is on hold through {held_by(args[1])}; resume it before progressing", file=sys.stderr)
+        raise SystemExit(2)
+    if blockers(args[1]):
+        print(f"goal {args[1]} is blocked by: {', '.join(blockers(args[1]))}", file=sys.stderr)
+        raise SystemExit(2)
+    report = " ".join(args[2:])
+    if latest_progress.get(args[1]) == report:
+        no_change()
+    emit("goal.progress", {"goal": args[1], "report": report})
+elif kind == "compact" and len(args) >= 3:
+    require_open(args[1])
+    summary = " ".join(args[2:])
+    if latest_compaction.get(args[1]) == summary:
+        no_change()
+    emit("goal.compacted", {"goal": args[1], "summary": summary})
+elif kind == "project" and len(args) >= 3:
+    if args[1].lower() in {"delete", "remove"}:
+        emit("project.removed", {"project": args[2], "reason": " ".join(args[3:]) or "removed"})
+    else:
+        emit("project.registered", {"project": args[1], "repo": args[2], "default_base": args[3] if len(args) > 3 else ""})
+elif kind == "complete" and len(args) >= 4:
+    require_open(args[1])
+    if held_by(args[1]):
+        print(f"goal {args[1]} is on hold through {held_by(args[1])}; resume it before requesting completion", file=sys.stderr)
+        raise SystemExit(2)
+    item = {"goal": args[1], "branch": args[2], "commit": args[3], "worktree_removed": len(args) > 4 and args[4].lower() == "true", "note": " ".join(args[5:])}
+    if latest_completion.get(args[1]) == item:
+        no_change()
+    emit("goal.completion.requested", item)
+elif kind == "milestone" and len(args) >= 4:
+    require_open(args[1])
+    status = " ".join(args[3:])
+    if latest_milestones.get((args[1], args[2])) == status:
+        no_change()
+    emit("goal.milestone", {"goal": args[1], "milestone": args[2], "status": status})
+elif kind == "kpi" and len(args) >= 5:
+    require_open(args[1])
+    target = " ".join(args[4:])
+    if latest_kpis.get((args[1], args[2])) == (args[3], target):
+        no_change()
+    emit("goal.kpi", {"goal": args[1], "name": args[2], "value": args[3], "target": target})
+elif kind == "close" and len(args) >= 2:
+    require_goal(args[1])
+    if is_closed(args[1]):
+        no_change()
+    resolutions = {"completed", "cancelled", "superseded", "transferred"}
+    resolution = args[2].lower() if len(args) > 2 and args[2].lower() in resolutions else "completed"
+    note_start = 3 if len(args) > 2 and args[2].lower() in resolutions else 2
+    note = " ".join(args[note_start:]) or resolution
+    if resolution == "completed" and blockers(args[1]):
+        print(f"goal {args[1]} is blocked by: {', '.join(blockers(args[1]))}; use cancelled, superseded, or transferred only when that is the true resolution", file=sys.stderr)
+        raise SystemExit(2)
+    emit("goal.updated", {"goal": args[1], "status": "closed", "resolution": resolution, "note": note})
+elif kind in {"delete", "remove"} and len(args) >= 2:
+    require_goal(args[1])
+    emit("goal.removed", {"goal": args[1], "reason": " ".join(args[2:]) or "removed"})
+else:
+    print(USAGE, file=sys.stderr)
+    raise SystemExit(2)
