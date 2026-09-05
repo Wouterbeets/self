@@ -90,9 +90,6 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return err
 
 	case "run":
-		if len(args) < 1 {
-			return fmt.Errorf("usage: self run <command> [args...]")
-		}
 		// No ensureSecret here. Minting a key on this path meant `self run`
 		// dropped a .secret in whatever directory it was called from — and, on a
 		// real instance whose key went missing, forged a fresh one, hiding the
@@ -101,7 +98,26 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		evs, err := runCommand(home, st, args[0], args[1:], doorCLI, callerClaim())
+		if len(args) < 1 {
+			// No name is a question about what is runnable, not a
+			// failure. Answer it with the names this log actually knows.
+			fmt.Fprintln(out, "usage: self run <command> [args...]")
+			fmt.Fprintln(out)
+			fmt.Fprint(out, commandUsage(st))
+			return nil
+		}
+		name := args[0]
+		// A name the log does not know at all — no command, no view by that
+		// name — is a guess. Point the reader at what is real rather than
+		// sending them to check `self brief` for the list. A view by that name
+		// falls through, so materialize is the one that says so and offers
+		// `self view`.
+		if st.cap(kindCommand, name) == nil && st.cap(kindView, name) == nil {
+			fmt.Fprintf(out, "no command %q in this log\n\n", name)
+			fmt.Fprint(out, commandUsage(st))
+			return nil
+		}
+		evs, err := runCommand(home, st, name, args[1:], doorCLI, callerClaim())
 		if err != nil {
 			return err
 		}
@@ -282,6 +298,23 @@ func viewUsage(st *state) string {
 	}
 	if len(views) == 0 && st.cap(kindView, "log") == nil {
 		b.WriteString("\n(no declared views yet — only the built-in log; `self help` shows how to author one)\n")
+	}
+	return b.String()
+}
+
+// commandUsage lists the commands this instance can run, so a reader who asks
+// for a command by a name the log does not know — or asks for none at all — is
+// pointed at what actually exists instead of guessing. It mirrors the command
+// section of `brief`, because the two answer the same question: what can I do here?
+func commandUsage(st *state) string {
+	var b strings.Builder
+	b.WriteString("commands on this instance — `self run <name> [args…]`:\n")
+	cmds := st.list(kindCommand)
+	for _, c := range cmds {
+		fmt.Fprintf(&b, "- %s — %s%s\n", c.Name, oneLine(c.Decl.Description), pendingMark(c))
+	}
+	if len(cmds) == 0 {
+		b.WriteString("\n(no declared commands yet — `self help` shows how to author one)\n")
 	}
 	return b.String()
 }

@@ -2,6 +2,15 @@
 
 ## Unreleased — one fixed-point loop
 
+### Changed: `self run` answers with what exists
+
+Bare `self run` now prints the commands this log holds — descriptions and
+pending marks included, exit zero — instead of a bare usage error, and a name
+the log does not know is answered with the same list instead of an error that
+sends the reader to `self brief` for it. A view by the missing name still falls
+through, so materialize offers `self view <name>`. `self view` has behaved this
+way since it landed; the two verbs now answer the same question the same way.
+
 ### Changed: `self loop` wakes a body instead of polling a fixed point
 
 Driving the loop on an empty instance showed it settling in two passes every

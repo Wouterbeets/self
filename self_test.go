@@ -1695,6 +1695,49 @@ func TestLoopCLIOverridesEnvironmentDefaults(t *testing.T) {
 
 // ─────────────────────────────── the CLI shape ──────────────────────────────
 
+// `self run` with no name is a question about what is runnable, and a name the
+// log does not know is a guess: both are answered with the commands this log
+// actually holds — including declared-but-pending ones, marked — rather than an
+// error that sends the reader to `self brief` for the list. A view by the
+// missing name is not silently listed as the answer: run falls through, and
+// materialize offers `self view` instead.
+func TestRunExposesInstalledCommands(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	heard(t, h, line(t, "command.declared", decl{Name: "later", Description: "not built yet"}))
+
+	var out bytes.Buffer
+	if err := dispatch(h, "run", nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	bare := out.String()
+	for _, want := range []string{
+		"usage: self run <command> [args...]",
+		"- entry — append an entry",
+		"- later — not built yet",
+		"pending — no script yet",
+	} {
+		if !strings.Contains(bare, want) {
+			t.Fatalf("bare self run is missing %q:\n%s", want, bare)
+		}
+	}
+
+	out.Reset()
+	if err := dispatch(h, "run", []string{"entirely-missing"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	miss := out.String()
+	if !strings.Contains(miss, `no command "entirely-missing" in this log`) || !strings.Contains(miss, "- entry — append an entry") {
+		t.Fatalf("a mistyped command name did not point at what exists:\n%s", miss)
+	}
+
+	out.Reset()
+	err := dispatch(h, "run", []string{"journal"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "there is a view by that name") {
+		t.Fatalf("running a view name should fall through to materialize's hint, got %v", err)
+	}
+}
+
 func TestUnknownVerbIsNotSilentlyAnAsk(t *testing.T) {
 	h := home(t)
 	if err := dispatch(h, "brif", nil, &bytes.Buffer{}); err == nil {
