@@ -1,11 +1,4 @@
-// self-browse — open a view of a self instance in the system browser.
-//
-//	self-browse [view [arg…]]
-//
-// Probes the self-serve port. If nothing is listening, it starts one detached
-// beside this binary and waits for the port, then hands the URL to xdg-open
-// (or `open` on Darwin). The browser is the client; the server stays
-// stateless; the log stays the only state.
+// self-browse — open a view in the system browser, starting self-serve if needed.
 package main
 
 import (
@@ -62,9 +55,6 @@ func listening(port string) bool {
 	return true
 }
 
-// startServer detaches a self-serve next to this binary and waits for the
-// port. Output goes nowhere: a server that cannot bind will not come up, and
-// the wait below is the honest diagnostic.
 func startServer(port string) error {
 	bin, err := lookServe()
 	if err != nil {

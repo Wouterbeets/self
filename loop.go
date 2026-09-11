@@ -73,7 +73,7 @@ func positiveDuration(value, source string) (time.Duration, error) {
 func parseLoopOptions(args []string) (loopOptions, error) {
 	opts := loopOptions{Ask: os.Getenv("SELF_LOOP_ASK")}
 	flags := flag.NewFlagSet("loop", flag.ContinueOnError)
-	flags.SetOutput(io.Discard) // the caller owns diagnostics
+	flags.SetOutput(io.Discard)
 	flags.StringVar(&opts.Ask, "ask", opts.Ask, "")
 	for name, fallback := range map[string]string{"max-passes": "12", "settle": "2", "timeout": "30m"} {
 		if value := os.Getenv("SELF_LOOP_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))); value != "" {
@@ -85,8 +85,6 @@ func parseLoopOptions(args []string) (loopOptions, error) {
 		return opts, fmt.Errorf("loop options: %w — %s", err, loopUsage)
 	}
 	opts.Mind = flags.Args()
-	// Validate after applying CLI overrides, so an overridden environment
-	// default cannot reject an otherwise valid invocation.
 	for _, option := range []struct {
 		name string
 		dst  *int
@@ -114,9 +112,6 @@ func parseLoopOptions(args []string) (loopOptions, error) {
 	return opts, nil
 }
 
-// stateRevision is deliberately kernel-private. The log is append-only, so its
-// length and final immutable identity change on every authoritative append.
-// Drivers should use `self loop`, not learn this representation.
 func stateRevision(st *state) string {
 	if len(st.Events) == 0 {
 		return "empty"
@@ -125,11 +120,6 @@ func stateRevision(st *state) string {
 	return fmt.Sprintf("%d:%d:%s", len(st.Events), last.Seq, last.ID)
 }
 
-// loopAsk is the ask a waking receives: a line of facts the kernel alone knows
-// — which waking this is, how many remain, what woke the body, whether the last
-// waking was quiet — and then the loop layer from PROTOCOL.md. The facts are
-// what changes between passes when the mind changes nothing, so a body is never
-// woken twice into an identical prompt and told nothing is asked of it.
 func loopAsk(pass, maxPasses, quiet, settle int, timeout time.Duration, nudge string) string {
 	var b strings.Builder
 	remaining := maxPasses - pass
@@ -141,8 +131,6 @@ func loopAsk(pass, maxPasses, quiet, settle int, timeout time.Duration, nudge st
 	default:
 		fmt.Fprintf(&b, "Waking %d of this body; at most %d more before it rests.", pass, remaining)
 	}
-	// The mind cannot know how long a waking lasts; the kernel does. A waking
-	// that built for nine minutes and appended nothing left nothing.
 	fmt.Fprintf(&b, "\nThis waking ends after %s. Only what is appended by then persists; a declaration left pending is safe, a script still on disk is not.", timeout)
 	if nudge = strings.TrimSpace(nudge); nudge != "" {
 		fmt.Fprintf(&b, "\nWhat woke this body: %s", nudge)
@@ -171,13 +159,7 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// Name the body before the first waking. A shell that exports SELF_HOME
-	// globally wakes that instance, not the cwd, and a nudge meant for a scratch
-	// body landing on a real one should be visible before the mind acts.
 	fmt.Fprintf(diag, "self loop: body %s\n", home)
-	// A signal to the loop ends the waking too. Without this, killing `self loop`
-	// left the mind running as an orphan: still writing to the body through its
-	// own `self run` calls, its final answer going to a closed pipe.
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	quiet := 0
@@ -191,16 +173,8 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 
 		ctx, cancel := context.WithTimeout(sigCtx, opts.Timeout)
 		cmd := exec.CommandContext(ctx, opts.Mind[0], opts.Mind[1:]...)
-		// Tool-capable minds must act on the same body that produced their
-		// situated prompt. Pin the already-resolved home even when the caller
-		// selected it implicitly through cwd rather than SELF_HOME.
 		cmd.Env = append(os.Environ(), "SELF_HOME="+home)
 		cmd.Stdin, cmd.Stderr = strings.NewReader(prompt), diag
-		// The mind is a tree — a wrapper, a model process, the shells it spawns
-		// — so it gets its own process group and the whole group is killed
-		// together. Killing only the wrapper left grandchildren holding stdout,
-		// and Wait sat on that pipe long after the deadline. SIGKILL also stops
-		// children that ignore SIGTERM; Cmd's fallback only kills the leader.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 		cmd.WaitDelay = 5 * time.Second
@@ -215,9 +189,6 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("loop mind exited on waking %d: %w", pass, err)
 		}
-		// A refused script is recorded as script.rejected and its reason rides
-		// the next waking. Ending the loop here would be the one way a mind
-		// could never learn from the refusal it just earned.
 		if err := cmdHear(home, stdout, out); err != nil {
 			if !errors.Is(err, errRefused) {
 				return fmt.Errorf("hearing waking %d: %w", pass, err)
@@ -242,8 +213,6 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 		fmt.Fprintf(diag, "self loop: waking %d changed authoritative state (%d -> %d events)\n", pass, len(before.Events), len(after.Events))
 	}
 	if quiet > 0 {
-		// The cap arrived on a quiet waking: the log did not move, so this is a
-		// rest, not a failure — the body simply ran out of wakings to be asked in.
 		fmt.Fprintf(diag, "self loop: rested at --max-passes %d — the last waking changed nothing\n", opts.MaxPasses)
 		return nil
 	}

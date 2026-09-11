@@ -1,25 +1,5 @@
 package main
 
-// The seam: two faces, and which one runs is structural. An ask arrives as argv
-// and is situated (a read, appending nothing); what comes back from a mind
-// arrives on stdin, at `self hear` (the one write door).
-//
-//	self "add a mood tracker" | claude -p | self hear
-//
-// Prose alone cannot tell an ask from an answer to one, which is why the
-// previous kernel reached for isatty — and why its documented loop misfiled a
-// mind's reply as a question everywhere an agent actually runs, while nobody
-// could know what `self` did without simulating file descriptors.
-//
-// The law: reads project, writes append, orientation is a read. An agent can
-// situate a hundred times without scarring the log, and the read face never
-// touches stdin, so it cannot block at the head of a pipeline either.
-//
-// PROTOCOL.md is the contract — the wire, the loop, the exit codes. Comments in
-// this package point at it rather than restating it, because six hand-synced
-// copies of one contract is how the previous kernel came to contradict itself
-// inside a single brief.
-
 import (
 	"bufio"
 	"bytes"
@@ -32,11 +12,6 @@ import (
 	"strings"
 )
 
-// protocolDoc is the complete contract, embedded so a `self` on PATH describes
-// itself with no repo in sight. `self help` prints it whole. Situated turns
-// splice only marked layers, keeping one authoritative wording without carrying
-// the entire protocol into every working context.
-//
 //go:embed PROTOCOL.md
 var protocolDoc string
 
@@ -54,29 +29,11 @@ func protocolLayer(name string) string {
 	return strings.TrimSpace(body)
 }
 
-// errRefused is the outcome `hear` reports when at least one authored script
-// was refused. Every event in the body still landed and every refusal is in the
-// log as script.rejected; the error is the pipeline's exit code, and `self loop`
-// tests for it by identity so a refusal can teach the next waking instead of
-// ending the run.
+// errRefused is distinct so the loop can continue after a refusal.
 var errRefused = errors.New("authored script(s) refused")
 
-// defaultAsk is what bare `self` situates: not a priority policy, only an
-// invitation to inspect the instance-owned surface. The mind decides whether
-// capability or domain state warrants durable action.
 const defaultAsk = `No specific ask. Orient from this instance, explore its views, and act only if something warrants durable action. Silence is valid.`
 
-// ──────────────────────────────── the seam ──────────────────────────────────
-//
-// Direction is structural, not sniffed. An ask arrives as ARGV; what comes back
-// from a mind arrives on STDIN, at `self hear`. Prose alone cannot tell the two
-// apart — "what is going on?" and a mind's answer to it are both prose — which
-// is exactly why the previous kernel reached for isatty and got the loop wrong
-// everywhere an agent runs. So the read face never reads stdin (it would also
-// block at the head of a pipeline), and the write face is named.
-
-// situate is the read face: everything a cold mind needs to act, and nothing the
-// log does not already hold. Appends nothing, ever.
 func cmdSituate(home string, ask string, out io.Writer) error {
 	empty := strings.TrimSpace(ask) == ""
 	if empty {
@@ -92,20 +49,6 @@ func cmdSituate(home string, ask string, out io.Writer) error {
 	return nil
 }
 
-// cmdHear is the write face — the only door a mind's output enters through.
-// Event lines land and install; every other line is ignored, echoed, and
-// counted. Nothing else is written.
-//
-// This used to be strict: a body was the wire only if EVERY line was an event,
-// on the theory that a mind narrating around JSON must not partially mutate
-// state. Driving the real loop killed that theory. Told plainly that stdout is
-// the wire, `claude -p` opened with one line — "Printing the six lines to
-// stdout now, exactly as the wire requires" — and six perfect events followed.
-// Strictness threw all six away. That is the modal behaviour of a chat-trained
-// model, and the property strictness protected does not exist here: `hear` is
-// only ever invoked to ingest, so there is no reply face for a prose body to be
-// mistaken for. Leniency is also less code — a stray fence or a backticked line
-// is just a line that is not an event.
 func cmdHear(home string, input []byte, out io.Writer) error {
 	evs, scripts, prose, err := wire(string(input))
 	if err != nil {
@@ -123,21 +66,12 @@ func cmdHear(home string, input []byte, out io.Writer) error {
 	return hear(home, evs, scripts, prose, out)
 }
 
-// ────────────────────────────────── wire ────────────────────────────────────
-
-// authored is a script a mind wrote, carried on the wire as script.authored. It
-// never lands in the log raw: the signed receipt is its record.
 type authored struct {
 	Type   string `json:"type"`
 	Name   string `json:"name"`
 	Script string `json:"script"`
 }
 
-// wire splits a mind's output into events, authored scripts, and everything
-// else. A line is an event when it is a JSON object with a dotted lowercase
-// name AND a payload key. Both halves matter: on the name test alone, a mind
-// reporting {"name":"notes","status":"ok"} would land an event called "notes" in
-// the authoritative log.
 func wire(body string) (evs []Event, scripts []authored, prose []string, err error) {
 	all, err := lines(body)
 	if err != nil {
@@ -150,8 +84,6 @@ func wire(body string) (evs []Event, scripts []authored, prose []string, err err
 			continue
 		}
 		if probe.Name == "script.authored" {
-			// Kept even when malformed: a bad authored line is a failure the
-			// log must remember, not a line to drop.
 			var a authored
 			json.Unmarshal(probe.Payload, &a)
 			scripts = append(scripts, a)
@@ -162,11 +94,6 @@ func wire(body string) (evs []Event, scripts []authored, prose []string, err err
 	return evs, scripts, prose, nil
 }
 
-// wireHint names the one wire mistake that is much likelier than any other: a
-// whole body that is a single pretty-printed JSON object. `jq -n` indents by
-// default, so the recipe in the protocol is one flag away from silently doing
-// nothing, and "heard no events" would send its author looking at the payload
-// instead of at the formatting.
 func wireHint(input []byte) string {
 	var whole wireLine
 	if json.Unmarshal(input, &whole) != nil {
@@ -190,8 +117,6 @@ type wireLine struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
-// eventLine parses one line, retrying without surrounding backticks — models
-// wrap single lines in code spans, and a fence line simply is not an event.
 func eventLine(line string) (wireLine, bool) {
 	for _, candidate := range []string{line, strings.TrimSpace(strings.Trim(line, "`"))} {
 		var w wireLine
@@ -202,9 +127,6 @@ func eventLine(line string) (wireLine, bool) {
 	return wireLine{}, false
 }
 
-// lineLimit bounds one wire line. It is generous — a script arrives inline as
-// JSON — but it must be bounded, and crossing it must be an error rather than a
-// silent truncation of everything after it.
 const lineLimit = 64 * 1024 * 1024
 
 func lines(body string) ([]string, error) {
@@ -222,22 +144,13 @@ func lines(body string) ([]string, error) {
 	return out, nil
 }
 
-// ────────────────────────────────── hear ────────────────────────────────────
-
-// hear is the write door: events land, authored scripts install under signed
-// receipts, and the outcome is reported. The whole body is one critical
-// section — a declaration and its script arrive in the same breath, and
-// resolving declared-ness between them must not race another invocation
-// retiring the same capability.
 func hear(home string, evs []Event, scripts []authored, prose []string, out io.Writer) error {
 	key, err := ensureSecret(home)
 	if err != nil {
 		return err
 	}
-	// The report is buffered and written after the lock is released: `out` is
-	// the end of a pipeline and its reader may be arbitrarily slow, and flock
-	// has no timeout, so writing under the lock lets one slow consumer block
-	// every other writer in the home indefinitely.
+	// Buffer the report and write it after the lock: flock has no timeout, and
+	// a slow stdout consumer would otherwise block every other writer.
 	var report bytes.Buffer
 	err = func() error {
 		unlock, lerr := lockLog(home)
@@ -284,15 +197,12 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 		if err := appendLocked(home, batch); err != nil {
 			return err
 		}
-		// Replay the committed batch, including its assigned sequence numbers.
 		st.apply(batch)
 		if installErr != nil {
 			refused = append(refused, fmt.Sprintf("%s/%s: %s", a.Type, a.Name, installErr))
 			continue
 		}
 		c := st.cap(r.Type, r.Name)
-		// The receipt is the record; the file is a convenience that any later
-		// run re-derives. Failing to write it must not cost the rest of the body.
 		if _, err := materialize(home, st, r.Type, r.Name); err != nil {
 			fmt.Fprintf(os.Stderr, "self: installed %s but could not write cap/: %s (a later run re-derives it)\n", c.key(), err)
 		}
@@ -301,8 +211,6 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 
 	retired := applyRetirements(home, st, evs)
 
-	// The report goes to stdout: this is the last stage of a pipeline, and
-	// whether the script installed is the one thing its operator needs.
 	if len(evs) > 0 {
 		fmt.Fprintf(out, "heard %d event(s): seq %d-%d\n", len(evs), evs[0].Seq, evs[len(evs)-1].Seq)
 	}
@@ -316,12 +224,6 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 		fmt.Fprintf(out, "retired %s\n", k)
 	}
 	if len(prose) > 0 {
-		// Loud on purpose. Leniency means a stray line does not cost the pass,
-		// and the price is that a line which SHOULD have been an event now
-		// vanishes quietly unless this says otherwise. So it names how many and
-		// shows the first, and the lines go to stderr rather than stdout: the
-		// report is the outcome and a driver script parses it, while chatter is
-		// commentary and belongs beside it, not in it.
 		fmt.Fprintf(os.Stderr, "self: IGNORED %d line(s) — not events. First: %q\n",
 			len(prose), trunc(prose[0], 120))
 		for _, line := range prose {
@@ -342,10 +244,6 @@ func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose
 	return nil
 }
 
-// warnDroppedDeclarations names a declaration that landed in the log but that
-// replay could not use — a missing or unusable name. Without this the paired
-// script is refused as "not declared" and the mind has no way to see that its
-// declaration was the problem, so it re-authors the script forever.
 func warnDroppedDeclarations(st *state, evs []Event) {
 	for _, e := range evs {
 		typ, ok := strings.CutSuffix(e.Name, ".declared")
@@ -360,10 +258,6 @@ func warnDroppedDeclarations(st *state, evs []Event) {
 	}
 }
 
-// install is the trust gate. A mind can only ever propose: the capability must
-// be declared in this log and not retired, and the kernel signs the bytes with
-// its own key. The consumes list is taken from the DECLARATION and signed with
-// the script, so what a view was signed against is what it will be fed.
 func install(st *state, a authored, by string) (receipt, error) {
 	typ, name := strings.TrimSpace(a.Type), strings.TrimSpace(a.Name)
 	if typ == "" || name == "" {
@@ -375,10 +269,6 @@ func install(st *state, a authored, by string) (receipt, error) {
 	if strings.TrimSpace(a.Script) == "" {
 		return receipt{}, fmt.Errorf("script.authored carries no script")
 	}
-	// The kernel execs the blob directly, so the first two bytes decide whether
-	// it can run at all. Refusing here turns an "exec format error" at the
-	// first `self run` — after the receipt was signed — into a reason that
-	// rides the next prompt.
 	if !strings.HasPrefix(a.Script, "#!") {
 		return receipt{}, fmt.Errorf("script has no shebang: its first line must name an interpreter, like #!/bin/sh or #!/usr/bin/env python3")
 	}
@@ -394,14 +284,8 @@ func install(st *state, a authored, by string) (receipt, error) {
 	return r, nil
 }
 
-// applyRetirements takes retired capabilities off the readable surface as their
-// tombstones land, so disk never claims something the log has ended. Every
-// event stays; re-declaring revives it.
-//
-// It consults the replayed state rather than the tombstones alone: one body can
-// retire a capability and then declare it again, and replay is the only thing
-// that knows which of the two came last. Unlinking on the tombstone alone would
-// delete a capability that is live.
+// applyRetirements unlinks from replayed state, not from the tombstone alone:
+// a later declaration in the same body revives the capability.
 func applyRetirements(home string, st *state, evs []Event) []string {
 	var out []string
 	for _, e := range evs {
@@ -413,7 +297,7 @@ func applyRetirements(home string, st *state, evs []Event) []string {
 			continue
 		}
 		if st.cap(t.Type, t.Name) != nil {
-			continue // a later declaration in this same body revived it
+			continue
 		}
 		if err := os.Remove(linkPath(home, t.Type, t.Name)); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "self: retired %s/%s but could not remove its link: %s (self rehydrate retries cleanup)\n", t.Type, t.Name, err)
@@ -423,11 +307,6 @@ func applyRetirements(home string, st *state, evs []Event) []string {
 	return out
 }
 
-// ───────────────────────────────── the prompt ───────────────────────────────
-
-// situate builds a deliberately small wake-up card: a truthful cognitive frame,
-// the instance brief, a minimal wire, conditional pending-growth detail, and the
-// ask. The complete protocol remains available through `self help`.
 func situate(home string, st *state, ask string) string {
 	var b strings.Builder
 	b.WriteString(protocolLayer("core"))
@@ -442,9 +321,6 @@ func situate(home string, st *state, ask string) string {
 	return b.String()
 }
 
-// pendingSection is the strange loop's ask. The rejection reason replayed here
-// is the only thing that makes script.rejected teach anyone anything: without
-// it the refusal is a failure the log remembers and nothing reads.
 func pendingSection(st *state) string {
 	pending := st.pending()
 	if len(pending) == 0 {

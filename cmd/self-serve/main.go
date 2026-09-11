@@ -1,20 +1,6 @@
-// self-serve — the stateless HTTP face of a self instance.
-//
-// It knows nothing about any view and nothing about any command. GET
-// /view/<name>[/<arg>…] is `self view <name> [args…]` with the bytes that
-// returned; /run/<cmd>[/<arg>…] is `self run <cmd> [args…]`. `/` is `self
-// brief`. Every request is a fresh replay, so the server holds no session, no
-// cache, no sidecar — it is a pipe over the kernel, and the log stays the
-// only state.
-//
-//	self-serve            listen on 127.0.0.1:8377 (PORT overrides)
-//	SELF_BIN              kernel to exec (default: a `self` next to this
-//	                      binary, then PATH)
-//
-// Pages keep themselves current: each rendering is stamped with an etag over
-// the kernel's bytes, the page re-asks every two seconds, and a 304 is the
-// whole conversation when the log did not move. The stamp is computed per
-// request, so the server still holds nothing.
+// self-serve — HTTP face of a self instance. GET / is brief, /view/… is
+// `self view`, /run/… is `self run`. PORT and SELF_BIN select the listen
+// address and kernel.
 package main
 
 import (
@@ -80,7 +66,6 @@ func view(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(segs) == 0 {
-		// Zero-arg form is the discoverable index, same as `self view`.
 		out, errOut, code, err := selfOutput("view")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -116,7 +101,6 @@ func view(w http.ResponseWriter, r *http.Request) {
 	var body []byte
 	switch {
 	case len(strings.TrimSpace(string(out))) == 0:
-		// Silence is a view's empty state; say so once, plainly.
 		body = []byte(page(name, "<p>Nothing. The view is silent, which is its empty state.</p>"))
 	case isHTML(out):
 		body = out
@@ -162,8 +146,6 @@ func run(w http.ResponseWriter, r *http.Request) {
 }
 
 func reply(w http.ResponseWriter, r *http.Request, kernel, body []byte) {
-	// The etag is a stamp on the kernel's bytes, so it names the log state
-	// the page shows — not the wire bytes, which gain a script below.
 	etag := etagOf(kernel)
 	if match := r.Header.Get("If-None-Match"); match == etag {
 		w.WriteHeader(http.StatusNotModified)
@@ -180,8 +162,6 @@ func etagOf(b []byte) string {
 	return `"` + hex.EncodeToString(sum[:]) + `"`
 }
 
-// withRefresh appends the two-second checker. The etag travels inside the
-// script, so the page knows what it last saw without any other state.
 func withRefresh(body []byte, etag string) []byte {
 	script := `<script>setInterval(function(){fetch(location.pathname,{headers:{"If-None-Match":` +
 		strconv.Quote(etag) + `}}).then(function(r){if(r.status===200)location.reload()})},2000)</script>`
@@ -227,10 +207,7 @@ func nameSegmentsOK(name string) bool {
 	return true
 }
 
-// resolveName picks the longest known capability name that is a prefix of
-// segs, so /run/timer/set/x is `self run timer/set x` rather than
-// `self run timer set x`. Unknown names fall back to the first segment —
-// the kernel is the one that says they do not exist.
+// Longest known name prefix of segs: /run/timer/set/x is timer/set, not timer.
 func resolveName(segs, names []string) (name string, args []string) {
 	if len(segs) == 0 {
 		return "", nil
@@ -263,7 +240,6 @@ var briefItem = regexp.MustCompile(`(?m)^- (?:\*\*)?([A-Za-z0-9_][A-Za-z0-9_./-]
 var viewIndexItem = regexp.MustCompile(`(?m)^- ([A-Za-z0-9_][A-Za-z0-9_./-]*) —`)
 var markdownLink = regexp.MustCompile(`\[([^\]\r\n]+)\]\((https?://[^\s<>\)]+)\)`)
 
-// Routing consumes the machine interface; the brief is display text only.
 func knownNames(verb string) []string {
 	out, _, code, err := selfOutput("__complete", verb, "")
 	if err != nil || code != 0 {
@@ -328,9 +304,6 @@ func pathEscapeName(name string) string {
 	return strings.Join(parts, "/")
 }
 
-// selfOutput execs the kernel and returns stdout, stderr, and the exit code.
-// A command that appends nothing still exits 0; one that is refused exits
-// nonzero and says why on stderr — both surfaces come back to the caller.
 func selfOutput(argv ...string) (out []byte, errOut string, code int, err error) {
 	cmd := exec.Command(lookSelf(), argv...)
 	cmd.Env = selfEnv()
@@ -344,8 +317,6 @@ func selfOutput(argv ...string) (out []byte, errOut string, code int, err error)
 	return b, "", 0, nil
 }
 
-// lookSelf is the kernel this door talks to: SELF_BIN, then a `self` sitting
-// next to this binary, then PATH. Same rule browse uses to find self-serve.
 func lookSelf() string {
 	if b := os.Getenv("SELF_BIN"); b != "" {
 		return b
@@ -362,8 +333,6 @@ func lookSelf() string {
 	return "self"
 }
 
-// selfEnv is the inherited environment with the claim rewritten: whatever
-// lands in the log through this door is attributable to the browser.
 func selfEnv() []string {
 	env := []string{}
 	for _, kv := range os.Environ() {

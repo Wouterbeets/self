@@ -1,9 +1,5 @@
 package main
 
-// The pinned invariants. Each test names a property the thesis or the protocol
-// depends on, so a future change that breaks one has to break a test that says
-// what it was for.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -21,8 +17,6 @@ import (
 	"unicode/utf8"
 )
 
-// ─────────────────────────────── helpers ────────────────────────────────────
-
 func home(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -31,7 +25,6 @@ func home(t *testing.T) string {
 	return dir
 }
 
-// heard pipes a body through the write door and returns its report.
 func heard(t *testing.T, h, body string) string {
 	t.Helper()
 	var out bytes.Buffer
@@ -70,8 +63,6 @@ func replayed(t *testing.T, h string) *state {
 	return st
 }
 
-// growJournal builds the canonical instance: one command, one view, both
-// installed through the real wire.
 func growJournal(t *testing.T, h string) {
 	t.Helper()
 	body := line(t, "command.declared", decl{Name: "entry", Description: "append an entry"}) +
@@ -85,8 +76,6 @@ func growJournal(t *testing.T, h string) {
 		t.Fatalf("growJournal did not install: %s", report)
 	}
 }
-
-// ─────────────────────────── the law: reads project ─────────────────────────
 
 // Orientation must not write. The previous kernel appended self.asked before
 // printing a prompt and minted .secret from every read path, so looking at an
@@ -142,8 +131,6 @@ func TestSituateIgnoresStdin(t *testing.T) {
 		t.Fatal("the read face read stdin and blocked")
 	}
 }
-
-// ────────────────────────────── the log ─────────────────────────────────────
 
 func TestLogAppendAndReplay(t *testing.T) {
 	h := home(t)
@@ -377,8 +364,6 @@ func TestLastSeqScansOnlyTheTail(t *testing.T) {
 	}
 }
 
-// ──────────────────────────── the strange loop ──────────────────────────────
-
 // The whole thesis in one test: a declaration becomes pending work, a mind
 // authors it through the wire, the kernel signs and installs it, and the new
 // capability is immediately usable — with nothing left pending.
@@ -480,8 +465,6 @@ func TestRedeclarationReopensPendingWork(t *testing.T) {
 		t.Fatalf("the older script stopped running while pending: %v", err)
 	}
 }
-
-// ───────────────────────────── the trust gate ───────────────────────────────
 
 // A mind can only propose. Nothing installs without a declaration in this log.
 func TestUndeclaredScriptIsRefused(t *testing.T) {
@@ -613,8 +596,6 @@ func TestReservedNamesAreRefused(t *testing.T) {
 	}
 }
 
-// ───────────────────────────────── the wire ─────────────────────────────────
-
 // A line needs BOTH a dotted name and a payload key. On the name test alone, a
 // mind reporting {"name":"notes","status":"ok"} would land an event in the log.
 func TestWireDiscriminator(t *testing.T) {
@@ -709,8 +690,6 @@ func TestProseBodyWritesNothingAndPassesThrough(t *testing.T) {
 		t.Fatalf("a prose body appended %d event(s)", len(after)-len(before))
 	}
 }
-
-// ─────────────────────────── views are pure replays ─────────────────────────
 
 func TestViewSeesOnlyWhatItConsumes(t *testing.T) {
 	h := home(t)
@@ -875,8 +854,6 @@ func TestCommandGetsTheInstanceAndNothingElse(t *testing.T) {
 		t.Fatalf("the caller's environment leaked into a command: %q", p.Sneaky)
 	}
 }
-
-// ─────────────────────────────── retirement ─────────────────────────────────
 
 func TestRetirementLeavesTheSurfaceAndTheLogKeepsEverything(t *testing.T) {
 	h := home(t)
@@ -1053,8 +1030,6 @@ func TestNoKeyMeansNoCapabilities(t *testing.T) {
 		t.Fatal("the brief hides a missing key")
 	}
 }
-
-// ──────────────────────────── the account protocol ──────────────────────────
 
 // The round trip: give writes plain text, learn deposits it verbatim, and the
 // receiving instance grows its OWN expression of the intent.
@@ -1326,8 +1301,6 @@ func TestAccountEdgesAreRefused(t *testing.T) {
 		t.Fatal("an empty selector gave the whole log away")
 	}
 }
-
-// ───────────────────────────── prompts and briefs ───────────────────────────
 
 func TestOrdinaryPromptCarriesTheDietNotTheProtocol(t *testing.T) {
 	for _, layer := range []string{"core", "growth", "loop"} {
@@ -1696,8 +1669,6 @@ func TestLoopCLIOverridesEnvironmentDefaults(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────── the CLI shape ──────────────────────────────
-
 // Discovery must preserve the run/view distinction: absent names list the
 // requested kind, unknown names fail, wrong-kind names suggest the other verb, and only view has
 // a built-in log. None of those lookups should append events.
@@ -1800,17 +1771,8 @@ func TestLoopHelpDocumentsDefaultsAndExecution(t *testing.T) {
 	}
 }
 
-// No file in this repository may show a pipeline whose last stage is a bare
-// `self`. That pipeline used to be the headline idiom; now the read face takes
-// its ask from argv and never reads stdin, so it silently discards whatever came
-// down the pipe and situates the default prompt instead.
-//
-// This is not hypothetical tidiness. Five copies of the old loop survived the
-// rewrite — in main.go's package doc, pipe.go's header, cmdLearn's doc comment,
-// lessons/chat, and worst of all a runtime stderr line that told every user of
-// `self learn` to run the broken pipeline — in a change whose own commit message
-// boasted about eliminating six hand-synced copies of one contract. A comment
-// cannot be tested by reading it, so it is tested here.
+// A pipeline ending in a bare `self` discards its ask (the read face never
+// reads stdin). Comments cannot be tested by reading them, so this walks the tree.
 func TestNoFileShowsThePipelineThatDiscardsTheAsk(t *testing.T) {
 	// Built from pieces so this file does not trip its own check.
 	needle := "|" + " self"
@@ -1908,8 +1870,6 @@ func TestHelpIsTheProtocol(t *testing.T) {
 		t.Fatal("self help is not PROTOCOL.md verbatim")
 	}
 }
-
-// ─────────────────────────────── small helpers ──────────────────────────────
 
 func hasEvent(t *testing.T, h, name string) bool {
 	t.Helper()

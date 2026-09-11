@@ -1,10 +1,3 @@
-// Shell completion. The kernel can finish what it already knows — verbs, and
-// the capability names its replayed state holds — but an argument like a goal
-// name is domain state, and the kernel holds no domain model. So argument
-// completion is delegated to an ordinary view named `complete.<name>`: a pure
-// function of the log, authored through the same growth loop as everything
-// else. The instance grows its own autocomplete; the kernel only provides the
-// seam. PROTOCOL.md documents the convention.
 package main
 
 import (
@@ -15,12 +8,8 @@ import (
 	"time"
 )
 
-// completerTimeout bounds a delegated completer. Completion runs on a
-// tab-press: a completer that hangs must degrade to silence, never to a
-// frozen shell. A var so tests can shorten it.
 var completerTimeout = 2 * time.Second
 
-// completerMaxLines bounds what a delegated completer can hand a shell.
 const completerMaxLines = 512
 
 var verbCandidates = []struct{ name, desc string }{
@@ -36,11 +25,6 @@ var verbCandidates = []struct{ name, desc string }{
 	{"help", "print the complete protocol"},
 }
 
-// cmdComplete answers `self __complete <words…>`: the words after `self`, the
-// last being the partial word under the cursor (possibly empty). It prints one
-// candidate per line, optionally `candidate\tdescription`. Completion is
-// best-effort by construction: anything wrong degrades to no output and exit
-// 0, because stderr on this path lands in someone's prompt line.
 func cmdComplete(home string, words []string, out io.Writer) error {
 	if len(words) == 0 {
 		words = []string{""}
@@ -71,10 +55,6 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 			completeCapNames(st, typ, cur, out)
 			return nil
 		}
-		// An argument position. The kernel does not know what a goal or a
-		// task is; a view named complete.<name> might, and it is a pure
-		// replay, so running it on a tab-press reads and never writes the
-		// log. It receives the same words this verb did.
 		emitLines(out, runCompleter(home, st, "complete."+prev[1], words))
 
 	case "brief":
@@ -89,7 +69,7 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 
 	case "give":
 		if len(prev) != 1 {
-			return nil // the second argument is a directory: the shim falls back to files
+			return nil
 		}
 		st, err := loadState(home)
 		if err != nil {
@@ -122,7 +102,7 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 
 	case "loop":
 		if !strings.HasPrefix(cur, "-") {
-			return nil // after the flags comes `-- <mind…>`: the shim falls back to files
+			return nil
 		}
 		for _, f := range []struct{ name, desc string }{
 			{"--ask", "what woke this body; every waking sees it"},
@@ -139,10 +119,6 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 	return nil
 }
 
-// completeCapNames prints the names the replayed state actually knows,
-// annotated from their declarations. A pending capability is offered too:
-// completing to it and running it yields the kernel's honest "declared but
-// pending" answer, so the tab key doubles as a status surface.
 func completeCapNames(st *state, typ, cur string, out io.Writer) {
 	for _, c := range st.list(typ) {
 		if !strings.HasPrefix(c.Name, cur) {
@@ -159,10 +135,6 @@ func completeCapNames(st *state, typ, cur string, out io.Writer) {
 	}
 }
 
-// completeDeclNames offers what `self brief <name>` can open. Names come bare
-// and deduplicated across the two kinds: a name held by both drills down to
-// both, so the qualified form is a narrowing the reader may ask for and not one
-// the shell should press on them before they know there is a collision.
 func completeDeclNames(st *state, cur string, out io.Writer) {
 	kinds := map[string][]string{}
 	var order []string
@@ -183,9 +155,6 @@ func completeDeclNames(st *state, cur string, out io.Writer) {
 	}
 }
 
-// runCompleter replays the view that owns an argument position. It is runView
-// with the shell in mind: a deadline instead of patience, silence instead of
-// stderr, and nil instead of any error.
 func runCompleter(home string, st *state, name string, args []string) []string {
 	c := st.cap(kindView, name)
 	if c == nil || c.Receipt == nil {
@@ -211,13 +180,6 @@ func emitLines(out io.Writer, lines []string) {
 		}
 	}
 }
-
-// ─────────────────────────────── the shims ──────────────────────────────────
-//
-// The shims are deliberately dumb and stable: every candidate comes from
-// `self __complete`, which replays the instance's own log, so a capability —
-// or a completer — grown after the shim was installed appears without
-// reinstalling anything.
 
 func completionScript(shell string) (string, error) {
 	switch shell {

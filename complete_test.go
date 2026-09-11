@@ -1,10 +1,5 @@
 package main
 
-// Completion is a read with a shell attached: it must know what the kernel
-// knows (verbs, capability names), delegate what only the log knows to a
-// grown complete.<name> view, and degrade to silence — never to an error a
-// prompt line would have to display.
-
 import (
 	"bytes"
 	"os"
