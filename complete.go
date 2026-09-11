@@ -77,6 +77,16 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 		// log. It receives the same words this verb did.
 		emitLines(out, runCompleter(home, st, "complete."+prev[1], words))
 
+	case "brief":
+		if len(prev) != 1 {
+			return nil
+		}
+		st, err := loadState(home)
+		if err != nil {
+			return nil
+		}
+		completeDeclNames(st, cur, out)
+
 	case "give":
 		if len(prev) != 1 {
 			return nil // the second argument is a directory: the shim falls back to files
@@ -88,7 +98,7 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 		for _, typ := range []string{kindCommand, kindView} {
 			for _, c := range st.list(typ) {
 				if sel := typ + "/" + c.Name; strings.HasPrefix(sel, cur) {
-					fmt.Fprintf(out, "%s\t%s\n", sel, trunc(oneLine(c.Decl.Description), 72))
+					fmt.Fprintf(out, "%s\t%s\n", sel, trunc(c.Decl.summary(), 72))
 				}
 			}
 		}
@@ -138,14 +148,38 @@ func completeCapNames(st *state, typ, cur string, out io.Writer) {
 		if !strings.HasPrefix(c.Name, cur) {
 			continue
 		}
-		desc := trunc(oneLine(c.Decl.Description), 72)
+		desc := trunc(c.Decl.summary(), 72)
 		if c.Receipt == nil {
 			desc += " (pending — no script yet)"
 		}
 		fmt.Fprintf(out, "%s\t%s\n", c.Name, desc)
 	}
 	if typ == kindView && st.cap(kindView, "log") == nil && strings.HasPrefix("log", cur) {
-		fmt.Fprintln(out, "log\tevery event, one line each (built in)")
+		fmt.Fprintf(out, "log\tthe last %d events; --all for the whole log (built in)\n", builtinLogTail)
+	}
+}
+
+// completeDeclNames offers what `self brief <name>` can open. Names come bare
+// and deduplicated across the two kinds: a name held by both drills down to
+// both, so the qualified form is a narrowing the reader may ask for and not one
+// the shell should press on them before they know there is a collision.
+func completeDeclNames(st *state, cur string, out io.Writer) {
+	kinds := map[string][]string{}
+	var order []string
+	for _, typ := range []string{kindCommand, kindView} {
+		for _, c := range st.list(typ) {
+			if !strings.HasPrefix(c.Name, cur) {
+				continue
+			}
+			if kinds[c.Name] == nil {
+				order = append(order, c.Name)
+			}
+			kinds[c.Name] = append(kinds[c.Name], typ)
+		}
+	}
+	for _, name := range order {
+		where := strings.Join(kinds[name], " and ")
+		fmt.Fprintf(out, "%s\t%s\n", name, trunc(where+" — "+st.cap(kinds[name][0], name).Decl.summary(), 72))
 	}
 }
 

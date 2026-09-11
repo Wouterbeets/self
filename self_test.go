@@ -1724,7 +1724,8 @@ func TestCapabilityDiscovery(t *testing.T) {
 		{"view", []string{"entry"}, "there is a command by that name", true},
 		{"run", []string{"log"}, `no command "log" in this log`, true},
 		{"view", []string{"log"}, "command.declared", false},
-		{"view", []string{"log", "extra"}, "takes no arguments", true},
+		{"view", []string{"log", "--all"}, "command.declared", false},
+		{"view", []string{"log", "extra"}, "takes only --all", true},
 	} {
 		t.Run(tt.verb+"/"+strings.Join(tt.args, "/"), func(t *testing.T) {
 			var out bytes.Buffer
@@ -1924,4 +1925,194 @@ func hasEvent(t *testing.T, h, name string) bool {
 func mustLine(name string, payload json.RawMessage) []byte {
 	b, _ := json.Marshal(map[string]any{"name": name, "payload": payload})
 	return append(b, '\n')
+}
+
+// The built-in log is bounded by default. It is the read a cold mind reaches
+// for first and the only one in the kernel whose cost grows with the log, so an
+// unbounded default spends a waking's context on history nobody asked for.
+// Elision is announced, because silently answering "the log" with ten lines
+// would leave a mind confidently wrong about what this instance has done.
+func TestBuiltinLogViewIsBoundedButComplete(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	var body strings.Builder
+	for i := 0; i < builtinLogTail*3; i++ {
+		body.WriteString(line(t, "journal.entry", map[string]string{"text": fmt.Sprintf("entry-%d", i)}))
+	}
+	heard(t, h, body.String())
+
+	page, err := runView(h, replayed(t, h), "log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(page)
+	if n := strings.Count(got, "\n") - 1; n != builtinLogTail {
+		t.Fatalf("default log view printed %d events, want %d:\n%s", n, builtinLogTail, got)
+	}
+	if !strings.HasPrefix(got, "# last ") || !strings.Contains(got, "--all") {
+		t.Fatalf("elision is not announced, so the bound reads as the whole log:\n%s", got)
+	}
+	if !strings.Contains(got, "entry-29") || strings.Contains(got, "entry-0\"") {
+		t.Fatalf("the bound did not keep the newest events:\n%s", got)
+	}
+
+	all, err := runView(h, replayed(t, h), "log", "--all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(all), "# last ") {
+		t.Fatalf("--all announced an elision it did not make:\n%s", trunc(string(all), 200))
+	}
+	if !strings.Contains(string(all), "command.declared") || !strings.Contains(string(all), "entry-0") {
+		t.Fatalf("--all is not the whole log:\n%s", trunc(string(all), 200))
+	}
+}
+
+// The orienting surface is bounded per capability whatever an author writes,
+// and the full declaration stays one command away. A bound that deleted the
+// rationale would trade a context cost for a rediscovery cost.
+func TestBriefIsTerseAndDrillsDown(t *testing.T) {
+	h := home(t)
+	long := "reclaim finished agents: remove worktrees, close workspaces, delete the branch, tombstone them. " +
+		"Guards are re-checked live at removal and never waived, because idle is not finished and a fresh " +
+		"dispatch is indistinguishable from a completed one."
+	heard(t, h, line(t, "command.declared", decl{Name: "reclaim", Summary: "reclaim finished goal agents; --force waives only the freshly-dispatched guard", Description: long})+
+		line(t, "view.declared", decl{Name: "agents", Description: long, Consumes: []string{"agent.observed"}})+
+		line(t, "view.declared", decl{Name: "sprawl", Description: strings.ReplaceAll(long, ". ", ", and ")}))
+
+	st := replayed(t, h)
+	for _, c := range append(st.list(kindCommand), st.list(kindView)...) {
+		if n := len(c.Decl.summary()); n > summaryBudget+len("…") {
+			t.Fatalf("%s summarizes to %d bytes, over a budget nothing enforces: %s", c.key(), n, c.Decl.summary())
+		}
+	}
+	card := brief(h, st)
+	if strings.Contains(card, "Guards are re-checked") {
+		t.Fatalf("the brief carried a full description:\n%s", card)
+	}
+	if !strings.Contains(card, "--force waives only") {
+		t.Fatalf("the brief dropped a declared summary:\n%s", card)
+	}
+	// A declaration written before summaries existed still maps: the opening
+	// sentence stands in, clipped, rather than the capability going nameless.
+	if !strings.Contains(card, "- agents — reclaim finished agents") {
+		t.Fatalf("no summary was derived for a legacy declaration:\n%s", card)
+	}
+
+	page, err := briefOne(replayed(t, h), "reclaim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(page, "Guards are re-checked") || !strings.Contains(page, "command/reclaim") {
+		t.Fatalf("the drill-down is not the whole declaration:\n%s", page)
+	}
+	if page, err = briefOne(replayed(t, h), "view/agents"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(page, "consumes: agent.observed") {
+		t.Fatalf("a view's inputs are reachable nowhere:\n%s", page)
+	}
+	if _, err := briefOne(replayed(t, h), "nope"); err == nil {
+		t.Fatal("an unknown capability drilled down to something")
+	}
+	// A description with nowhere to break is clipped rather than let through,
+	// which is the whole point of enforcing the bound instead of asking for it.
+	if sum := st.cap(kindView, "sprawl").Decl.summary(); !strings.HasSuffix(sum, "…") {
+		t.Fatalf("an unbreakable description was not clipped: %s", sum)
+	}
+}
+
+// A bounded surface owes its reader the way through, beside the bound and not
+// somewhere else in the page — and owes nothing when it is hiding nothing.
+func TestClippedSurfaceSaysHowToExpand(t *testing.T) {
+	h := home(t)
+	heard(t, h, line(t, "command.declared", decl{Name: "terse", Summary: "fits", Description: "fits"}))
+	if card := brief(h, replayed(t, h)); strings.Contains(card, "clipped") {
+		t.Fatalf("an unclipped surface explained a truncation nobody can see:\n%s", card)
+	}
+	heard(t, h, line(t, "command.declared", decl{Name: "sprawl", Summary: strings.Repeat("long ", summaryBudget)}))
+	card := brief(h, replayed(t, h))
+	if !strings.Contains(card, "clipped") || !strings.Contains(card, "self brief <name>") {
+		t.Fatalf("a clipped surface did not say how to read past it:\n%s", card)
+	}
+	// Beside the ellipsis, not forty lines under it: the notice must precede
+	// the first list it applies to.
+	if strings.Index(card, "clipped") > strings.Index(card, "- sprawl") {
+		t.Fatalf("the way through comes after what it explains:\n%s", card)
+	}
+}
+
+// The tab key reaches the drill-down too, or it is documentation only the
+// protocol knows about.
+func TestCompletionOffersDeclarations(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	heard(t, h, line(t, "view.declared", decl{Name: "entry", Summary: "entries, newest first", Consumes: []string{"journal.entry"}}))
+	var out bytes.Buffer
+	if err := dispatch(h, "__complete", []string{"brief", ""}, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "journal\tview —") {
+		t.Fatalf("completion does not offer a declaration to open:\n%s", got)
+	}
+	if !strings.Contains(got, "entry\tcommand and view —") {
+		t.Fatalf("a name held by both kinds is not marked as such:\n%s", got)
+	}
+	if strings.Count(got, "\nentry\t")+strings.Count(strings.SplitN(got, "\n", 2)[0], "entry\t") > 1 {
+		t.Fatalf("a name held by both kinds was offered twice:\n%s", got)
+	}
+}
+
+// Every rung of the CLI answers a wrong invocation with the rung below it: an
+// unknown name with the index, a refused argument with the declaration. Without
+// that, knowing this instance requires having read it already.
+func TestTheCLIUnfolds(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	st := replayed(t, h)
+
+	if got := unfoldMissing(st, kindCommand, "nosuch"); !strings.Contains(got, "- entry — append an entry") {
+		t.Fatalf("an unknown name did not unfold to the index:\n%s", got)
+	}
+	if got := unfoldMissing(st, kindCommand, "entry"); got != "" {
+		t.Fatalf("a name that exists unfolded anyway:\n%s", got)
+	}
+	// materialize already redirects across kinds, and saying it twice is worse
+	// than saying it once.
+	if got := unfoldMissing(st, kindCommand, "journal"); got != "" {
+		t.Fatalf("a cross-kind name unfolded on top of its own redirect:\n%s", got)
+	}
+	// The built-in log resolves without appearing among the declared views.
+	if got := unfoldMissing(st, kindView, "log"); got != "" {
+		t.Fatalf("the built-in log was reported missing:\n%s", got)
+	}
+
+	// A script that said nothing has left the exit code as the whole answer.
+	if got := unfoldFailed(st, kindCommand, "entry", true); !strings.Contains(got, "append an entry") || !strings.Contains(got, "command/entry") {
+		t.Fatalf("a silent failure did not unfold to the declaration:\n%s", got)
+	}
+	// A script that explained itself gets the pointer, not a second explanation.
+	got := unfoldFailed(st, kindCommand, "entry", false)
+	if strings.Contains(got, "\n\n") || !strings.Contains(got, "self brief entry") {
+		t.Fatalf("a self-documenting failure was piled on:\n%s", got)
+	}
+	heard(t, h, line(t, "command.declared", decl{Name: "later", Summary: "not built yet"}))
+	if got := unfoldFailed(replayed(t, h), kindCommand, "later", true); got != "" {
+		t.Fatalf("a capability that never ran was given run-time help:\n%s", got)
+	}
+}
+
+// The CLI's own diagnostics must never reach stdout: a mind's pipeline parses
+// that stream, and an index printed into it would be read as events.
+func TestUnfoldingStaysOffTheWire(t *testing.T) {
+	h := home(t)
+	growJournal(t, h)
+	var out bytes.Buffer
+	if err := dispatch(h, "run", []string{"nosuch"}, &out); err == nil {
+		t.Fatal("an unknown command succeeded")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("unfolding wrote to the wire: %q", out.String())
+	}
 }

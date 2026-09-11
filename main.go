@@ -37,7 +37,7 @@ const cliUsage = `self — local-first event-sourced runtime
 Usage:
   self [ask...]                 situate an ask; bare self presents the naked surface
   self hear                     ingest event JSONL or authored scripts from stdin
-  self brief                    show capabilities, pending work, and refusals
+  self brief [name]             the surface; with a name, that one capability in full
   self run <command> [args...]  execute a command capability and append its events
   self view <name> [args...]    replay a pure view; built-in log is always available
   self loop [opts] [-- mind...] wake a mind on this body until it rests (quiet wakings in a row)
@@ -86,6 +86,14 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if len(args) > 0 {
+			page, err := briefOne(st, args[0])
+			if err != nil {
+				return err
+			}
+			_, err = io.WriteString(out, page)
+			return err
+		}
 		_, err = io.WriteString(out, brief(home, st))
 		return err
 
@@ -103,17 +111,28 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			_, err := fmt.Fprintf(out, "usage: self %s <%s> [args...]\n\n%s", verb, arg, capabilityList(st, typ))
 			return err
 		}
-		name := args[0]
+		name, rest := args[0], args[1:]
+		// Diagnostics go to stderr, never to out: stdout is the wire a mind's
+		// pipeline parses, and an index printed into it would be read as events.
+		if unknown := unfoldMissing(st, typ, name); unknown != "" {
+			io.WriteString(os.Stderr, unknown)
+		}
+		// What the capability itself says, forwarded as it is written and
+		// counted: a tool that explained what it wanted does not get a second
+		// explanation stapled to it.
+		said := &tally{w: os.Stderr}
 		if verb == "view" {
-			page, err := runView(home, st, name, args[1:]...)
+			page, err := runViewDiag(home, st, name, said, rest...)
 			if err != nil {
+				io.WriteString(os.Stderr, unfoldFailed(st, typ, name, said.n == 0))
 				return err
 			}
 			_, err = out.Write(page)
 			return err
 		}
-		evs, err := runCommand(home, st, name, args[1:], doorCLI, callerClaim())
+		evs, err := runCommand(home, st, name, rest, doorCLI, callerClaim(), said)
 		if err != nil {
+			io.WriteString(os.Stderr, unfoldFailed(st, typ, name, said.n == 0))
 			return err
 		}
 		for _, e := range evs {
@@ -169,7 +188,8 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		// more likely a mistyped verb than a question, and silently answering a
 		// typo with a prompt would hide it.
 		if len(args) == 0 && !strings.ContainsAny(verb, " \t\n") {
-			return fmt.Errorf("unknown verb %q — verbs: hear brief run view loop learn give rehydrate completion help; to ask a question, quote it: self %q", verb, verb)
+			fmt.Fprintf(os.Stderr, "%s\n\n", cliUsage)
+			return fmt.Errorf("unknown verb %q — to ask a question instead, quote it: self %q", verb, verb)
 		}
 		return cmdSituate(home, strings.Join(append([]string{verb}, args...), " "), out)
 	}
@@ -190,6 +210,13 @@ func brief(home string, st *state) string {
 		caller = `unset — export SELF_CALLER="<who you are>" so your writes are attributable`
 	}
 	fmt.Fprintf(&b, "log: %d events    caller: %s\n", len(st.Events), caller)
+	// Only where a line was actually cut. The ellipsis is the thing a reader
+	// notices, so the way to expand it belongs beside the ellipsis and not
+	// forty lines below in `## where` — and on an instance whose summaries all
+	// fit, this line would be explaining a truncation nobody can see.
+	if anyClipped(st) {
+		b.WriteString("lines below are clipped; `self brief <name>` prints one declaration in full\n")
+	}
 	if len(st.Events) > 0 && st.Key == nil {
 		b.WriteString("\n**no .secret beside this log** — no receipt can verify, so this instance has no capabilities.\n")
 	}
@@ -221,8 +248,120 @@ func brief(home string, st *state) string {
 
 	b.WriteString("\n## where\n\n")
 	b.WriteString("`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n")
-	b.WriteString("`self help` the protocol · `self view log` what happened lately\n")
+	b.WriteString("`self help` the protocol · `self view log` what happened lately · `self brief <name>` one capability in full\n")
 	return b.String()
+}
+
+// unfoldMissing is the CLI's answer to a name this log does not hold: the index
+// of the names it does, printed before the kernel's own one-line complaint. It
+// returns text rather than writing it, so the caller owns the stream — stdout
+// is the wire, and an index printed into it would be parsed as events.
+func unfoldMissing(st *state, typ, name string) string {
+	if st.cap(typ, name) != nil || st.cap(otherKind(typ), name) != nil {
+		return "" // it exists, or materialize will redirect to the other kind
+	}
+	// The built-in log is a view this instance holds without ever having
+	// declared one, so it is absent from the capability index the check above
+	// reads. It is still a name that resolves.
+	if typ == kindView && name == "log" {
+		return ""
+	}
+	return fmt.Sprintf("self: no %s %q in this log. What there is:\n\n%s\n", typ, name, capabilityList(st, typ))
+}
+
+// unfoldFailed is the CLI's answer to a capability that ran and refused what it
+// was given. "Wrong arguments" and "I do not know this tool's arguments" are one
+// moment to the reader, so a non-zero exit is worth the declaration.
+//
+// How much of it depends on what the script already said. A capability that
+// documents itself — `peer` prints its verb table and exits 2 — has answered the
+// question, and gets only the pointer to the rationale it cannot print. One that
+// failed silently gets the whole declaration, because otherwise the exit code is
+// the only thing the reader has.
+func unfoldFailed(st *state, typ, name string, silent bool) string {
+	c := st.cap(typ, name)
+	if c == nil || c.Receipt == nil {
+		return "" // never ran: the missing-name index or the kernel's error stands alone
+	}
+	if silent {
+		if page, err := briefOne(st, typ+"/"+name); err == nil {
+			return "\n" + page
+		}
+	}
+	return fmt.Sprintf("\nself: `self brief %s` — what %s is for, and what its arguments mean\n", name, c.key())
+}
+
+// tally forwards everything written and remembers whether anything was.
+type tally struct {
+	w io.Writer
+	n int
+}
+
+func (t *tally) Write(p []byte) (int, error) {
+	n, err := t.w.Write(p)
+	t.n += n
+	return n, err
+}
+
+func otherKind(typ string) string {
+	if typ == kindView {
+		return kindCommand
+	}
+	return kindView
+}
+
+// briefOne is the drill-down a bounded surface owes its reader. The brief now
+// answers only which capability; this answers what it takes and what skipping
+// it costs — the whole of Description, unclipped, for the one mind that asked.
+// Without it the bound would not be a bound but a deletion.
+func briefOne(st *state, selector string) (string, error) {
+	var found []*capability
+	if typ, name, qualified := strings.Cut(selector, "/"); qualified {
+		if typ != kindCommand && typ != kindView {
+			return "", fmt.Errorf("a capability selector is command/<name> or view/<name>")
+		}
+		if c := st.cap(typ, name); c != nil {
+			found = append(found, c)
+		}
+	} else {
+		// Unqualified and ambiguous prints both rather than guessing: a command
+		// and a view under one name do different things to the log, and that is
+		// exactly the distinction a reader is here to resolve.
+		for _, typ := range []string{kindCommand, kindView} {
+			if c := st.cap(typ, selector); c != nil {
+				found = append(found, c)
+			}
+		}
+	}
+	if len(found) == 0 {
+		return "", fmt.Errorf("no capability %q in this log — `self brief` lists what there is", selector)
+	}
+	var b strings.Builder
+	for i, c := range found {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "# %s\n\n%s\n", c.key(), oneLine(c.Decl.Description))
+		if c.Type == kindView {
+			consumes := strings.Join(c.Decl.Consumes, ", ")
+			if consumes == "" {
+				consumes = "the whole log"
+			}
+			fmt.Fprintf(&b, "\nconsumes: %s\n", consumes)
+		}
+		fmt.Fprintf(&b, "declared at seq %d", c.DeclSeq)
+		if c.Receipt != nil {
+			fmt.Fprintf(&b, " · installed at seq %d", c.RcptSeq)
+		}
+		if c.Pending() {
+			b.WriteString(" · " + strings.Trim(oneLine(pendingMark(c)), "*() "))
+		}
+		b.WriteString("\n")
+		if c.Reject != nil {
+			fmt.Fprintf(&b, "refused at seq %d: %s\n", c.Reject.Seq, oneLine(c.Reject.Reason))
+		}
+	}
+	return b.String(), nil
 }
 
 // capabilityList is the same live index in orientation and command discovery.
@@ -230,23 +369,26 @@ func capabilityList(st *state, typ string) string {
 	var b strings.Builder
 	caps := st.list(typ)
 	for _, c := range caps {
-		desc := oneLine(c.Decl.Description)
-		if typ == kindView {
-			consumes := strings.Join(c.Decl.Consumes, ", ")
-			if consumes == "" {
-				consumes = "the whole log"
-			}
-			desc += " (consumes " + consumes + ")"
-		}
-		fmt.Fprintf(&b, "- %s — %s%s\n", c.Name, desc, pendingMark(c))
+		fmt.Fprintf(&b, "- %s — %s%s\n", c.Name, c.Decl.summary(), pendingMark(c))
 	}
 	if typ == kindView && st.cap(kindView, "log") == nil {
-		b.WriteString("- log — every event, one line each (built in; a declared view named `log` shadows it)\n")
+		fmt.Fprintf(&b, "- log — the last %d events, newest last; `--all` for the whole log (built in, shadowable)\n", builtinLogTail)
 	}
 	if len(caps) == 0 {
 		fmt.Fprintf(&b, "\n(no declared %ss yet — `self help` shows how to author one)\n", typ)
 	}
 	return b.String()
+}
+
+// anyClipped reports whether the surface is hiding anything, which is exactly
+// when it owes the reader a way through.
+func anyClipped(st *state) bool {
+	for _, c := range st.Caps {
+		if strings.HasSuffix(c.Decl.summary(), "…") {
+			return true
+		}
+	}
+	return false
 }
 
 func pendingMark(c *capability) string {
@@ -262,11 +404,45 @@ func pendingMark(c *capability) string {
 // ─────────────────────────────────── util ───────────────────────────────────
 
 func oneLine(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if s == "" {
-		return "(no description)"
+	if s := oneLineOrEmpty(s); s != "" {
+		return s
+	}
+	return "(no description)"
+}
+
+// oneLineOrEmpty flattens prose to a single line and, unlike oneLine, keeps
+// nothing as nothing — so a caller can tell absence from content and choose its
+// own fallback rather than rendering a placeholder into a derived field.
+func oneLineOrEmpty(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// firstSentence is the salvage path for a declaration written before summaries
+// existed: these descriptions open with usage and the acting verb and only then
+// turn to rationale, so the opening sentence is the closest thing to a summary
+// already present in the log. A heuristic, and only ever a fallback — a
+// declared Summary is never guessed at.
+func firstSentence(s string) string {
+	if i := strings.Index(s, ". "); i >= 0 {
+		return s[:i+1]
 	}
 	return s
+}
+
+// clip bounds a string like trunc, but retreats to a word boundary first: a
+// summary is read by a mind, and a word severed mid-syllable costs more
+// attention than the characters it saves. It gives up on the boundary rather
+// than the bound if backing up would discard most of the budget.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	if sp := strings.LastIndexByte(s[:cut], ' '); sp > n/2 {
+		cut = sp
+	}
+	return strings.TrimRight(s[:cut], " ,;:.—-") + "…"
 }
 
 // trunc cuts to at most n bytes without splitting a rune: a prompt or a report

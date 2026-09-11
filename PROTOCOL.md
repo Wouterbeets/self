@@ -76,15 +76,34 @@ no path to the log through the kernel. (Nothing *stops* a script from writing to
 is a program you installed.)
 
 ```json
-{"name":"command.declared","payload":{"name":"entry","description":"append a journal entry. usage: entry <text…> — appends journal.entry {text}"}}
-{"name":"view.declared","payload":{"name":"journal","description":"every entry, newest first","consumes":["journal.entry"]}}
+{"name":"command.declared","payload":{"name":"entry","summary":"append one journal entry","description":"append a journal entry. usage: entry <text…> — appends journal.entry {text}"}}
+{"name":"view.declared","payload":{"name":"journal","summary":"every entry, newest first","description":"every entry, newest first. usage: journal — no arguments; the whole journal in reverse order","consumes":["journal.entry"]}}
 ```
 
-A declaration is `{name, description}`, plus `consumes` for a view. There is no
-schema beyond that: put usage and argument order in `description`, then explain
-the consequence that makes the capability preferable — context it saves,
-ambiguity it removes, or durable evidence lost when it is skipped. That string
-is what the next cold mind uses to choose among tools.
+A declaration is `{name, summary, description}`, plus `consumes` for a view.
+There is no schema beyond that, and there are two prose fields because they have
+two different readers.
+
+`summary` is one terse line: what this capability is for, enough to tell it from
+its neighbours and no more. It is what the brief prints, so every waking mind
+reads every summary on every pass. The kernel clips it at 110 characters — a
+bound, not a request, because the mind writing the thirty-eighth declaration
+sees its own line and never the surface it lands in, and a limit with no
+feedback signal is one nobody can tell they crossed.
+
+`description` is everything else: usage and argument order first, then the
+consequence that makes the capability preferable — context it saves, ambiguity
+it removes, or durable evidence lost when it is skipped. Exactly one mind reads
+it, once, at the moment it is choosing among tools, and it arrives there through
+`self brief <name>`. Write it as long as that mind's whole answer needs to be.
+
+Sizing one field for the choosing reader is what taxes the orienting one. Thirty
+capabilities of well-earned rationale is twenty kilobytes that every waking reads
+in full and nearly every waking discards unused — the cost is real, recurring,
+and paid by someone who is not in the room when it is incurred. A declaration
+carrying no `summary` still appears: the kernel stands in the opening sentence of
+its `description`, clipped. That is a salvage path for declarations older than
+the field, not the contract.
 
 A declaration is **pending** until a script arrives for it:
 
@@ -109,6 +128,14 @@ Leave the rest declared and unbuilt for a later waking:
 ```json
 {"name":"script.authored","payload":{"type":"command|view","name":"<declared name>","script":"<shebang and bytes>"}}
 ```
+
+A declaration carries two prose fields with two readers. `summary` is one terse
+line, clipped by the kernel at 110 characters, and it is what every later waking
+reads in the brief. `description` is usage, argument order, and the consequence
+of skipping this capability; one mind reads it, at the moment it chooses among
+tools, through `self brief <name>`. Put the rationale there and not in the
+summary — a summary sized for the mind choosing is a tax on every mind merely
+orienting, levied at every waking.
 
 Commands receive argv, the whole log on stdin, `SELF_HOME`, and the instance
 working directory; stdout must be new event JSONL. Views receive argv and only
@@ -379,9 +406,10 @@ Every verb names a different primitive. There is no sugar: no `ask`, no
 self                        situate the naked default ask and full instance brief (READ)
 self <ask…>                 situate that ask (READ)
 … | self hear               hear: event lines land, scripts install (WRITE)
-self brief                  the state card: what exists, what is pending, what broke
+self brief [name]           the state card; with a name, that declaration in full
 self run <cmd> [args…]      execute a command capability
 self view <name> [args…]    replay a view to stdout ("log" is built in, shadowable)
+self view log [--all]       the built-in: the last 10 events, or with --all every one
 self loop [opts] -- <mind>  run situated turns to an unchanged-state fixed point
 self learn <dir>            deposit an account, print its learning prompt
 self give <sel> <dir>       write an account from the log
@@ -389,6 +417,20 @@ self rehydrate              make cap/ match the log exactly
 self completion <shell>     print a completion shim (zsh|bash|fish)
 self help                   this file
 ```
+
+Every rung answers a wrong invocation with the rung below it. A verb with no
+argument prints what it could take — `self run` and `self view` print the
+capability index, `self brief` prints the surface. A name this log does not hold
+prints that index too; a name the other kind holds redirects to it. A capability
+that ran and refused its arguments prints its declaration: all of it when the
+script said nothing, and otherwise only the pointer to `self brief <name>`,
+because a tool that documented itself has already answered and does not need a
+second answer stapled on. An unknown verb prints the verb list above.
+
+All of that is **stderr**, and the exit code still says failure. Stdout is the
+wire: a command's stdout is event JSONL the kernel appends and a view's stdout is
+the page a pipeline reads, so an index printed there would be parsed as events.
+Diagnostics never touch it.
 
 ### Completion
 
@@ -549,8 +591,8 @@ receipts: `script.compiled` is not a name it acts on, and the signature is
 domain-separated even where it is. What that means for a v1 `events.jsonl`,
 verified rather than assumed:
 
-- Every event still **reads**. `self view log` shows the whole history, domain
-  events included, with their moments and speakers intact.
+- Every event still **reads**. `self view log --all` shows the whole history,
+  domain events included, with their moments and speakers intact.
 - Every v1 `command.declared` appears as a **pending declaration**, because its
   receipt no longer verifies. So the loop offers to re-author it, locally and
   under this key — a migration that runs itself.

@@ -35,11 +35,45 @@ const (
 // none of which anything validated, and the reference implementation was a
 // runnable riding the one channel the account protocol exists to keep runnables
 // out of. What a command takes and emits belongs in Description, because that
-// string is what the next cold mind actually reads.
+// string is what a mind reads when it is choosing this capability.
+//
+// Summary exists because Description serves a different reader. A mind choosing
+// among tools reads one description and wants the consequence of skipping the
+// tool; a mind orienting reads every description and wants only enough to know
+// which one to open. The second reader arrives at every waking and the first
+// arrives once, so a single field sized for the first taxes the second on every
+// pass — which is how a surface of thirty-seven capabilities reached twenty
+// kilobytes of prose that nearly every waking read in full and used none of.
+// Two fields, one of them bounded, is the whole fix. Summary is what the brief
+// prints; Description is one command away.
 type decl struct {
 	Name        string   `json:"name"`
+	Summary     string   `json:"summary,omitempty"` // the orienting line; derived from Description when absent
 	Description string   `json:"description"`
 	Consumes    []string `json:"consumes,omitempty"` // views only: the events fed on stdin
+}
+
+// summaryBudget is the hard ceiling on one capability's line in the brief. It
+// is enforced rather than requested because a prompt has no feedback signal:
+// the mind authoring the thirty-eighth capability sees its own declaration, not
+// the aggregate its length lands in. Enforcing it bounds the orienting surface
+// at roughly this many bytes per capability no matter what any author writes,
+// and a visible ellipsis is the signal that was missing.
+const summaryBudget = 110
+
+// summary is the orienting line: what a mind reads about this capability before
+// it knows whether it wants it. A declaration that carries no Summary falls back
+// to the opening sentence of its Description, clipped — degraded on purpose and
+// visibly so, because the alternative is either an unbounded surface or dropping
+// capabilities declared before this field existed off the map entirely.
+func (d decl) summary() string {
+	if s := oneLineOrEmpty(d.Summary); s != "" {
+		return clip(s, summaryBudget)
+	}
+	if s := oneLineOrEmpty(d.Description); s != "" {
+		return clip(firstSentence(s), summaryBudget)
+	}
+	return "(no description)"
 }
 
 // capability is a live declared capability and whatever the log says about it.
@@ -504,13 +538,20 @@ func feed(w io.WriteCloser, events []Event) {
 // runCommand executes a command capability and appends what it emits. via and
 // by are the invocation's provenance, stamped onto every emitted event: a
 // script's own output can never set them.
-func runCommand(home string, st *state, name string, args []string, via, by string) ([]Event, error) {
+// diag is optional: the CLI passes a writer that counts what the script said,
+// so a failure that explained itself is not piled on with a second explanation.
+// Every other caller gets os.Stderr and never has to know.
+func runCommand(home string, st *state, name string, args []string, via, by string, diag ...io.Writer) ([]Event, error) {
 	bin, err := materialize(home, st, kindCommand, name)
 	if err != nil {
 		return nil, err
 	}
+	stderr := io.Writer(os.Stderr)
+	if len(diag) > 0 && diag[0] != nil {
+		stderr = diag[0]
+	}
 	cmd := exec.Command(bin, args...)
-	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home, home), home, os.Stderr
+	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home, home), home, stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -574,13 +615,24 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 // leaves it pending, and until it is re-authored the old script must keep
 // seeing the stream it was signed against.
 func runView(home string, st *state, name string, args ...string) ([]byte, error) {
+	return runViewDiag(home, st, name, os.Stderr, args...)
+}
+
+// runViewDiag is runView with the view's stderr redirected. The CLI reads that
+// stream to decide whether a failing view documented itself, which is the only
+// thing distinguishing "this tool told you what it wanted" from a dead end.
+func runViewDiag(home string, st *state, name string, diag io.Writer, args ...string) ([]byte, error) {
 	if name == "log" && st.cap(kindView, "log") == nil {
-		if len(args) > 0 {
-			return nil, fmt.Errorf("built-in view %q takes no arguments", name)
+		all := false
+		for _, a := range args {
+			if a != "--all" {
+				return nil, fmt.Errorf("built-in view %q takes only --all", name)
+			}
+			all = true
 		}
-		return builtinLogView(st), nil
+		return builtinLogView(st, all), nil
 	}
-	return executeView(context.Background(), home, st, name, args, os.Stderr, 0)
+	return executeView(context.Background(), home, st, name, args, diag, 0)
 }
 
 // executeView owns receipt resolution, input, environment and scratch lifetime.
@@ -638,12 +690,29 @@ func consumed(events []Event, consumes []string) []Event {
 	return out
 }
 
+// builtinLogTail bounds what the built-in log view answers by default. The
+// whole log is the one read in the kernel whose cost grows without limit, and
+// it is also the read a cold mind reaches for first, so an unbounded default
+// spends a waking's context on history it did not ask for. Ten is what "lately"
+// means here; `--all` is the same view with the bound lifted.
+const builtinLogTail = 10
+
 // builtinLogView answers the cheapest question at every cold start — what
 // happened here lately, and who says so — on an instance that has not yet
 // grown a single view. A declared view named "log" shadows it.
-func builtinLogView(st *state) []byte {
+//
+// Elision is announced, because a mind that reads ten lines and believes it has
+// read the log is worse off than one that read nothing. The notice is a `#`
+// comment so the rest stays the same tab-separated stream it always was, and
+// with --all it is absent: that output is byte-identical to the unbounded view.
+func builtinLogView(st *state, all bool) []byte {
+	events := st.Events
 	var b strings.Builder
-	for _, e := range st.Events {
+	if !all && len(events) > builtinLogTail {
+		fmt.Fprintf(&b, "# last %d of %d events · `self view log --all` for the whole log\n", builtinLogTail, len(events))
+		events = events[len(events)-builtinLogTail:]
+	}
+	for _, e := range events {
 		by := e.By
 		if by == "" {
 			by = "-"

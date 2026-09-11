@@ -2,6 +2,75 @@
 
 ## Unreleased — one fixed-point loop
 
+### Changed: every rung of the CLI unfolds to the one below it
+
+`self run` and `self view` already printed the capability index when called
+bare. Nothing else did. `self view peers --nonsense` ended at `view "peers"
+exited: exit status 1` — the reader knows the view exists, knows it rejected
+something, and has no path from there to what it wanted. An unknown name sent
+the reader to `self brief` rather than printing what it would have found there.
+An unknown verb listed the verbs but not their usage.
+
+Now: an unknown name prints the index of names that do exist. An unknown verb
+prints the usage block. A capability that ran and refused its arguments prints
+its declaration — the whole thing if the script wrote nothing to stderr, and
+otherwise only the pointer to `self brief <name>`, since a capability that
+documents itself has already answered and does not need a second answer stapled
+to it. `peer` prints its own verb table and exits 2; it gets one line, not six
+hundred characters of rationale it did not ask for.
+
+All of it is stderr and the exit code still says failure. Stdout is the wire —
+a command's stdout is event JSONL the kernel appends, a view's is the page a
+pipeline reads — so a diagnostic printed there would be parsed as events. To
+read what a script said, `runCommand` takes an optional diagnostic writer and
+`runViewDiag` takes one outright; every other caller still gets `os.Stderr` and
+never has to know.
+
+### Changed: a declaration carries a terse summary, and the brief prints only that
+
+A declaration was one prose field, and the protocol told its author to fill it:
+usage, argument order, then the consequence of skipping the capability. That is
+the right instruction for the mind choosing among tools, and it was the only
+instruction, so every author followed it and the brief grew to hold all of it.
+On a thirty-seven-capability instance that came to 19.7 kB — a surface read in
+full by every waking, of which a waking typically uses one entry.
+
+Nothing there was indiscipline. One field was serving two readers with opposite
+budgets: choosing needs the rationale and happens once, orienting needs only
+enough to tell two names apart and happens on every pass.
+
+So `decl` gains `summary`, one terse line, and the brief prints that and nothing
+else. The kernel clips it at 110 characters rather than asking for brevity,
+because the mind writing a declaration sees its own line and never the aggregate
+it lands in; a bound with no feedback signal is one nobody can tell they crossed.
+`description` is unchanged and now has a reader that wants all of it: `self brief
+<name>` prints one declaration whole, with a view's `consumes` and its install
+and refusal history. Declarations older than the field still map — the opening
+sentence of the description stands in, clipped — so nothing already in a log
+falls off the surface.
+
+The drill-down is announced where the need for it appears: the brief says its
+lines are clipped, directly above the first clipped line, and only on a surface
+that actually clipped something. `self brief <TAB>` completes declaration names,
+bare and deduplicated, marking a name held by both a command and a view. It is
+also in `self --help`, in the CLI block, and in the brief's `## where` footer.
+
+On this instance the brief went 19.7 kB → 4.5 kB and bare `self` 21.0 kB → 5.7 kB.
+
+### Changed: the built-in log view answers "lately" and takes `--all`
+
+`self view log` replayed every event and rejected every argument. It is the read
+a cold mind reaches for first, the one the brief recommends, and the only read in
+the kernel whose cost grows without bound — on this instance, 1.0 MB. It now
+prints the last ten events, and `--all` lifts the bound to exactly the old
+output, byte for byte.
+
+Elision is announced on a leading `#` line, with the true event count and the
+flag that shows the rest. A bounded read that did not say so would leave a mind
+confidently wrong about what the instance has done, which is worse than the
+context it saves; the `#` keeps the remainder the same tab-separated stream, so
+anything piping it is unaffected.
+
 ### Changed: `self run` answers with what exists
 
 Bare `self run` now prints the commands this log holds — descriptions and
