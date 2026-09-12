@@ -18,6 +18,59 @@ and prints events on stdout: a frontier model, a local one, a shell script, a
 person at a keyboard. They all stand in the same pipe and are told the same
 thing.
 
+## Use it
+
+Three steps, then work as usual.
+
+**1. Install.** `self` is one static Go binary.
+
+```sh
+go install github.com/wouterbeets/self@main
+```
+
+Make sure `$(go env GOPATH)/bin` is on your `PATH`; `self --help` should answer.
+
+**2. Tell your agent to use it before starting anything.** Pick one:
+
+*A line in the project's agent instructions* (`CLAUDE.md`, `AGENTS.md`, a system
+prompt):
+
+```md
+This project carries `self`, a persistent memory that outlives your session.
+Before starting anything, run `self` and follow what it prints.
+```
+
+*Or a session hook*, so the agent is situated before it reads your first
+message. For Claude Code, in `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "self" }] }
+    ]
+  }
+}
+```
+
+Bare `self` prints the situated prompt: who this self is, what it can do, what
+is pending, what broke. It is about 2 kB on a fresh instance and appends
+nothing. A `SessionStart` hook's stdout lands in the agent's context, in
+interactive and `-p` sessions alike, so the agent wakes up already oriented.
+
+**3. Work as usual.** The agent orients with `self`, acts with `self run` and
+`self view`, and writes what should outlive the session with `self hear`. The
+first time it needs a way to remember something, it grows one: the capability
+is declared, authored, signed and live on the next turn. Later sessions find
+it in the brief. Nothing in your workflow changes; the memory accumulates.
+
+The working directory is the instance: `events.jsonl`, `.secret` and `cap/`
+appear beside your code. Add `.secret` to `.gitignore`; it is the signing key
+and never leaves the machine. `cap/` is derived and can go too. Whether
+`events.jsonl` is committed is your call. Or keep the instance out of the repo
+entirely with `export SELF_HOME=~/.self`. [`AGENTS.md`](AGENTS.md) is a fuller
+card for the agent instructions once the one line above is not enough.
+
 ## The one idea
 
 The prompt does not describe a tool. It opens with: *you are this self, for a
@@ -64,7 +117,7 @@ given, curated, and learned somewhere else with the edit visible in both logs.
 Then put a real mind in the pipe:
 
 ```sh
-go install .                                            # `self` on PATH
+go install github.com/wouterbeets/self@main             # `self` on PATH
 cd ~/somewhere
 self learn ~/self/lessons/chat | claude -p | self hear  # grow a way to talk
 self run say "what can you do?"
@@ -149,10 +202,12 @@ to start from: `journal`, `chat`, and `memory`.
 
 ## For coding agents
 
-[`AGENTS.md`](AGENTS.md) is one section to paste into a project's `CLAUDE.md`
-or agent instructions. Sessions then share one memory that outlives them.
-`make build` also produces `self-serve` and `self-browse`, sidecars that show
-the same replayed bytes in a browser.
+[Use it](#use-it) above is the whole integration: `self` on `PATH`, one line or
+one hook that runs it before anything else. [`AGENTS.md`](AGENTS.md) is the
+fuller section to paste into a project's `CLAUDE.md` or agent instructions
+when sessions from several agents share one instance and need to be told about
+attribution and conventions. `make build` also produces `self-serve` and
+`self-browse`, sidecars that show the same replayed bytes in a browser.
 
 ## Why
 

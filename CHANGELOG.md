@@ -2,6 +2,16 @@
 
 ## Unreleased — one fixed-point loop
 
+### Docs: the README opens with how to use it
+
+Install with `go install github.com/wouterbeets/self@main`, put one line in the
+agent instructions or one `SessionStart` hook that runs `self`, work as usual.
+Both routes were run against Claude Code in print mode: with the hook alone and
+no tools, the agent reports the instance's event count; with neither, it does
+not know it. `@main` rather than `@latest` because the last tag, v0.2.0,
+predates `self brief` and the current CLI.
+
+
 ### Changed: every rung of the CLI unfolds to the one below it
 
 `self run` and `self view` already printed the capability index when called

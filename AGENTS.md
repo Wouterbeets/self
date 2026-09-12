@@ -5,6 +5,12 @@ system prompt) of any project whose sessions should share one persistent memory.
 It assumes `self` is on PATH. The working directory is the instance unless
 `SELF_HOME` pins one.
 
+The shortest integration needs none of this card: one line telling the agent to
+run `self` before starting anything, or a session hook that runs `self` so its
+output is in context before the first message. The README's *Use it* section has
+both. Paste this card when several agents share an instance and need to be told
+about attribution, conventions, and what not to touch.
+
 ---
 
 ## self: persistent state for this project
