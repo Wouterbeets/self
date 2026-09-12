@@ -1,18 +1,5 @@
 package main
 
-// Accounts — the one wire format between instances, and the only thing that
-// crosses a boundary. An account is a directory of plain text:
-//
-//	account/
-//	  intent.md      the telling (required)
-//	  record.jsonl   the evidence: events verbatim, moments preserved (optional)
-//	  manifest.json  the attestation over the record (optional, advisory)
-//
-// Nothing runnable ever travels. The receiver's own mind reads the intent
-// against local state and declares its own capabilities; only the local key
-// installs. Giving is cheap, learning is the work — that asymmetry is the
-// protocol.
-
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -25,28 +12,16 @@ import (
 	"time"
 )
 
-// refused is the frozen set of names a record may never carry raw. It is the
-// SOLE gate between a foreign account and the strange loop: replay acts on
-// event names, so a deposited command.declared would appear as pending work and
-// the next pass would author and sign an attacker-chosen script under the local
-// key.
-//
-// The set is frozen, not derived: it holds every name this kernel acts on plus
-// every name any kernel ever acted on. A name may leave the vocabulary; it
-// never leaves this set — otherwise retiring a name would quietly make it
-// depositable, and yesterday's vocabulary becomes tomorrow's injection.
 var refused = map[string]bool{
-	// live
-	"command.declared":   true,
-	"view.declared":      true,
-	"script.authored":    true,
-	"script.installed":   true,
-	"script.rejected":    true,
-	"capability.retired": true,
-	"intent.declared":    true,
-	"lesson.learned":     true,
-	"account.given":      true,
-	// retired, and refused forever
+	"command.declared":              true,
+	"view.declared":                 true,
+	"script.authored":               true,
+	"script.installed":              true,
+	"script.rejected":               true,
+	"capability.retired":            true,
+	"intent.declared":               true,
+	"lesson.learned":                true,
+	"account.given":                 true,
 	"kernel.initialized":            true,
 	"projector.declared":            true,
 	"script.compiled":               true,
@@ -62,8 +37,8 @@ const lineagePrefix = "lineage."
 type manifest struct {
 	Events       int    `json:"events"`
 	RecordSha256 string `json:"record_sha256"`
-	Prefix       string `json:"prefix,omitempty"`     // knowledge flavour: which events were selected
-	Capability   string `json:"capability,omitempty"` // capability flavour: command/<n> | view/<n>
+	Prefix       string `json:"prefix,omitempty"`
+	Capability   string `json:"capability,omitempty"`
 }
 
 type account struct {
@@ -71,12 +46,9 @@ type account struct {
 	Intent     string
 	Deposit    []Event
 	Manifest   manifest
-	RecordHash string // sha256 of the record file as actually read
+	RecordHash string
 }
 
-// readAccount reads one account directory. The record is validated whole before
-// anything is appended: a refused name means the account deposits nothing at
-// all, rather than landing a prefix of itself.
 func readAccount(ref string) (*account, error) {
 	data, err := os.ReadFile(filepath.Join(ref, "intent.md"))
 	if err != nil {
@@ -84,14 +56,10 @@ func readAccount(ref string) (*account, error) {
 	}
 	a := &account{Name: accountName(ref), Intent: strings.TrimSpace(string(data))}
 	if a.Intent == "" {
-		// intent.md is the required half: an account with no telling is a pile
-		// of events with nothing saying what they were for.
 		return nil, fmt.Errorf("%s/intent.md is empty — an account's intent is the required half", ref)
 	}
 	raw, rerr := os.ReadFile(filepath.Join(ref, "record.jsonl"))
 	if rerr != nil && !os.IsNotExist(rerr) {
-		// A record that is there but unreadable is not the same as no record:
-		// treating it as absent would silently learn half an account.
 		return nil, fmt.Errorf("record.jsonl is present but unreadable: %w", rerr)
 	}
 	if rerr == nil {
@@ -99,9 +67,6 @@ func readAccount(ref string) (*account, error) {
 			if line = strings.TrimSpace(line); line == "" {
 				continue
 			}
-			// Only the four fields a deposit keeps are parsed. The rest of a
-			// foreign event — seq, id, via — is discarded on the way in, so a
-			// wrong type in one of them must not cost the whole account.
 			var e struct {
 				Name       string          `json:"name"`
 				OccurredAt time.Time       `json:"occurred_at"`
@@ -125,10 +90,6 @@ func readAccount(ref string) (*account, error) {
 		a.RecordHash = hex.EncodeToString(sum[:])
 	}
 	if mraw, err := os.ReadFile(filepath.Join(ref, "manifest.json")); err == nil {
-		// The manifest is advisory — learn reads only its claimed digest, to
-		// record beside the real one. A malformed one is worth saying out loud
-		// and nothing more; aborting on it would let a typo in a file the
-		// protocol calls optional block an account whose record is fine.
 		if err := json.Unmarshal(mraw, &a.Manifest); err != nil {
 			fmt.Fprintf(os.Stderr, "self: ignoring an unreadable manifest.json (it is advisory): %s\n", err)
 		}
@@ -136,8 +97,6 @@ func readAccount(ref string) (*account, error) {
 	return a, nil
 }
 
-// accountName is the name a deposit's door will carry, so it must be a token and
-// not whatever the caller's path happened to end in.
 func accountName(ref string) string {
 	name := filepath.Base(strings.TrimRight(ref, "/"))
 	if name == "" || name == "." || name == ".." || name == "/" {
@@ -146,13 +105,6 @@ func accountName(ref string) string {
 	return name
 }
 
-// cmdLearn is the only way in, and it splits along the seam. The mechanical
-// half happens here and needs no mind: the intent is recorded first (someone
-// brought this prose here), the record is deposited verbatim next, and the
-// attestation lands last — it must be last, because it hashes what actually
-// landed. The intelligent half rides the pipe: stdout is the learning prompt.
-//
-//	self learn account/ | claude -p | self hear
 func cmdLearn(home, ref string, out io.Writer) error {
 	a, err := readAccount(ref)
 	if err != nil {
@@ -169,9 +121,6 @@ func cmdLearn(home, ref string, out io.Writer) error {
 	ie.Via, ie.By = doorCLI, callerClaim()
 	batch = append(batch, ie)
 
-	// Verbatim: this instance's id and seq, the event's own moment and its own
-	// speaker. Testimony travels with its time and its voice. The door is
-	// re-stamped — whatever via the record carried was another body's fact.
 	for _, e := range a.Deposit {
 		fresh := newEvent(e.Name, e.Payload)
 		if !e.OccurredAt.IsZero() {
@@ -181,9 +130,6 @@ func cmdLearn(home, ref string, out io.Writer) error {
 		batch = append(batch, fresh)
 	}
 
-	// The attestation records what was deposited BESIDE what the manifest
-	// claimed. A divergence means the account was edited between giving and
-	// learning — legitimate curation, visible in both logs forever.
 	att := map[string]any{"account": a.Name, "events": len(a.Deposit)}
 	if a.RecordHash != "" {
 		att["record_sha256"] = a.RecordHash
@@ -193,7 +139,7 @@ func cmdLearn(home, ref string, out io.Writer) error {
 	}
 	ap, _ := json.Marshal(att)
 	ae := newEvent("lesson.learned", ap)
-	ae.Via = doorKernel // the kernel's own attestation, like a receipt
+	ae.Via = doorKernel
 	batch = append(batch, ae)
 
 	if err := appendEvents(home, batch); err != nil {
@@ -209,9 +155,6 @@ func cmdLearn(home, ref string, out io.Writer) error {
 	return err
 }
 
-// learnAsk frames the work: realize this intent HERE, as this instance's own
-// capabilities. The same account learned by two instances yields two
-// expressions — that is learning rather than copying.
 func learnAsk(ref string, a *account) string {
 	ask := fmt.Sprintf("Learn the account %q: decide how its intent should live on THIS instance, declare the capabilities that realize it, and author their scripts in this same answer.\n\nFix the public names the intent fixes; choose everything else yourself against what this instance already has. Do not transplant another instance's design.", a.Name)
 	if len(a.Deposit) > 0 {
@@ -221,10 +164,6 @@ func learnAsk(ref string, a *account) string {
 		}
 		ask += fmt.Sprintf("\n\nIts record — %d event(s) — is already in this log, verbatim, through the door learn:%s. Read %s or events.jsonl to ground your declarations in the evidence. lineage.* events are another instance's history: reference material, never yours to re-emit.", len(a.Deposit), a.Name, filepath.Join(abs, "record.jsonl"))
 	}
-	// The intent is another instance's prose, and it lands inside a prompt a
-	// mind will act on. Quoting every line means it cannot close the block or
-	// forge a section of the prompt's own structure — see the limits in
-	// `self help`; this narrows the surface, it does not remove it.
 	var quoted strings.Builder
 	for _, l := range strings.Split(a.Intent, "\n") {
 		quoted.WriteString("| ")
@@ -235,16 +174,7 @@ func learnAsk(ref string, a *account) string {
 		quoted.String() + "--- END INTENT ---"
 }
 
-// cmdGive writes an account from the live log. Two selectors, one format: an
-// event-name prefix gives the knowledge flavour (every matching event,
-// verbatim, moments intact); command/<name> or view/<name> gives the capability
-// flavour — the declarations and this instance's verified receipts, renamed to
-// lineage so they arrive as evidence and can never be installables. Curation is
-// the giver's move and it happens in the directory afterwards.
 func cmdGive(home, selector, dir string) error {
-	// An empty selector would match every event in the log — including every
-	// installed script — and quietly write the whole instance out to a
-	// directory. Giving is deliberate; make it say what it gives.
 	if strings.TrimSpace(selector) == "" {
 		return fmt.Errorf("give needs a selector: an event-name prefix (\"note.\"), or command/<name> | view/<name>")
 	}
@@ -295,21 +225,13 @@ func cmdGive(home, selector, dir string) error {
 		if refused[e.Name] {
 			e.Name = lineagePrefix + e.Name
 		}
-		enc.Encode(e)
-	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-	// Curation happens in this directory, so a second give into it would
-	// silently destroy the edits and recompute the manifest over the
-	// replacement — erasing the intervention the protocol exists to make
-	// visible.
-	if _, err := os.Stat(filepath.Join(dir, "record.jsonl")); err == nil {
-		return fmt.Errorf("%s already holds a record.jsonl — curation lives in that file, so give into a fresh directory rather than overwriting it", dir)
+		if err := enc.Encode(e); err != nil {
+			return err
+		}
 	}
 	recordBytes := []byte(record.String())
-	if err := os.WriteFile(filepath.Join(dir, "record.jsonl"), recordBytes, 0644); err != nil {
-		return err
+	if err := writeFileAtomic(filepath.Join(dir, "record.jsonl"), recordBytes, 0644, os.Link); err != nil {
+		return fmt.Errorf("give into a fresh directory; record.jsonl must not be overwritten: %w", err)
 	}
 	sum := sha256.Sum256(recordBytes)
 	m.Events, m.RecordSha256 = len(selected), hex.EncodeToString(sum[:])
@@ -317,17 +239,11 @@ func cmdGive(home, selector, dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(mb, '\n'), 0644); err != nil {
 		return err
 	}
-	// The intent stub is written once and never clobbered: editing it is the
-	// giver's moment of curation, and it is the half a receiving mind reads
-	// first.
 	intentPath := filepath.Join(dir, "intent.md")
-	if _, err := os.Stat(intentPath); err != nil {
-		if err := os.WriteFile(intentPath, []byte(intentStub(m)), 0644); err != nil {
-			return err
-		}
+	if err := writeFileAtomic(intentPath, []byte(intentStub(m)), 0644, os.Link); err != nil && !os.IsExist(err) {
+		return err
 	}
 
-	// The giver remembers giving: if it is not an event, it did not happen.
 	given, _ := json.Marshal(map[string]any{
 		"selector": selector, "events": len(selected), "dir": dir, "record_sha256": m.RecordSha256,
 	})

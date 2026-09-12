@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""mind-grok — the grok CLI as a mind, with a live trace on stderr.
+
+A mind reads a situated prompt on stdin and prints event JSONL on stdout. `grok
+-p` takes its prompt as an argument and, in its default plain format, prints only
+the final answer after a silent run. This wrapper hands it the prompt, asks for
+the streaming-messages-json trace, renders thinking, text, tool calls and tool
+results to stderr as they happen, and forwards only the event-shaped lines of the
+final answer to stdout as the wire. The loop already routes mind stderr to the
+terminal, so:
+
+    self loop --ask "…" -- examples/mind-grok
+
+Anything after the script name is passed to grok verbatim: -m for the model,
+--reasoning-effort, --tools, --permission-mode. grok's permission mode comes
+from ~/.grok/config.toml; check it before handing a body to a mind you are not
+watching, because "always-approve" means exactly that. No session is resumed:
+every waking is fresh, and the log is the only memory.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+DIM, BOLD, RESET = "\033[2m", "\033[1m", "\033[0m"
+if not sys.stderr.isatty():
+    DIM = BOLD = RESET = ""
+
+RESULT_CAP = int(os.environ.get("MIND_GROK_RESULT_CAP", "600"))
+THINK_CAP = int(os.environ.get("MIND_GROK_THINK_CAP", "300"))
+GROK = os.environ.get("MIND_GROK_BIN") or shutil.which("grok") or os.path.expanduser("~/.grok/bin/grok")
+
+
+def say(line):
+    sys.stderr.write(line + "\n")
+    sys.stderr.flush()
+
+
+def one_line(value, cap):
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    text = " ".join(text.split())
+    return text if len(text) <= cap else text[: cap - 1] + "…"
+
+
+def describe_tool(inp):
+    if not isinstance(inp, dict):
+        return one_line(inp, 200)
+    for key in ("command", "pattern", "query", "target_file", "target_directory", "file_path", "path", "prompt", "description", "url"):
+        if key in inp:
+            extra = f" in {inp['path']}" if key == "pattern" and isinstance(inp.get("path"), str) else ""
+            return one_line(str(inp[key]) + extra, 240)
+    return one_line(inp, 200)
+
+
+def result_text(content):
+    """grok wraps a tool result as a JSON string; a shell result carries its
+    output as a byte array. Unwrap what can be unwrapped, show the rest as is."""
+    if isinstance(content, list):
+        content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    if not isinstance(content, str):
+        return one_line(content, RESULT_CAP)
+    try:
+        inner = json.loads(content)
+    except ValueError:
+        return one_line(content, RESULT_CAP)
+    if isinstance(inner, dict):
+        out = None
+        for key in ("output", "stdout", "content", "result", "Content", "FileContent"):
+            if key in inner:
+                out = inner[key]
+                break
+        # ListDir and ReadFile nest once more: {"Content": {"content": …}}.
+        if isinstance(out, dict):
+            out = out.get("content", out)
+        if isinstance(out, list) and out and all(isinstance(b, int) for b in out):
+            try:
+                out = bytes(out).decode("utf-8", "replace")
+            except (ValueError, TypeError):
+                pass
+        if out is not None:
+            return one_line(out, RESULT_CAP)
+    return one_line(inner, RESULT_CAP)
+
+
+def render(event):
+    kind = event.get("type")
+    if kind == "system" and event.get("subtype") == "init":
+        say(f"{DIM}mind-grok: model {event.get('model', '?')} · permissions {event.get('permissionMode', '?')} · session {event.get('session_id', '?')}{RESET}")
+        return
+    if kind == "assistant":
+        for block in event.get("message", {}).get("content", []):
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "thinking" and block.get("thinking", "").strip():
+                say(f"{DIM}  ~ {one_line(block['thinking'], THINK_CAP)}{RESET}")
+            elif block.get("type") == "text" and block.get("text", "").strip():
+                for line in block["text"].strip().splitlines():
+                    say(f"  {line}")
+            elif block.get("type") == "tool_use":
+                say(f"{BOLD}▸ {block.get('name', 'tool')}{RESET} {describe_tool(block.get('input'))}")
+        return
+    if kind == "user":
+        for block in event.get("message", {}).get("content", []):
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                flag = " (error)" if block.get("is_error") else ""
+                say(f"{DIM}  ↳{flag} {result_text(block.get('content'))}{RESET}")
+        return
+    if kind == "result":
+        detail = []
+        if event.get("num_turns") is not None:
+            detail.append(f"{event['num_turns']} turn(s)")
+        if isinstance(event.get("total_cost_usd"), (int, float)):
+            detail.append(f"${event['total_cost_usd']:.4f}")
+        if event.get("is_error") or event.get("subtype") not in (None, "success"):
+            detail.append(str(event.get("subtype")))
+        say(f"{DIM}mind-grok: done · {' · '.join(detail)}{RESET}")
+
+
+def main():
+    prompt = sys.stdin.read()
+    say(f"{DIM}mind-grok: body {os.environ.get('SELF_HOME') or os.getcwd()}{RESET}")
+    argv = [GROK, "-p", prompt, "--verbatim", "--output-format", "streaming-messages-json", *sys.argv[1:]]
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)
+
+    answer = None
+    failed = False
+    for raw in proc.stdout:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            say(f"{DIM}  ? {one_line(raw, 200)}{RESET}")
+            continue
+        render(event)
+        if event.get("type") == "result":
+            answer = event.get("result")
+            failed = bool(event.get("is_error"))
+    code = proc.wait()
+    # Only event-shaped lines reach the wire; the prose is already in the trace.
+    if isinstance(answer, str) and not failed:
+        for line in answer.splitlines():
+            candidate = line.strip().strip("`").strip()
+            try:
+                obj = json.loads(candidate)
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and isinstance(obj.get("name"), str) and "payload" in obj:
+                sys.stdout.write(candidate + "\n")
+        sys.stdout.flush()
+    sys.exit(code if code else (1 if failed else 0))
+
+
+if __name__ == "__main__":
+    main()

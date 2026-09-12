@@ -1,10 +1,20 @@
 name: release
 
 # A pushed vX.Y.Z tag is the release. The notes come from CHANGELOG.md, so there
-# is one description of what shipped and it lives in the repo.
+# is one description of what shipped and it lives in the repo. Run it by hand
+# with a tag name and it cuts that tag on the current commit first.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to cut on this commit and release, e.g. v1.0.0"
+        required: true
+        type: string
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
@@ -14,6 +24,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: cut the tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          msg="$(grep -m1 "^## ${TAG}" CHANGELOG.md | sed 's/^## //')"
+          git tag -a "$TAG" -m "${msg:-$TAG}"
+          git push origin "refs/tags/$TAG"
 
       - uses: actions/setup-go@v5
         with:
@@ -30,8 +49,10 @@ jobs:
           mkdir -p dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os="${target%/*}"; arch="${target#*/}"
-            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-              go build -trimpath -ldflags "-s -w" -o "dist/self-$os-$arch" .
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch"
+            go build -trimpath -ldflags "-s -w" -o "dist/self-$os-$arch" .
+            go build -trimpath -ldflags "-s -w" -o "dist/self-serve-$os-$arch" ./cmd/self-serve
+            go build -trimpath -ldflags "-s -w" -o "dist/self-browse-$os-$arch" ./cmd/self-browse
           done
           cd dist && sha256sum self-* > SHA256SUMS && cd ..
           ls -la dist
@@ -39,7 +60,7 @@ jobs:
       - name: notes
         id: notes
         run: |
-          tag="${GITHUB_REF_NAME}"
+          tag="$TAG"
           # The section for this tag, up to the next top-level "## ".
           awk -v tag="$tag" '
             $0 ~ "^## " tag " " || $0 ~ "^## " tag "$" { on = 1; next }
@@ -57,7 +78,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          gh release create "$TAG" \
             --title "${{ steps.notes.outputs.title }}" \
             --notes-file notes.md \
             dist/*

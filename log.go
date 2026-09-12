@@ -1,11 +1,5 @@
 package main
 
-// The log. One append-only file is the whole authoritative state of an
-// instance; everything else in this program is a replay of it. Nothing here
-// interprets an event — that is capability.go's job. This file only guarantees
-// that what lands, lands exactly once, in order, with provenance the kernel
-// itself witnessed.
-
 import (
 	"bytes"
 	"crypto/hmac"
@@ -13,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,16 +18,6 @@ import (
 	"unicode/utf8"
 )
 
-// An Event is the only record type. Two provenance fields sit beside the
-// payload:
-//
-//	Via — the door. The channel the kernel witnessed this event entering
-//	      through: cli, hear, kernel, learn:<account>. Stamped from what the
-//	      kernel saw, never accepted from a script, a mind, or a record. A
-//	      local fact, like Seq.
-//	By  — the speaker. Whatever the caller claimed (SELF_CALLER), recorded
-//	      verbatim as a claim and never verified. Portable, like OccurredAt:
-//	      testimony keeps its speaker when it travels between instances.
 type Event struct {
 	ID         string          `json:"id"`
 	Seq        int             `json:"seq"`
@@ -43,32 +28,22 @@ type Event struct {
 	Payload    json.RawMessage `json:"payload"`
 }
 
-// The doors. A door is what the kernel saw, so there are exactly as many as
-// there are ways in.
 const (
-	doorCLI    = "cli"    // a local invocation: run, give
-	doorHear   = "hear"   // came back through the pipe
-	doorKernel = "kernel" // the kernel's own testimony: receipts, refusals, attestations
-	doorLearn  = "learn:" // + the account name: a deposit
+	doorCLI    = "cli"
+	doorHear   = "hear"
+	doorKernel = "kernel"
+	doorLearn  = "learn:"
 )
 
-// eventName is the shape every name entering the log must have. Lowercase
-// dotted, so an event is never confused with incidental JSON: this is half of
-// what makes content-dispatch (see the wire) safe.
 var eventName = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`)
 
 func validEventName(s string) bool { return eventName.MatchString(s) }
 
-// callerClaim is the speaker a local invocation claims to be — verbatim, empty
-// when nothing was claimed.
-func callerClaim() string { return strings.TrimSpace(os.Getenv("SELF_CALLER")) }
+func callerClaim() string { return os.Getenv("SELF_CALLER") }
 
 func newEvent(name string, payload json.RawMessage) Event {
 	b := make([]byte, 16)
 	rand.Read(b)
-	// An absent payload and an explicit null are the same thing said twice, and
-	// only one of them is safe for a view to index into. Normalize, so no view
-	// ever has to defend against None.
 	if len(payload) == 0 || string(bytes.TrimSpace(payload)) == "null" {
 		payload = json.RawMessage(`{}`)
 	}
@@ -90,24 +65,6 @@ func homeDir() string {
 
 func logPath(home string) string { return filepath.Join(home, "events.jsonl") }
 
-// readEvents replays the log from disk.
-//
-// The last line is the interesting one, because a file can be caught mid-write —
-// a crash, a full disk, a kill, or simply another process appending this instant.
-// The rule that separates the cases is whether those bytes are a WHOLE event:
-//
-//   - Terminated by a newline: a record. Always.
-//   - Unterminated but parses as an event: also a record. It is complete; only
-//     its terminator is missing, which is what an editor that strips trailing
-//     newlines leaves behind. Dropping it would destroy a committed event.
-//   - Unterminated and does not parse: a torn write. Not a record, skipped, and
-//     dropped by the next append. Without this a single short write bricked the
-//     instance permanently, rehydrate included, and every read raced every
-//     append.
-//
-// A malformed line in the MIDDLE is none of those: it is real corruption, and it
-// is an error naming the line, because silently skipping it would change the
-// instance's state without saying so.
 func readEvents(home string) ([]Event, error) {
 	data, err := os.ReadFile(logPath(home))
 	if err != nil {
@@ -126,7 +83,6 @@ func readEvents(home string) ([]Event, error) {
 		var e Event
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			if !terminated {
-				// Caught mid-write: incomplete bytes, not a record.
 				fmt.Fprintf(os.Stderr, "self: ignoring an unterminated, incomplete final line in events.jsonl (%d bytes) — it was never committed\n", len(line))
 				break
 			}
@@ -137,9 +93,6 @@ func readEvents(home string) ([]Event, error) {
 	return events, nil
 }
 
-// appendEvents writes a batch under one lock: sequence numbers are assigned and
-// the lines land together, so a declaration and its receipt cannot be split by
-// a concurrent invocation. It mutates the events in place with their Seq.
 func appendEvents(home string, evs []Event) error {
 	if len(evs) == 0 {
 		return nil
@@ -155,20 +108,14 @@ func appendEvents(home string, evs []Event) error {
 	return appendLocked(home, evs)
 }
 
-// appendLocked is appendEvents' body for callers already holding the lock (a
-// hear body, which must resolve declared-ness between its own appends).
 func appendLocked(home string, evs []Event) error {
-	// Every append passes through here, so this is where the log's two
-	// well-formedness rules live: a lowercase dotted name, and a payload that
-	// is valid UTF-8. A RawMessage is written through verbatim, so raw bytes
-	// would land unchanged and break every view that parses the line.
+	if len(evs) == 0 {
+		return nil
+	}
 	for i := range evs {
 		if !validEventName(evs[i].Name) {
 			return fmt.Errorf("event name %q is not lowercase dotted (see self help)", evs[i].Name)
 		}
-		// script.authored is a wire message, not an event. The protocol says it
-		// never lands in the log, so no door may land it — a command that
-		// emitted one would otherwise leave a lie there.
 		if evs[i].Name == "script.authored" {
 			return fmt.Errorf("script.authored is a wire message, not an event: it is heard by `self hear`, never appended")
 		}
@@ -178,11 +125,6 @@ func appendLocked(home string, evs []Event) error {
 	}
 	last, err := lastSeq(home)
 	if err != nil {
-		return err
-	}
-	// If the file does not end in a newline, its tail is an uncommitted
-	// fragment. Drop it before appending.
-	if err := dropFragment(home); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
@@ -196,41 +138,23 @@ func appendLocked(home string, evs []Event) error {
 		buf.Write(line)
 		buf.WriteByte('\n')
 	}
+	if err := dropFragment(home); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(logPath(home), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return err
 	}
-	// A batch is all or nothing. On a short write — a full disk is the usual
-	// way — roll the file back to where it started, still under the lock, so a
-	// torn tail never exists. dropFragment is the backstop for the writes that
-	// never reach here at all (a kill, a power cut), not the plan.
-	base := int64(0)
-	if st, serr := f.Stat(); serr == nil {
-		base = st.Size()
+	st, err := f.Stat()
+	if err != nil {
+		return errors.Join(err, f.Close())
 	}
 	if _, err := f.Write(buf.Bytes()); err != nil {
-		f.Truncate(base)
-		f.Close()
-		return err
+		return errors.Join(err, f.Truncate(st.Size()), f.Close())
 	}
 	return f.Close()
 }
 
-// dropFragment makes the log end on a record boundary before the next append,
-// which means deciding what an unterminated final line is.
-//
-// If it parses as an event it is a whole record whose terminator went missing —
-// an editor that strips trailing newlines is the ordinary way — so it is
-// TERMINATED, never discarded: dropping it would destroy a committed event.
-//
-// If it does not parse, it is a torn write, and it is truncated away. That is
-// the one place this log shrinks, and it does not violate append-only, because
-// those bytes were never a record. Both alternatives are worse: appending
-// straight on top glues the batch to the fragment and destroys the record above
-// it, and closing an incomplete fragment with a newline promotes garbage into a
-// permanently unreadable middle line, which bricks every later read.
-//
-// Call under the lock.
 func dropFragment(home string) error {
 	f, err := os.OpenFile(logPath(home), os.O_RDWR, 0644)
 	if err != nil {
@@ -244,33 +168,25 @@ func dropFragment(home string) error {
 	if err != nil || st.Size() == 0 {
 		return err
 	}
-	// How many trailing bytes follow the last newline?
-	const window = 1024 * 1024
 	size := st.Size()
-	read := int64(window)
-	if read > size {
-		read = size
-	}
-	buf := make([]byte, read)
-	if _, err := f.ReadAt(buf, size-read); err != nil {
-		return err
-	}
-	i := bytes.LastIndexByte(buf, '\n')
-	if i == int(read)-1 {
-		return nil // already ends on a record boundary
-	}
-	tail := buf[i+1:] // i == -1 gives the whole window, which is the whole file below
+	var tail []byte
 	var keep int64
-	if i < 0 {
-		if read < size {
-			return fmt.Errorf("events.jsonl has no newline in its last %d bytes; refusing to guess where the last record ends", window)
+	for window := int64(64 * 1024); ; window *= 4 {
+		window = min(window, size)
+		buf := make([]byte, window)
+		if _, err := f.ReadAt(buf, size-window); err != nil {
+			return err
 		}
-		keep = 0 // the whole file is one unterminated line
-	} else {
-		keep = size - read + int64(i) + 1
+		i := bytes.LastIndexByte(buf, '\n')
+		if i == len(buf)-1 {
+			return nil
+		}
+		if i >= 0 || window == size {
+			tail, keep = buf[i+1:], size-window+int64(i)+1
+			break
+		}
 	}
 
-	// Whole record, missing only its terminator? Give it one.
 	var e Event
 	if json.Unmarshal(bytes.TrimSpace(tail), &e) == nil {
 		_, err := f.WriteAt([]byte("\n"), size)
@@ -281,14 +197,6 @@ func dropFragment(home string) error {
 	return f.Truncate(keep)
 }
 
-// lastSeq reads the sequence number to continue from, by parsing only the tail
-// of the log — appends stay O(1) as the log grows, and no sidecar file can drift
-// from it: the log is the only record of where it ends.
-//
-// It applies readEvents' rule. A final line with no newline was never committed,
-// so the batch about to be written must not inherit its sequence; the same goes
-// for a tail that is terminated but unreadable. Walk back to the last line that
-// is genuinely a record. Call under the lock.
 func lastSeq(home string) (int, error) {
 	f, err := os.Open(logPath(home))
 	if err != nil {
@@ -303,8 +211,6 @@ func lastSeq(home string) (int, error) {
 		return 0, err
 	}
 
-	// Grow the window backwards until a readable record turns up or the whole
-	// file has been read. In the normal case the first 64KB is one line.
 	for window := int64(64 * 1024); ; window *= 4 {
 		if window > st.Size() {
 			window = st.Size()
@@ -316,14 +222,8 @@ func lastSeq(home string) (int, error) {
 			}
 		}
 		lines := bytes.Split(buf, []byte{'\n'})
-		// The HIGHEST sequence in the window wins, not the last one seen. The
-		// kernel only ever writes them in order, so for a log it wrote these are
-		// the same answer — but a hand-appended line out of order would
-		// otherwise hand the next batch a number already in use, and duplicate
-		// sequences are the one thing replay cannot recover from.
-		//
-		// A line counts if it parses, terminated or not: same rule as
-		// readEvents, so a final record missing only its newline is not skipped.
+		// Highest seq in the window, not the last line: a hand-appended
+		// out-of-order record would otherwise reuse a number.
 		best, found := 0, false
 		for i := len(lines) - 1; i >= 0; i-- {
 			line := bytes.TrimSpace(lines[i])
@@ -331,11 +231,11 @@ func lastSeq(home string) (int, error) {
 				continue
 			}
 			if i == 0 && window < st.Size() {
-				break // this line may start before the window
+				break
 			}
 			var e Event
 			if json.Unmarshal(line, &e) != nil {
-				continue // not a record; keep looking
+				continue
 			}
 			found = true
 			if e.Seq > best {
@@ -346,7 +246,7 @@ func lastSeq(home string) (int, error) {
 			return best, nil
 		}
 		if window >= st.Size() {
-			return 0, nil // nothing readable anywhere: start from one
+			return 0, nil
 		}
 	}
 }
@@ -366,14 +266,8 @@ func lockLog(home string) (func(), error) {
 	}, nil
 }
 
-// ───────────────────────────────── the key ──────────────────────────────────
-
 func secretPath(home string) string { return filepath.Join(home, ".secret") }
 
-// secret reads the instance key. It NEVER creates one: reads project, writes
-// append, and a stray `self` in some directory must not leave a key file
-// behind. Absent means absent — nothing verifies, so the instance has no
-// capabilities, which is the truth about a directory that is not an instance.
 func secret(home string) []byte {
 	data, err := os.ReadFile(secretPath(home))
 	if err != nil {
@@ -386,7 +280,6 @@ func secret(home string) []byte {
 	return key
 }
 
-// ensureSecret mints the key if it is missing. Only write paths call it.
 func ensureSecret(home string) ([]byte, error) {
 	if key := secret(home); key != nil {
 		return key, nil
@@ -395,14 +288,7 @@ func ensureSecret(home string) ([]byte, error) {
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(home, 0755); err != nil {
-		return nil, err
-	}
-	// O_EXCL, so exactly one of two selves racing on a fresh home creates the
-	// key and the other reads it. Losing that race silently used to mean
-	// signing receipts under a key the instance would then throw away.
-	f, err := os.OpenFile(secretPath(home), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
+	if err := writeFileAtomic(secretPath(home), []byte(hex.EncodeToString(key)), 0600, os.Link); err != nil {
 		if os.IsExist(err) {
 			if existing := secret(home); existing != nil {
 				return existing, nil
@@ -410,23 +296,10 @@ func ensureSecret(home string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	if _, err := f.WriteString(hex.EncodeToString(key)); err != nil {
-		f.Close()
-		return nil, err
-	}
-	if err := f.Close(); err != nil {
-		return nil, err
-	}
 	fmt.Fprintf(os.Stderr, "self: new instance %s\n", home)
 	return key, nil
 }
 
-// ─────────────────────────────── the receipt ────────────────────────────────
-
-// A receipt is the kernel's signature over installed bytes. consumes is signed
-// with the script because a view is only a pure function relative to the events
-// it is fed: sign one without the other and a re-declaration silently changes
-// what the old script sees.
 type receipt struct {
 	Type     string   `json:"type"`
 	Name     string   `json:"name"`
@@ -436,14 +309,6 @@ type receipt struct {
 	Sig      string   `json:"sig"`
 }
 
-// sign is the trust gate's arithmetic. Every field is length-prefixed so the
-// preimage is injective: two different receipts can never share one.
-//
-// consumes needs its COUNT prefixed as well as each element. Joining the list
-// into a single field left the partition unsigned, so a two-element list and one
-// element holding the same bytes with a separator inside hashed identically —
-// and that single element matches no event name, which means a validly-signed
-// receipt whose view is fed nothing.
 func sign(key []byte, r receipt) string {
 	m := hmac.New(sha256.New, key)
 	m.Write([]byte("self.receipt.v4\x00"))
@@ -462,8 +327,6 @@ func sign(key []byte, r receipt) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// verifyReceipt is the whole trust gate. A receipt that does not verify under
-// this instance's key is inert data in the log, no matter who wrote it.
 func verifyReceipt(key []byte, payload json.RawMessage) (receipt, bool) {
 	var r receipt
 	if key == nil || json.Unmarshal(payload, &r) != nil {
