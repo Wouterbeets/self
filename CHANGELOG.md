@@ -2,7 +2,7 @@
 
 ## Unreleased — one fixed-point loop
 
-### Docs: the README opens with how to use it
+### Docs: the README is a third of its size and opens with how to use it
 
 Install with `go install github.com/wouterbeets/self@main`, put one line in the
 agent instructions or one `SessionStart` hook that runs `self`, work as usual.
@@ -11,10 +11,11 @@ no tools, the agent reports the instance's event count; with neither, it does
 not know it. `@main` rather than `@latest` because the last tag, v0.2.0,
 predates `self brief` and the current CLI.
 
-`AGENTS.md` is gone. It was a long card to paste into a project's agent
-instructions, and every line of it was something the brief already tells the
-agent from the log, adapted to what this instance has actually grown. The one
-line in the README is the integration.
+Gone: `AGENTS.md`, a long card that restated statically what the brief tells
+the agent from the log; `KERNEL_AUDIT.md`, the record of one refactor;
+`instance-sync.plan.md`, `instance-sync.prompt.md` and `examples/instance-sync`,
+one personal two-machine deployment with its build output and patched copies
+committed. The README keeps how to use it, how it works, and the limits.
 
 
 ### Changed: every rung of the CLI unfolds to the one below it
