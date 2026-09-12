@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased — one fixed-point loop
+## v1.0.0 — one fixed-point loop
+
+The first stable release. Everything below this heading and under the next one
+is what changed since v0.2.0; the log format is compatible with v0.x, nothing
+else is. See **Migrating** at the bottom of the next section.
 
 ### Docs: the README is a third of its size and opens with how to use it
 
@@ -254,7 +258,10 @@ is a fresh replay; the server holds no session. This is not a return of v0
 `self serve`: views still emit opaque bytes, the kernel still has no HTTP, and
 the only thing the HTTP face adds is a two-second freshness check.
 
-## v2.0.0 — the kernel that stopped guessing
+## Also in v1.0.0 — the kernel that stopped guessing
+
+*Written under a v2.0.0 heading while unreleased; that tag was never cut and
+this work ships in v1.0.0.*
 
 A rewrite. The log format is compatible; nothing else is. If you have a grown
 v0.x instance, read **Migrating** at the bottom before you do anything.
