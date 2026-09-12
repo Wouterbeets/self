@@ -68,8 +68,10 @@ The working directory is the instance: `events.jsonl`, `.secret` and `cap/`
 appear beside your code. Add `.secret` to `.gitignore`; it is the signing key
 and never leaves the machine. `cap/` is derived and can go too. Whether
 `events.jsonl` is committed is your call. Or keep the instance out of the repo
-entirely with `export SELF_HOME=~/.self`. [`AGENTS.md`](AGENTS.md) is a fuller
-card for the agent instructions once the one line above is not enough.
+entirely with `export SELF_HOME=~/.self`.
+
+That one line is the whole integration. There is no longer card to paste: the
+brief adapts to what the instance has grown, so the instructions never go stale.
 
 ## The one idea
 
@@ -203,11 +205,10 @@ to start from: `journal`, `chat`, and `memory`.
 ## For coding agents
 
 [Use it](#use-it) above is the whole integration: `self` on `PATH`, one line or
-one hook that runs it before anything else. [`AGENTS.md`](AGENTS.md) is the
-fuller section to paste into a project's `CLAUDE.md` or agent instructions
-when sessions from several agents share one instance and need to be told about
-attribution and conventions. `make build` also produces `self-serve` and
-`self-browse`, sidecars that show the same replayed bytes in a browser.
+one hook that runs it before anything else. Attribution, conventions, and what
+not to touch are told by `self` itself, from the log, on every waking. `make
+build` also produces `self-serve` and `self-browse`, sidecars that show the same
+replayed bytes in a browser.
 
 ## Why
 

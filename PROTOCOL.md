@@ -3,7 +3,7 @@
 This file is the Self Protocol. It is the contract. `self help` prints it verbatim, and situated prompts
 splice the marked core and growth layers as state requires, so there is exactly one
 description of the wire in the whole system. Nothing else — not the README, not
-AGENTS.md, not a comment — restates it.
+a comment — restates it.
 
 ## The law
 

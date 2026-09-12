@@ -11,6 +11,11 @@ no tools, the agent reports the instance's event count; with neither, it does
 not know it. `@main` rather than `@latest` because the last tag, v0.2.0,
 predates `self brief` and the current CLI.
 
+`AGENTS.md` is gone. It was a long card to paste into a project's agent
+instructions, and every line of it was something the brief already tells the
+agent from the log, adapted to what this instance has actually grown. The one
+line in the README is the integration.
+
 
 ### Changed: every rung of the CLI unfolds to the one below it
 
