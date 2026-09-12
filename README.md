@@ -9,7 +9,7 @@ and capabilities over time, without exploding your context window.
 **1. Install.** One static Go binary.
 
 ```sh
-go install github.com/wouterbeets/self@main
+go install github.com/wouterbeets/self@latest
 ```
 
 Make sure `$(go env GOPATH)/bin` is on your `PATH`; `self --help` should answer.
