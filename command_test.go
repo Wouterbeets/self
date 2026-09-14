@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -120,7 +122,7 @@ func TestCLIOutputFailure(t *testing.T) {
 		verb string
 		args []string
 	}{
-		{"run", nil}, {"view", nil}, {"brief", nil}, {"help", nil},
+		{"run", nil}, {"view", nil}, {"brief", nil}, {"prompt", nil}, {"help", nil},
 		{"loop", []string{"--help"}},
 		{"view", []string{"journal"}}, {"run", []string{"entry", "committed"}},
 	} {
