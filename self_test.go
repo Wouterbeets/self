@@ -1309,7 +1309,7 @@ func TestOrdinaryPromptCarriesTheDietNotTheProtocol(t *testing.T) {
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"this self, for a bit", "The mind ends; you do not", "append-only log", "only what you append persists", "Context is finite", "views are compressed reads", "Exploration sometimes yields", "one-off scaffolding", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
+	for _, want := range []string{"a mind making one pass over this self", "The self persists; you do not", "append-only log", "Only what you append persists", "Context is finite", "views are compressed reads", "Exploration sometimes yields", "one-off scaffolding", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}

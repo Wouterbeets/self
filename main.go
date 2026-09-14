@@ -307,10 +307,13 @@ func capabilityList(st *state, typ string) string {
 		fmt.Fprintf(&b, "- %s — %s%s\n", c.Name, c.Decl.summary(), pendingMark(c))
 	}
 	if typ == kindView && st.cap(kindView, "log") == nil {
-		fmt.Fprintf(&b, "- log — the last %d events, newest last; `--all` for the whole log (built in, shadowable)\n", builtinLogTail)
+		fmt.Fprintf(&b, "- log — the last %d events; `--all` for every one (built in, shadowable)\n", builtinLogTail)
 	}
 	if len(caps) == 0 {
-		fmt.Fprintf(&b, "\n(no declared %ss yet — `self help` shows how to author one)\n", typ)
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "(no declared %ss yet — `self help` shows how to author one)\n", typ)
 	}
 	return b.String()
 }
