@@ -1302,14 +1302,14 @@ func TestAccountEdgesAreRefused(t *testing.T) {
 	}
 }
 
-func TestOrdinaryPromptCarriesTheDietNotTheProtocol(t *testing.T) {
-	for _, layer := range []string{"core", "growth", "loop"} {
+func TestExecutionPromptCarriesTheDietNotTheProtocol(t *testing.T) {
+	for _, layer := range []string{"core", "session", "execution", "growth", "loop"} {
 		if protocolLayer(layer) == "" {
 			t.Fatalf("PROTOCOL.md lost prompt layer %q", layer)
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"a mind making one pass over this self", "The self persists; you do not", "append-only log", "Only what you append persists", "Context is finite", "views are compressed reads", "Exploration sometimes yields", "one-off scaffolding", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
+	for _, want := range []string{"your persistent self", "You are making one pass", "append-only log", "Only what you append to self", "Context is finite", "views are compressed reads", "Exploration sometimes yields", "one-off scaffolding", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}
@@ -1405,20 +1405,76 @@ func TestBuiltinLogViewIsShadowable(t *testing.T) {
 	}
 }
 
-// Bare orientation always presents the body. Whether anything warrants action
-// belongs to the mind; convergence belongs to `self loop`, which can witness
-// every append without pretending to understand domain state.
-func TestBareSituateAlwaysOrients(t *testing.T) {
+// Checking self preserves identity without taking over the caller's session.
+func TestBareSelfSeparatesSessionFromExecution(t *testing.T) {
 	h := home(t)
-	var out bytes.Buffer
-	if err := cmdSituate(h, "", &out); err != nil {
+	for _, pending := range []bool{false, true} {
+		if pending {
+			heard(t, h, line(t, "command.declared", decl{Name: "entry", Description: "append an entry"}))
+		}
+		before := stateRevision(replayed(t, h))
+		var session bytes.Buffer
+		if err := dispatch(h, "", nil, &session); err != nil {
+			t.Fatal(err)
+		}
+		p := session.String()
+		for _, want := range []string{protocolLayer("core"), protocolLayer("session"), "self view", "self hear"} {
+			if !strings.Contains(p, want) {
+				t.Fatalf("session missing %q:\n%s", want, p)
+			}
+		}
+		for _, absent := range []string{protocolLayer("execution"), protocolLayer("growth"), protocolLayer("loop"), "## The ask", "script.authored", "as idiom"} {
+			if strings.Contains(p, absent) {
+				t.Fatalf("session carries execution instructions %q", absent)
+			}
+		}
+		if pending && !strings.Contains(p, "command/entry") {
+			t.Fatal("session hid the pending capability")
+		}
+		for _, args := range [][]string{nil, {"advance", "the journal"}} {
+			var execution bytes.Buffer
+			if err := dispatch(h, "prompt", args, &execution); err != nil {
+				t.Fatal(err)
+			}
+			q := execution.String()
+			if !strings.Contains(q, protocolLayer("core")) || !strings.Contains(q, protocolLayer("execution")) || strings.Contains(q, protocolLayer("session")) {
+				t.Fatalf("execution has the wrong contract:\n%s", q)
+			}
+			if pending != strings.Contains(q, protocolLayer("growth")) {
+				t.Fatal("execution lost conditional authoring instructions")
+			}
+			if len(args) > 0 && !strings.Contains(q, "advance the journal") {
+				t.Fatal("prompt lost its ask")
+			}
+		}
+		if stateRevision(replayed(t, h)) != before {
+			t.Fatal("reading prompts changed the log")
+		}
+	}
+}
+
+func TestBareSelfDoesNotCreateAnInstance(t *testing.T) {
+	h := home(t)
+	if err := dispatch(h, "", nil, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "No specific ask") {
-		t.Fatalf("bare orientation lost its ask:\n%s", out.String())
+	files, err := os.ReadDir(h)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("orientation created files: %v, %v", files, err)
 	}
-	if err := cmdSituate(h, "an actual ask", &bytes.Buffer{}); err != nil {
+}
+
+func TestExplicitAskRemainsAPipelinePrompt(t *testing.T) {
+	h := home(t)
+	var legacy, explicit bytes.Buffer
+	if err := dispatch(h, "advance the journal", nil, &legacy); err != nil {
 		t.Fatal(err)
+	}
+	if err := dispatch(h, "prompt", []string{"advance the journal"}, &explicit); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.String() != explicit.String() {
+		t.Fatal("legacy ask and explicit prompt differ")
 	}
 }
 

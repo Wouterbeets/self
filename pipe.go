@@ -34,6 +34,15 @@ var errRefused = errors.New("authored script(s) refused")
 
 const defaultAsk = `No specific ask. Orient from this instance, explore its views, and act only if something warrants durable action. Silence is valid.`
 
+func cmdOrient(home string, out io.Writer) error {
+	st, err := loadState(home)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(out, protocolLayer("core")+"\n\n"+protocolLayer("session")+"\n\n"+brief(home, st))
+	return err
+}
+
 func cmdSituate(home string, ask string, out io.Writer) error {
 	empty := strings.TrimSpace(ask) == ""
 	if empty {
@@ -310,6 +319,8 @@ func applyRetirements(home string, st *state, evs []Event) []string {
 func situate(home string, st *state, ask string) string {
 	var b strings.Builder
 	b.WriteString(protocolLayer("core"))
+	b.WriteString("\n\n")
+	b.WriteString(protocolLayer("execution"))
 	b.WriteString("\n\n")
 	b.WriteString(brief(home, st))
 	b.WriteString(pendingSection(st))
