@@ -15,13 +15,14 @@ const completerMaxLines = 512
 var verbCandidates = []struct{ name, desc string }{
 	{"hear", "ingest event JSONL or authored scripts from stdin"},
 	{"brief", "show capabilities, pending work, and refusals"},
+	{"prompt", "the brief without the loop's event-wire contract"},
 	{"run", "execute a command capability and append its events"},
 	{"view", "replay a pure view; built-in log is always available"},
 	{"loop", "run a mind until the log stops changing"},
 	{"learn", "deposit an account and print its learning prompt"},
 	{"give", "write an event or capability account"},
 	{"rehydrate", "rebuild derived capability files from the log"},
-	{"completion", "print a shell completion script (zsh|bash|fish)"},
+	{"completion", "print a completion script (zsh|bash|fish)"},
 	{"help", "print the complete protocol"},
 }
 
