@@ -13,9 +13,11 @@ import (
 const cliUsage = `self — local-first event-sourced runtime
 
 Usage:
-  self [ask...]                 situate an ask; bare self presents the naked surface
+  self                        reconnect with your persistent self for the current task
+  self prompt [ask...]         print a prompt for an event-producing mind
+  self <ask...>                shorthand for self prompt <ask...>
   self hear                     ingest event JSONL or authored scripts from stdin
-  self brief [name]             the surface; with a name, that one capability in full
+  self brief [name]             the state; with a name, that one capability in full
   self run <command> [args...]  execute a command capability and append its events
   self view <name> [args...]    replay a pure view; built-in log is always available
   self loop [opts] [-- mind...] run a mind until the log stops changing (quiet passes in a row)
@@ -50,6 +52,9 @@ func main() {
 func dispatch(home, verb string, args []string, out io.Writer) error {
 	switch verb {
 	case "":
+		return cmdOrient(home, out)
+
+	case "prompt":
 		return cmdSituate(home, strings.Join(args, " "), out)
 
 	case "hear":

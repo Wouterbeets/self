@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Bare `self` reconnects an agent with its persistent identity and capability
+index while it continues the user's task. Pass instructions and pending
+script authoring belong to `self prompt`, `self learn`, and `self loop`.
+Use `self prompt | mind | self hear` for a pass without an ask; existing
+`self "<ask>"` pipelines remain supported.
+
 ## v1.0.0 — one fixed-point loop
 
 The first stable release. Everything below this heading and under the next one

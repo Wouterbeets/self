@@ -18,7 +18,7 @@ Make sure `$(go env GOPATH)/bin` is on your `PATH`; `self --help` should answer.
 system prompt:
 
 ```md
-Before starting anything, run `self` and follow what it prints.
+Before starting anything, run `self`.
 ```
 
 Or a session hook, so the agent is oriented before it reads your first message.
@@ -34,7 +34,12 @@ For Claude Code, in `.claude/settings.json`:
 }
 ```
 
-**3. Work as usual.** The agent reads the brief, acts, and writes what should
+**3. Work as usual.** `self` reconnects the agent with its persistent knowledge
+and capabilities while it continues your task. It keeps replying to you normally;
+useful findings go through commands or into `self hear`. Pending capabilities
+stay visible without assigning the agent to build them.
+
+The agent reads the brief, acts, and writes what should
 outlive the session. The first time it needs a way to remember something, it
 grows one, and the next session finds it in the brief. Nothing in your workflow
 changes.
@@ -58,12 +63,16 @@ prints; `self view <name>` prints a view and appends nothing. `self rehydrate`
 rebuilds the whole instance from `events.jsonl` and `.secret`, with no model
 and no network.
 
+`self prompt` explicitly prepares a pass whose stdout goes to `self hear`;
+`self "<ask>"` remains shorthand. `self loop` runs repeated passes with that same
+execution contract. Both share the persistent identity shown by bare `self`.
+
 The kernel holds no model. A mind is any process that reads a prompt on stdin
 and prints events on stdout, so the same instance is grown by a frontier model,
 a local one, a shell script, or a person at a keyboard:
 
 ```sh
-self "I want to track long-running goals here" | claude -p | self hear
+self prompt "I want to track long-running goals here" | claude -p | self hear
 self loop -- claude -p            # run a mind until the log stops changing
 self learn lessons/chat | claude -p | self hear   # learn from another instance
 ```

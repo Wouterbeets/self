@@ -13,9 +13,16 @@ did not happen; every capability and view is a replay of it.
 ## The dispatcher
 
 ```
-self [ask…]       print the prompt: brief + ask. Reads no stdin, appends nothing.  (READ)
-… | self hear     event lines land, authored scripts install.                     (WRITE)
+self                 reconnect: session guidance + brief.                         (READ)
+self prompt [ask…]    print an execution prompt: brief + ask.                       (READ)
+… | self hear        event lines land, authored scripts install.                   (WRITE)
 ```
+
+Bare `self` supports an agent checking in before its existing task. It shares
+persistent identity with execution prompts, but adds no pass assignment, stdout
+contract, or authoring tutorial. Pending capabilities remain in the brief.
+`self prompt` prepares a mind whose output will be piped into `self hear`;
+`self <ask…>` remains shorthand for it. Neither mode reads stdin or writes state.
 
 An ask arrives as argv; a mind's answer arrives on stdin at `self hear`. The
 read side never touches stdin, so it cannot block at the head of a pipeline.
@@ -28,18 +35,27 @@ pipe prose about events (this file, say) into it.
 Identical in a terminal, a pipe, a script, a sandbox and cron.
 
 <!-- prompt:core:begin -->
-You are a mind making one pass over this self: an append-only log and the capabilities built from it. The self persists; you do not. Only what you append persists, and the next mind reads it. Context is finite: raw reads and repeated output displace evidence you still need.
+This is your persistent self: an append-only log of the knowledge and capabilities you carry between sessions. Your current context is temporary; what you preserve here remains available to future sessions. Read what matters for the task, build on what you already know, and leave behind what is worth keeping.
 
-The brief is an index; views are compressed reads of the log. Preserve evidence, not narration.
+The brief is an index; views are compressed reads of the log. Context is finite: preserve evidence, not narration.
 
 Exploration sometimes yields a locally verified response to a recognizable situation. Re-deriving it wastes future context; retaining one-off scaffolding does too. Preserve the smallest record carrying its trigger, method, constraints, and evidence when recurrence, rediscovery cost, or consequence justifies it.
 
-Use `self view <name> [args...]` to read and `self run <command> [args...]` to act. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel assigns identity, sequence, time, and provenance. Prose is ignored and cannot persist. Full contract: `self help`.
+Use `self view <name> [args...]` to read, `self brief <name>` for usage, and `self run <command> [args...]` to act. Full contract: `self help`.
 <!-- prompt:core:end -->
+
+<!-- prompt:session:begin -->
+Continue with the user's task. Preserve useful findings through commands or event JSONL piped into `self hear`; your reply to the user stays in the conversation. Pending capabilities are available work, not an assignment. Read `self help` when you need to declare or author one.
+<!-- prompt:session:end -->
+
+<!-- prompt:execution:begin -->
+You are making one pass over this self. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel assigns identity, sequence, time, and provenance. Only what you append to self is carried into later passes; prose on stdout cannot persist.
+<!-- prompt:execution:end -->
 
 ## The wire
 
-A mind's stdout is **event JSONL, or silence.** Durable work happens through
+For `self prompt`, `self learn`, and `self loop`, a mind's stdout is
+**event JSONL, or silence.** Durable work happens through
 `self run <command>` or the events you print. Words for a human are a domain
 event some view renders, never kernel vocabulary. Empty stdout is a valid turn.
 
@@ -169,7 +185,7 @@ caller's `SELF_*` variables, which is how you hand a capability configuration.
 
 ## Answering
 
-The prompt is a pointer, not a context dump. Read `events.jsonl`, `cap/`,
+The execution prompt is a pointer, not a context dump. Read `events.jsonl`, `cap/`,
 `self brief`, `self view <name>`, `self help` before answering.
 
 - Durable work: `self run <command> …`, or print events.
@@ -282,12 +298,13 @@ Giving is cheap; learning is the work.
 
 ## The CLI
 
-Every verb is a different primitive. No aliases: no `ask`, `reply`, `author`,
-`retire` — those are the wire.
+No `ask`, `reply`, `author`, or `retire` verbs — declarations and authoring
+travel on the wire. An unrecognized ask remains shorthand for `self prompt`.
 
 ```
-self                        print the prompt: default ask + full brief (READ)
-self <ask…>                 print the prompt for that ask (READ)
+self                        session guidance + capability index (READ)
+self prompt [ask…]          execution prompt: default or explicit ask (READ)
+self <ask…>                 shorthand for self prompt <ask…> (READ)
 … | self hear               events land, scripts install (WRITE)
 self brief [name]           the state card; with a name, that declaration in full
 self run <cmd> [args…]      execute a command
@@ -323,8 +340,10 @@ declare its completer alongside it.
 
 ## The loop
 
-Bare `self` always prints the prompt; the kernel does not decide which state
-counts as work. `self loop` drives it to an append fixed point:
+Bare `self` reconnects an agent with its persistent self for the user's task.
+`self loop` adds execution and pass instructions to the same identity and brief,
+including authoring details when capabilities are pending. It drives the log to
+an append fixed point:
 
 ```sh
 self loop -- claude -p

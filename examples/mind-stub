@@ -5,9 +5,9 @@ A mind is any filter: it reads a situated prompt on stdin and prints event JSONL
 on stdout. This one is deliberately dumb — it proves the machinery, not the
 intelligence — and it plugs into exactly the same seam as any real mind:
 
-    self "hello"                     | examples/mind-stub | self hear
+    self prompt "hello"                     | examples/mind-stub | self hear
     self learn lessons/journal       | examples/mind-stub | self hear
-    self                             | examples/mind-stub | self hear
+    self prompt                      | examples/mind-stub | self hear
 
 What it does, reading the prompt alone (a real mind would also explore SELF_HOME
 with its own tools):

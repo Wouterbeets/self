@@ -13,6 +13,7 @@ var completerTimeout = 2 * time.Second
 const completerMaxLines = 512
 
 var verbCandidates = []struct{ name, desc string }{
+	{"prompt", "print a prompt for an event-producing mind"},
 	{"hear", "ingest event JSONL or authored scripts from stdin"},
 	{"brief", "show capabilities, pending work, and refusals"},
 	{"run", "execute a command capability and append its events"},

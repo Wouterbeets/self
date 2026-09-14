@@ -33,7 +33,7 @@ func candidates(s string) []string {
 func TestCompleteVerbs(t *testing.T) {
 	h := home(t)
 	all := candidates(completed(t, h, ""))
-	for _, v := range []string{"hear", "brief", "run", "view", "loop", "learn", "give", "rehydrate", "completion", "help"} {
+	for _, v := range []string{"prompt", "hear", "brief", "run", "view", "loop", "learn", "give", "rehydrate", "completion", "help"} {
 		if !contains(all, v) {
 			t.Fatalf("verb %q missing from %v", v, all)
 		}
