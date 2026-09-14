@@ -63,7 +63,7 @@ and prints events on stdout, so the same instance is grown by a frontier model,
 a local one, a shell script, or a person at a keyboard:
 
 ```sh
-self "I want to track long-running goals here" | claude -p | self hear
+self prompt "I want to track long-running goals here" | claude -p | self hear
 self loop -- claude -p            # run a mind until the log stops changing
 self learn lessons/chat | claude -p | self hear   # learn from another instance
 ```

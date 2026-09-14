@@ -5,7 +5,7 @@
 # deterministic filter plugged through exactly the same seam as `claude -p`:
 #
 #     self learn <account> | mind | self hear
-#     self "<ask>"         | mind | self hear
+#     self prompt "<ask>"  | mind | self hear
 #
 # It authors trivial scripts on purpose. The point is the machinery.
 set -euo pipefail
