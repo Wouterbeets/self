@@ -83,7 +83,7 @@ SELF_HOME="$other" self learn "$account" | "$mind" | SELF_HOME="$other" self hea
 say "the intervention is visible in the receiving log, forever"
 SELF_HOME="$other" self view log | grep lesson.learned
 
-say "convergence: a mind woken twice on this body appends nothing, and the body rests"
+say "convergence: a mind run twice appends nothing, and the loop stops"
 self loop --max-passes 3 -- sh -c 'cat >/dev/null'
 
 say "the log is the whole truth — this is all that was kept"

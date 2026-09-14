@@ -913,7 +913,7 @@ func TestRetireThenRedeclareInOneBody(t *testing.T) {
 	}
 }
 
-// script.authored is a wire message. No door may land it in the log — including
+// script.authored is a wire message. No channel may land it in the log — including
 // a command capability that emits one, which would leave a lie there.
 func TestScriptAuthoredNeverLandsInTheLog(t *testing.T) {
 	h := home(t)
@@ -927,7 +927,7 @@ func TestScriptAuthoredNeverLandsInTheLog(t *testing.T) {
 }
 
 // A receipt is the kernel's own testimony, so it counts only through the
-// kernel's door. Replaying a genuine receipt payload through the wire used to
+// kernel's channel. Replaying a genuine receipt payload through the wire used to
 // re-install it — undoing a retirement, or rolling a fixed script back — with no
 // key and no declaration, because a real signature stays valid forever.
 func TestReplayedReceiptCannotUndoARetirement(t *testing.T) {
@@ -969,7 +969,7 @@ func TestUnkeyedRefusalDoesNotWedgeTheLoop(t *testing.T) {
 	}
 }
 
-// Invalid UTF-8 must not reach the log through ANY door, including the wire.
+// Invalid UTF-8 must not reach the log through ANY channel, including the wire.
 func TestWireCannotSmuggleRawBytes(t *testing.T) {
 	h := home(t)
 	var out bytes.Buffer
@@ -1073,7 +1073,7 @@ func TestGiveLearnRoundTrip(t *testing.T) {
 	if events[0].Name != "intent.declared" || events[3].Name != "lesson.learned" {
 		t.Fatalf("order: %s … %s", events[0].Name, events[3].Name)
 	}
-	// Moments and speakers travel; the door is re-stamped.
+	// Timestamps and authors travel; the channel is re-stamped.
 	original, _ := readEvents(giver)
 	var first Event
 	for _, e := range original {
@@ -1089,7 +1089,7 @@ func TestGiveLearnRoundTrip(t *testing.T) {
 		t.Fatalf("a deposited event lost its speaker: %q", events[1].By)
 	}
 	if events[1].Via != doorLearn+"account" {
-		t.Fatalf("the door was not re-stamped: %q", events[1].Via)
+		t.Fatalf("the channel was not re-stamped: %q", events[1].Via)
 	}
 	// The intelligent half rides the pipe.
 	prompt := out.String()
@@ -1309,7 +1309,7 @@ func TestOrdinaryPromptCarriesTheDietNotTheProtocol(t *testing.T) {
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"this self, for a bit", "The mind ends; you do not", "append-only log", "only what you append persists", "Context is finite", "views are compressed perception", "Exploration sometimes yields metis", "retaining transient glue", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
+	for _, want := range []string{"this self, for a bit", "The mind ends; you do not", "append-only log", "only what you append persists", "Context is finite", "views are compressed reads", "Exploration sometimes yields", "one-off scaffolding", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}
@@ -1331,7 +1331,7 @@ func TestPendingPromptCarriesConditionalAuthoringContract(t *testing.T) {
 	h := home(t)
 	heard(t, h, line(t, "command.declared", decl{Name: "entry", Description: "append an entry"}))
 	p := situated(t, h, "")
-	for _, want := range []string{"script.authored", "not a failure", "carries to its next waking", "Commands receive argv", "Views receive argv", "standard-library", "zero-argument form", "discoverable index", "complete append-only lifecycle", "later wakings", "tombstone event", "stale records remain permanently actionable", "Do not invent CRUD", "locally verified practices", "sanitized method", "not the raw session", "reads live external state is a command", "Repeated reuse", "justify automation", "command \"entry\" declared"} {
+	for _, want := range []string{"script.authored", "not a failure", "carries to its next pass", "Commands receive argv", "Views receive argv", "standard-library", "zero-argument form", "discoverable index", "complete append-only lifecycle", "later passes", "tombstone event", "stale records remain permanently actionable", "Do not invent CRUD", "locally verified methods", "sanitized method", "not the raw session", "reads live external state is a command", "Repeated reuse", "justify automation", "command \"entry\" declared"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("pending prompt is missing %q:\n%s", want, p)
 		}
@@ -1422,16 +1422,16 @@ func TestBareSituateAlwaysOrients(t *testing.T) {
 	}
 }
 
-// A silent mind rests the body after --settle quiet wakings: two by default, so
+// A silent mind stops the loop after --settle quiet passes: two by default, so
 // a half-formed idea is asked about once before the loop ends; one on request.
-func TestLoopSettlesAfterQuietWakings(t *testing.T) {
+func TestLoopSettlesAfterQuietPasses(t *testing.T) {
 	h := home(t)
 	var out, diag bytes.Buffer
 	err := cmdLoop(h, []string{"--max-passes", "3", "--timeout", "5s", "--", "/bin/sh", "-c", "cat >/dev/null"}, &out, &diag)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(diag.String(), "converged after 2 waking(s)") {
+	if !strings.Contains(diag.String(), "converged after 2 pass(es)") {
 		t.Fatalf("default settle did not ask a second time before resting:\n%s", diag.String())
 	}
 	if len(replayed(t, h).Events) != 0 {
@@ -1441,12 +1441,12 @@ func TestLoopSettlesAfterQuietWakings(t *testing.T) {
 	if err := cmdLoop(h, []string{"--settle", "1", "--max-passes", "3", "--timeout", "5s", "--", "/bin/sh", "-c", "cat >/dev/null"}, &out, &diag); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(diag.String(), "converged after 1 waking(s)") {
-		t.Fatalf("--settle 1 did not rest on the first quiet waking:\n%s", diag.String())
+	if !strings.Contains(diag.String(), "converged after 1 pass(es)") {
+		t.Fatalf("--settle 1 did not stop on the first quiet pass:\n%s", diag.String())
 	}
 }
 
-// A mind is a process tree. Ending a waking must end the whole tree: killing
+// A mind is a process tree. Ending a pass must end the whole tree: killing
 // only the wrapper left grandchildren running — and, holding stdout, they kept
 // Wait from returning at all.
 func TestLoopTimeoutKillsTheWholeMind(t *testing.T) {
@@ -1482,18 +1482,18 @@ func TestLoopTimeoutKillsTheWholeMind(t *testing.T) {
 				time.Sleep(50 * time.Millisecond)
 			}
 			syscall.Kill(pid, syscall.SIGKILL)
-			t.Fatalf("grandchild %d survived the end of its waking", pid)
+			t.Fatalf("grandchild %d survived the end of its pass", pid)
 		})
 	}
 }
 
-// The pass cap arriving on a quiet waking is a rest, not a failure: the log did
+// The pass cap arriving on a quiet pass is convergence, not a failure: the log did
 // not move. Only a cap that cuts off a still-changing body is an error.
-func TestLoopCapOnQuietWakingIsARest(t *testing.T) {
+func TestLoopCapOnQuietPassConverges(t *testing.T) {
 	h := home(t)
 	var out, diag bytes.Buffer
 	if err := cmdLoop(h, []string{"--max-passes", "1", "--timeout", "5s", "--", "/bin/sh", "-c", "cat >/dev/null"}, &out, &diag); err != nil {
-		t.Fatalf("a quiet waking at the cap was reported as failure: %v", err)
+		t.Fatalf("a quiet pass at the cap was reported as failure: %v", err)
 	}
 	busy := `cat >/dev/null; printf '%s\n' '{"name":"note.added","payload":{"text":"again"}}'`
 	if err := cmdLoop(h, []string{"--max-passes", "2", "--timeout", "5s", "--", "/bin/sh", "-c", busy}, &out, &diag); err == nil {
@@ -1509,7 +1509,7 @@ func TestLoopRepeatsAfterAppendThenConverges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(diag.String(), "waking 1 changed authoritative state") || !strings.Contains(diag.String(), "converged after 3 waking(s)") {
+	if !strings.Contains(diag.String(), "pass 1 changed authoritative state") || !strings.Contains(diag.String(), "converged after 3 pass(es)") {
 		t.Fatalf("loop did not reach the append fixed point:\n%s", diag.String())
 	}
 	events := replayed(t, h).Events
@@ -1528,7 +1528,7 @@ func TestLoopUsesEnvironmentDefaults(t *testing.T) {
 	if err := cmdLoop(h, nil, &out, &diag); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(diag.String(), "waking 1/2") || !strings.Contains(diag.String(), "converged after 1 waking(s)") {
+	if !strings.Contains(diag.String(), "pass 1/2") || !strings.Contains(diag.String(), "converged after 1 pass(es)") {
 		t.Fatalf("loop ignored environment defaults:\n%s", diag.String())
 	}
 }
@@ -1546,11 +1546,11 @@ func TestLoopPinsResolvedHomeIntoMindEnvironment(t *testing.T) {
 	}
 }
 
-// The ask is what woke the body, and it stands: pass one is told to start there,
-// and every later waking still sees it. A nudge that evaporated after the turn
+// The ask stands: pass one is told to start there,
+// and every later pass still sees it. A nudge that evaporated after the turn
 // it caused left pass two a cold mind on a quiet instance being told nothing was
 // asked of it — which is the fixed point stated as an instruction.
-func TestLoopNudgeStandsOnEveryWaking(t *testing.T) {
+func TestLoopNudgeStandsOnEveryPass(t *testing.T) {
 	h := home(t)
 	capture := filepath.Join(t.TempDir(), "asks")
 	script := `prompt=$(cat); printf '%s\n---PASS---\n' "$prompt" >> "$CAPTURE"; case "$prompt" in *"log: 0 events"*) printf '%s\n' '{"name":"note.added","payload":{"text":"changed"}}';; esac`
@@ -1565,46 +1565,46 @@ func TestLoopNudgeStandsOnEveryWaking(t *testing.T) {
 	}
 	passes := strings.Split(string(data), "---PASS---")
 	if len(passes) < 4 {
-		t.Fatalf("mind did not receive three wakings:\n%s", data)
+		t.Fatalf("mind did not receive three passes:\n%s", data)
 	}
-	for i, want := range []string{"Waking 1 of this body", "Waking 2 of this body", "Waking 3 of this body"} {
+	for i, want := range []string{"Pass 1 of this self", "Pass 2 of this self", "Pass 3 of this self"} {
 		if !strings.Contains(passes[i], want) {
-			t.Fatalf("waking %d is not numbered:\n%s", i+1, passes[i])
+			t.Fatalf("pass %d is not numbered:\n%s", i+1, passes[i])
 		}
-		if !strings.Contains(passes[i], "What woke this body: advance selected goal") {
-			t.Fatalf("waking %d lost the nudge:\n%s", i+1, passes[i])
+		if !strings.Contains(passes[i], "The ask: advance selected goal") {
+			t.Fatalf("pass %d lost the nudge:\n%s", i+1, passes[i])
 		}
 		if !strings.Contains(passes[i], protocolLayer("loop")) {
-			t.Fatalf("waking %d does not splice the loop layer:\n%s", i+1, passes[i])
+			t.Fatalf("pass %d does not splice the loop layer:\n%s", i+1, passes[i])
 		}
 		if strings.Contains(passes[i], "No specific ask") {
-			t.Fatalf("waking %d fell back to the bare default ask:\n%s", i+1, passes[i])
+			t.Fatalf("pass %d fell back to the bare default ask:\n%s", i+1, passes[i])
 		}
 	}
 	if !strings.Contains(passes[0], "Start there.") || strings.Contains(passes[1], "Start there.") {
 		t.Fatal("only pass one is told to start at the nudge")
 	}
-	// Waking 2 followed a change; waking 3 followed a quiet waking and is the
+	// Pass 2 followed a change; pass 3 followed a quiet pass and is the
 	// last before rest, so it is asked plainly.
-	if strings.Contains(passes[1], "about to rest") || !strings.Contains(passes[2], "about to rest") {
-		t.Fatalf("the resting question is asked on the wrong waking:\n--2--\n%s\n--3--\n%s", passes[1], passes[2])
+	if strings.Contains(passes[1], "about to stop") || !strings.Contains(passes[2], "about to stop") {
+		t.Fatalf("the closing question is asked on the wrong pass:\n--2--\n%s\n--3--\n%s", passes[1], passes[2])
 	}
 	if !strings.Contains(passes[0], "at most 3 more") || !strings.Contains(passes[2], "at most one more") {
 		t.Fatal("the remaining budget is not counted down")
 	}
-	if !strings.Contains(passes[0], "This waking ends after 5s") {
-		t.Fatalf("the time budget is not in the waking facts:\n%s", passes[0])
+	if !strings.Contains(passes[0], "This pass ends after 5s") {
+		t.Fatalf("the time budget is not in the pass facts:\n%s", passes[0])
 	}
 }
 
 // A refused script must not end the loop. The refusal is in the log and its
-// reason rides the next waking — which is the only way a mind ever learns from
+// reason rides the next pass — which is the only way a mind ever learns from
 // the mistake it just made. Ending the run there threw that lesson away.
 func TestLoopSurvivesARefusedScript(t *testing.T) {
 	h := home(t)
 	capture := filepath.Join(t.TempDir(), "asks")
 	t.Setenv("CAPTURE", capture)
-	// Waking 1 declares and authors a script with no shebang; later wakings are
+	// Pass 1 declares and authors a script with no shebang; later passes are
 	// silent so the loop rests.
 	script := `prompt=$(cat); printf '%s\n---PASS---\n' "$prompt" >> "$CAPTURE"; case "$prompt" in *"log: 0 events"*)
 printf '%s\n' '{"name":"command.declared","payload":{"name":"x","description":"x"}}'
@@ -1623,7 +1623,7 @@ printf '%s\n' '{"name":"script.authored","payload":{"type":"command","name":"x",
 	data, _ := os.ReadFile(capture)
 	passes := strings.Split(string(data), "---PASS---")
 	if len(passes) < 2 || !strings.Contains(passes[1], "REFUSED") || !strings.Contains(passes[1], "shebang") {
-		t.Fatalf("the refusal reason did not ride the next waking:\n%s", data)
+		t.Fatalf("the refusal reason did not ride the next pass:\n%s", data)
 	}
 }
 
@@ -1826,7 +1826,7 @@ func TestNoFileShowsThePipelineThatDiscardsTheAsk(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(offences) > 0 {
-		t.Fatalf("a pipeline ending in a bare `self` discards its ask — the write door is `self hear`:\n  %s",
+		t.Fatalf("a pipeline ending in a bare `self` discards its ask — the write side is `self hear`:\n  %s",
 			strings.Join(offences, "\n  "))
 	}
 }
@@ -1889,7 +1889,7 @@ func mustLine(name string, payload json.RawMessage) []byte {
 
 // The built-in log is bounded by default. It is the read a cold mind reaches
 // for first and the only one in the kernel whose cost grows with the log, so an
-// unbounded default spends a waking's context on history nobody asked for.
+// unbounded default spends a pass's context on history nobody asked for.
 // Elision is announced, because silently answering "the log" with ten lines
 // would leave a mind confidently wrong about what this instance has done.
 func TestBuiltinLogViewIsBoundedButComplete(t *testing.T) {

@@ -3,7 +3,7 @@
 
 A mind reads a situated prompt on stdin and prints event JSONL on stdout, and
 `self loop` buffers that stdout until the process exits — so a plain `claude -p`
-is silent for the whole waking and you learn what it did only when it is over.
+is silent for the whole pass and you learn what it did only when it is over.
 This wrapper asks claude for its stream-json trace instead, renders every text
 block, tool call and tool result to stderr as they happen, and forwards only
 the event-shaped lines of the final answer to stdout. The loop already routes mind stderr to the terminal, so:
@@ -12,8 +12,8 @@ the event-shaped lines of the final answer to stdout. The loop already routes mi
 
 Anything after the script name is passed to claude verbatim; when nothing grants
 tools, Bash Read Write Edit Glob Grep are allowed, because a mind with no tools
-spends its waking being denied. The wire is unchanged: what claude would have
-printed as its answer is exactly what lands on stdout, one waking's worth.
+spends its pass being denied. The wire is unchanged: what claude would have
+printed as its answer is exactly what lands on stdout, one pass's worth.
 """
 
 import json
@@ -96,7 +96,7 @@ def render(event):
 
 # A mind is expected to have tools; `claude -p` has none unless told. When the
 # caller grants nothing, grant the ordinary set, so a bare invocation is a
-# working mind rather than a waking spent being denied.
+# working mind rather than a pass spent being denied.
 DEFAULT_TOOLS = ["--allowedTools", "Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 GRANTS = ("--allowedTools", "--allowed-tools", "--permission-mode", "--dangerously-skip-permissions")
 

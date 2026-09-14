@@ -17,7 +17,7 @@ var verbCandidates = []struct{ name, desc string }{
 	{"brief", "show capabilities, pending work, and refusals"},
 	{"run", "execute a command capability and append its events"},
 	{"view", "replay a pure view; built-in log is always available"},
-	{"loop", "wake a mind on this body until it rests"},
+	{"loop", "run a mind until the log stops changing"},
 	{"learn", "deposit an account and print its learning prompt"},
 	{"give", "write an event or capability account"},
 	{"rehydrate", "rebuild derived capability files from the log"},
@@ -105,9 +105,9 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 			return nil
 		}
 		for _, f := range []struct{ name, desc string }{
-			{"--ask", "what woke this body; every waking sees it"},
-			{"--max-passes", "at most N wakings"},
-			{"--settle", "quiet wakings in a row before the body rests"},
+			{"--ask", "the ask; every pass sees it"},
+			{"--max-passes", "at most N passes"},
+			{"--settle", "quiet passes in a row before the loop stops"},
 			{"--timeout", "fail when one mind process exceeds this duration"},
 			{"--help", "print the complete loop invocation"},
 		} {

@@ -13,7 +13,7 @@ already routes mind stderr to the terminal, so:
 
 Anything after the script name is passed to `opencode run` verbatim: -m for the
 model, --variant for reasoning effort, --agent, and so on. No session is
-continued: every waking is a fresh session, and the log is the only memory.
+continued: every pass is a fresh session, and the log is the only memory.
 """
 
 import json
@@ -54,7 +54,7 @@ def describe_call(state):
 
 def main():
     prompt = sys.stdin.read()
-    argv = [OPENCODE, "run", "--format", "json", "--title", "self waking", *sys.argv[1:], prompt]
+    argv = [OPENCODE, "run", "--format", "json", "--title", "self pass", *sys.argv[1:], prompt]
     say(f"{DIM}mind-opencode: body {os.environ.get('SELF_HOME') or os.getcwd()}{RESET}")
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)
 

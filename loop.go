@@ -25,15 +25,16 @@ type loopOptions struct {
 
 const loopUsage = `usage: self loop [--ask TEXT] [--max-passes N] [--settle N] [--timeout DURATION] [-- <mind> [args...]]
 
-Wake a mind on this body repeatedly until the body rests: a waking that leaves
-the log unchanged is quiet, and --settle quiet wakings in a row end the loop.
+Run a mind against this self repeatedly until the log stops changing: a pass
+that leaves the log unchanged is quiet, and --settle quiet passes in a row end
+the loop.
 
 Options:
-  --ask TEXT        what woke this body; pass one starts there and every later
-                    waking still sees it
-  --max-passes N   at most N wakings (default 12); fail only if the last one still
+  --ask TEXT        the ask; pass one starts there and every later pass still
+                    sees it
+  --max-passes N   at most N passes (default 12); fail only if the last one still
                     changed state
-  --settle N       quiet wakings in a row before the body rests (default 2); the
+  --settle N       quiet passes in a row before the loop stops (default 2); the
                     last of them is asked plainly whether there is anything else
   --timeout D      fail when one mind process exceeds D (examples: 45s, 10m)
   -h, --help       show this help
@@ -45,10 +46,10 @@ Environment defaults:
   SELF_LOOP_SETTLE       default 2
   SELF_LOOP_TIMEOUT      default 30m
 
-Each waking is told which number it is and how many remain. A refused script
+Each pass is told which number it is and how many remain. A refused script
 does not end the loop: the refusal is recorded and its reason rides the next
-waking. The mind is executed directly, without a shell. It inherits the caller's
-working directory and environment, receives the situated prompt on stdin, and
+pass. The mind is executed directly, without a shell. It inherits the caller's
+working directory and environment, receives the prompt on stdin, and
 returns the event wire on stdout. Diagnostics go to stderr. Options stop at --
 or the first positional argument; the rest is the mind command and its argv.
 Use -- to make that boundary explicit. SELF_LOOP_MIND is a shell string run as:
@@ -125,24 +126,24 @@ func loopAsk(pass, maxPasses, quiet, settle int, timeout time.Duration, nudge st
 	remaining := maxPasses - pass
 	switch remaining {
 	case 0:
-		fmt.Fprintf(&b, "Waking %d of this body, and the last: whatever you leave is what remains.", pass)
+		fmt.Fprintf(&b, "Pass %d of this self, and the last: only what you append remains.", pass)
 	case 1:
-		fmt.Fprintf(&b, "Waking %d of this body; at most one more before it rests.", pass)
+		fmt.Fprintf(&b, "Pass %d of this self; at most one more before the loop stops.", pass)
 	default:
-		fmt.Fprintf(&b, "Waking %d of this body; at most %d more before it rests.", pass, remaining)
+		fmt.Fprintf(&b, "Pass %d of this self; at most %d more before the loop stops.", pass, remaining)
 	}
-	fmt.Fprintf(&b, "\nThis waking ends after %s. Only what is appended by then persists; a declaration left pending is safe, a script still on disk is not.", timeout)
+	fmt.Fprintf(&b, "\nThis pass ends after %s. Only what is appended by then persists; a declaration left pending is safe, a script still on disk is not.", timeout)
 	if nudge = strings.TrimSpace(nudge); nudge != "" {
-		fmt.Fprintf(&b, "\nWhat woke this body: %s", nudge)
+		fmt.Fprintf(&b, "\nThe ask: %s", nudge)
 		if pass == 1 {
 			b.WriteString("\nStart there.")
 		}
 	}
 	if quiet > 0 {
 		if quiet+1 >= settle {
-			fmt.Fprintf(&b, "\nThe last waking appended nothing, so this body is about to rest. This is the last waking unless something is appended. Anything else?")
+			fmt.Fprintf(&b, "\nThe last pass appended nothing, so the loop is about to stop. This is the last pass unless something is appended. Anything else?")
 		} else {
-			fmt.Fprintf(&b, "\nThe last %d waking(s) appended nothing; after %d quiet in a row this body rests.", quiet, settle)
+			fmt.Fprintf(&b, "\nThe last %d pass(es) appended nothing; after %d quiet in a row the loop stops.", quiet, settle)
 		}
 	}
 	b.WriteString("\n\n")
@@ -169,7 +170,7 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 			return err
 		}
 		prompt := situate(home, before, loopAsk(pass, opts.MaxPasses, quiet, opts.Settle, opts.Timeout, opts.Ask))
-		fmt.Fprintf(diag, "self loop: waking %d/%d\n", pass, opts.MaxPasses)
+		fmt.Fprintf(diag, "self loop: pass %d/%d\n", pass, opts.MaxPasses)
 
 		ctx, cancel := context.WithTimeout(sigCtx, opts.Timeout)
 		cmd := exec.CommandContext(ctx, opts.Mind[0], opts.Mind[1:]...)
@@ -181,19 +182,19 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 		stdout, err := cmd.Output()
 		cancel()
 		if sigCtx.Err() != nil {
-			return fmt.Errorf("interrupted on waking %d — the mind was stopped with the loop; whatever it appended stands", pass)
+			return fmt.Errorf("interrupted on pass %d — the mind was stopped with the loop; whatever it appended stands", pass)
 		}
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("loop mind exceeded %s on waking %d", opts.Timeout, pass)
+			return fmt.Errorf("loop mind exceeded %s on pass %d", opts.Timeout, pass)
 		}
 		if err != nil {
-			return fmt.Errorf("loop mind exited on waking %d: %w", pass, err)
+			return fmt.Errorf("loop mind exited on pass %d: %w", pass, err)
 		}
 		if err := cmdHear(home, stdout, out); err != nil {
 			if !errors.Is(err, errRefused) {
-				return fmt.Errorf("hearing waking %d: %w", pass, err)
+				return fmt.Errorf("hearing pass %d: %w", pass, err)
 			}
-			fmt.Fprintf(diag, "self loop: waking %d: %v — the reason rides the next waking\n", pass, err)
+			fmt.Fprintf(diag, "self loop: pass %d: %v — the reason rides the next pass\n", pass, err)
 		}
 
 		after, err := loadState(home)
@@ -203,17 +204,17 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 		if stateRevision(before) == stateRevision(after) {
 			quiet++
 			if quiet >= opts.Settle {
-				fmt.Fprintf(diag, "self loop: converged after %d waking(s) — %d quiet in a row, authoritative state unchanged\n", pass, quiet)
+				fmt.Fprintf(diag, "self loop: converged after %d pass(es) — %d quiet in a row, authoritative state unchanged\n", pass, quiet)
 				return nil
 			}
-			fmt.Fprintf(diag, "self loop: waking %d changed nothing (%d of %d quiet before the body rests)\n", pass, quiet, opts.Settle)
+			fmt.Fprintf(diag, "self loop: pass %d changed nothing (%d of %d quiet before the loop stops)\n", pass, quiet, opts.Settle)
 			continue
 		}
 		quiet = 0
-		fmt.Fprintf(diag, "self loop: waking %d changed authoritative state (%d -> %d events)\n", pass, len(before.Events), len(after.Events))
+		fmt.Fprintf(diag, "self loop: pass %d changed authoritative state (%d -> %d events)\n", pass, len(before.Events), len(after.Events))
 	}
 	if quiet > 0 {
-		fmt.Fprintf(diag, "self loop: rested at --max-passes %d — the last waking changed nothing\n", opts.MaxPasses)
+		fmt.Fprintf(diag, "self loop: stopped at --max-passes %d — the last pass changed nothing\n", opts.MaxPasses)
 		return nil
 	}
 	return fmt.Errorf("loop reached --max-passes %d while authoritative state was still changing", opts.MaxPasses)
