@@ -16,6 +16,7 @@ Usage:
   self [ask...]                 situate an ask; bare self presents the naked surface
   self hear                     ingest event JSONL or authored scripts from stdin
   self brief [name]             the surface; with a name, that one capability in full
+  self prompt                   the brief without the loop wire contract
   self run <command> [args...]  execute a command capability and append its events
   self view <name> [args...]    replay a pure view; built-in log is always available
   self loop [opts] [-- mind...] run a mind until the log stops changing (quiet passes in a row)
@@ -73,6 +74,14 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			return err
 		}
 		_, err = io.WriteString(out, brief(home, st))
+		return err
+
+	case "prompt":
+		st, err := loadState(home)
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(out, prompt(home, st))
 		return err
 
 	case "run", "view":
@@ -210,6 +219,15 @@ func brief(home string, st *state) string {
 	b.WriteString("`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n")
 	b.WriteString("`self help` the protocol · `self view log` what happened lately · `self brief <name>` one capability in full\n")
 	return b.String()
+}
+
+func prompt(home string, st *state) string {
+	return brief(home, st) + "\n## how to act\n\n" +
+		"This is a memory surface, not a pipe. Read it, then act with the verbs:\n" +
+		"`self run <command> [args…]` executes and appends what it prints;\n" +
+		"`self view <name> [args…]` replays a pure read;\n" +
+		"`self hear` ingests event JSONL from stdin." +
+		" To persist something, emit event JSONL through `self hear` or a command's stdout — prose is ignored.\n"
 }
 
 func unfoldMissing(st *state, typ, name string) string {
