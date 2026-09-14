@@ -162,7 +162,7 @@ func learnAsk(ref string, a *account) string {
 		if p, err := filepath.Abs(ref); err == nil {
 			abs = p
 		}
-		ask += fmt.Sprintf("\n\nIts record — %d event(s) — is already in this log, verbatim, through the door learn:%s. Read %s or events.jsonl to ground your declarations in the evidence. lineage.* events are another instance's history: reference material, never yours to re-emit.", len(a.Deposit), a.Name, filepath.Join(abs, "record.jsonl"))
+		ask += fmt.Sprintf("\n\nIts record — %d event(s) — is already in this log, verbatim, through the channel learn:%s. Read %s or events.jsonl to ground your declarations in the evidence. lineage.* events are another instance's history: reference material, never yours to re-emit.", len(a.Deposit), a.Name, filepath.Join(abs, "record.jsonl"))
 	}
 	var quoted strings.Builder
 	for _, l := range strings.Split(a.Intent, "\n") {

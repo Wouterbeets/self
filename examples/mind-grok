@@ -15,7 +15,7 @@ Anything after the script name is passed to grok verbatim: -m for the model,
 --reasoning-effort, --tools, --permission-mode. grok's permission mode comes
 from ~/.grok/config.toml; check it before handing a body to a mind you are not
 watching, because "always-approve" means exactly that. No session is resumed:
-every waking is fresh, and the log is the only memory.
+every pass is fresh, and the log is the only memory.
 """
 
 import json

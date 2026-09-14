@@ -45,9 +45,9 @@ out of the repo with `export SELF_HOME=~/.self`.
 
 ## How it works
 
-Everything is one append-only log. `self` prints a situated brief: what this
+Everything is one append-only log. `self` prints a brief: what this
 instance can do, what is pending, what broke. It stays a few kilobytes however
-long the log grows, because views replay the log into compressed perception
+long the log grows, because views replay the log into compressed reads
 rather than paging it back into context. Reads never change anything; only
 `self hear` appends.
 
@@ -64,7 +64,7 @@ a local one, a shell script, or a person at a keyboard:
 
 ```sh
 self "I want to track long-running goals here" | claude -p | self hear
-self loop -- claude -p            # wake a mind on this body until it rests
+self loop -- claude -p            # run a mind until the log stops changing
 self learn lessons/chat | claude -p | self hear   # learn from another instance
 ```
 
