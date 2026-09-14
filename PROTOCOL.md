@@ -1,41 +1,29 @@
 # self — the protocol
 
-This file is the Self Protocol. It is the contract. `self help` prints it verbatim, and situated prompts
-splice the marked core and growth layers as state requires, so there is exactly one
-description of the wire in the whole system. Nothing else — not the README, not
-a comment — restates it.
+The contract. `self help` prints it verbatim; situated prompts splice the marked
+layers. Nothing else restates it.
 
 ## The law
 
 **Reads project. Writes append. Orientation is a read.**
 
-Looking at an instance never changes it. The log grows only when something was
-meant to persist. There is no hidden state: no session store, no cache, no
-sidecar. What is not in the log did not happen, and everything else — every
-capability, every view — is a replay of it.
+No hidden state: no session store, no cache, no sidecar. What is not in the log
+did not happen; every capability and view is a replay of it.
 
 ## The dispatcher
 
-`self` is a filter with two faces, and which one runs is **structural**:
-
 ```
-self [ask…]           situate: print the brief + the ask. Reads no stdin, appends nothing.  (READ)
-… | self hear         hear: event lines land, authored scripts install.                     (WRITE)
+self [ask…]       situate: brief + ask. Reads no stdin, appends nothing.  (READ)
+… | self hear     hear: event lines land, authored scripts install.       (WRITE)
 ```
 
-An ask arrives as **argv**; what comes back from a mind arrives on **stdin**, at
-`self hear`. The read face never touches stdin, so it also cannot block at the
-head of a pipeline.
+An ask arrives as argv; a mind's answer arrives on stdin at `self hear`. The
+read face never touches stdin, so it cannot block at the head of a pipeline.
 
-A line is an event when it is a JSON object with a dotted lowercase `name` and a
-`payload` key — both halves, so a mind reporting `{"name":"notes","status":"ok"}`
-cannot land an event called `notes` in your log. Every other line is ignored,
-echoed, and counted on stderr. Do not narrate on the wire; a stray line will not
-cost you the pass.
-
-The corollary: `hear` ingests **any** event-shaped line it is given, including
-one quoted inside a document. Do not pipe prose *about* events into it — this
-file, for one, is full of examples that would land.
+A line is an event iff it is a JSON object with a dotted lowercase `name` **and**
+a `payload` key. Every other line is ignored, echoed, and counted on stderr.
+`hear` ingests any event-shaped line, including one quoted in a document: do not
+pipe prose about events (this file, say) into it.
 
 Identical in a terminal, a pipe, a script, a sandbox and cron.
 
@@ -51,71 +39,49 @@ Use `self view <name> [args...]` to perceive and `self run <command> [args...]` 
 
 ## The wire
 
-A mind's stdout is the wire: **event JSONL, or silence.** There is no second
-output mode. Durable work happens through `self run <command>` or through the
-events you print. Words meant for a human are an event this instance knows how
-to render — never kernel vocabulary. Empty stdout is a valid turn.
-
-One JSON object per line:
+A mind's stdout is **event JSONL, or silence.** Durable work happens through
+`self run <command>` or the events you print. Words for a human are a domain
+event some view renders, never kernel vocabulary. Empty stdout is a valid turn.
 
 ```json
 {"name":"journal.entry","payload":{"text":"watered the plants"}}
 ```
 
-You may set only `name` and `payload`. The kernel assigns `id`, `seq`,
-`occurred_at`, and provenance (`via`, `by`) — a door cannot be claimed.
-
-An event name is lowercase dotted: `^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`.
+You set `name` and `payload` only. The kernel assigns `id`, `seq`,
+`occurred_at`, `via`, `by`. Name: `^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`.
 
 ### Growing a capability
 
-Two kinds, and the difference is what the **kernel** does with the output: it
-appends what a command prints, and never appends what a view prints. A view has
-no path to the log through the kernel. (Nothing *stops* a script from writing to
-`events.jsonl` itself — see the limits — but then it is not a view doing it, it
-is a program you installed.)
+Two kinds. The kernel appends what a command prints and never appends what a
+view prints; a view has no path to the log through the kernel.
 
 ```json
-{"name":"command.declared","payload":{"name":"entry","summary":"append one journal entry","description":"append a journal entry. usage: entry <text…> — appends journal.entry {text}"}}
-{"name":"view.declared","payload":{"name":"journal","summary":"every entry, newest first","description":"every entry, newest first. usage: journal — no arguments; the whole journal in reverse order","consumes":["journal.entry"]}}
+{"name":"command.declared","payload":{"name":"entry","summary":"append one journal entry","description":"usage: entry <text…> — appends journal.entry {text}"}}
+{"name":"view.declared","payload":{"name":"journal","summary":"every entry, newest first","description":"usage: journal — no arguments; the whole journal in reverse order","consumes":["journal.entry"]}}
 ```
 
-A declaration is `{name, summary, description}`, plus `consumes` for a view.
-There is no schema beyond that, and there are two prose fields because they have
-two different readers.
+A declaration is `{name, summary, description}` plus `consumes` for a view.
+Two prose fields, two readers:
 
-`summary` is one terse line: what this capability is for, enough to tell it from
-its neighbours and no more. It is what the brief prints, so every waking mind
-reads every summary on every pass. The kernel clips it at 110 characters — a
-bound, not a request, because the mind writing the thirty-eighth declaration
-sees its own line and never the surface it lands in, and a limit with no
-feedback signal is one nobody can tell they crossed.
+- `summary`: one terse line, what this is for. The brief prints it, so every
+  waking reads every summary. Kernel clips at 110 characters.
+- `description`: usage and argument order first, then why this beats not using
+  it. One mind reads it once, via `self brief <name>`. As long as it needs.
 
-`description` is everything else: usage and argument order first, then the
-consequence that makes the capability preferable — context it saves, ambiguity
-it removes, or durable evidence lost when it is skipped. Exactly one mind reads
-it, once, at the moment it is choosing among tools, and it arrives there through
-`self brief <name>`. Write it as long as that mind's whole answer needs to be.
+Rationale in the summary taxes every orienting mind for the benefit of one
+choosing mind. A declaration without `summary` shows the opening sentence of its
+`description`, clipped: a salvage path, not the contract.
 
-Sizing one field for the choosing reader is what taxes the orienting one. Thirty
-capabilities of well-earned rationale is twenty kilobytes that every waking reads
-in full and nearly every waking discards unused — the cost is real, recurring,
-and paid by someone who is not in the room when it is incurred. A declaration
-carrying no `summary` still appears: the kernel stands in the opening sentence of
-its `description`, clipped. That is a salvage path for declarations older than
-the field, not the contract.
-
-A declaration is **pending** until a script arrives for it:
+A declaration is **pending** until a script arrives:
 
 ```json
 {"name":"script.authored","payload":{"type":"command","name":"entry","script":"#!/bin/sh\n…"}}
 ```
 
-`script.authored` is a wire message, not an event: it never lands in the log.
-The kernel installs the bytes and records its own signed `script.installed`
-receipt, or refuses and records `script.rejected` with the reason. A refusal is
-not lost — it stands in the brief until an install or a retirement supersedes
-it, and the reason rides the next prompt.
+`script.authored` is a wire message, never an event. The kernel installs the
+bytes and records a signed `script.installed`, or refuses with
+`script.rejected` and the reason, which stands in the brief and rides the next
+prompt until superseded.
 
 <!-- prompt:growth:begin -->
 A declaration without installed bytes cannot run, and it is not a failure: it
@@ -129,13 +95,10 @@ Leave the rest declared and unbuilt for a later waking:
 {"name":"script.authored","payload":{"type":"command|view","name":"<declared name>","script":"<shebang and bytes>"}}
 ```
 
-A declaration carries two prose fields with two readers. `summary` is one terse
-line, clipped by the kernel at 110 characters, and it is what every later waking
-reads in the brief. `description` is usage, argument order, and the consequence
-of skipping this capability; one mind reads it, at the moment it chooses among
-tools, through `self brief <name>`. Put the rationale there and not in the
-summary — a summary sized for the mind choosing is a tax on every mind merely
-orienting, levied at every waking.
+`summary` is one terse line, clipped at 110 characters, read by every later
+waking in the brief. `description` is usage, argument order, and the
+consequence of skipping this capability; one mind reads it through
+`self brief <name>`. Rationale goes there, not in the summary.
 
 Commands receive argv, the whole log on stdin, `SELF_HOME`, and the instance
 working directory; stdout must be new event JSONL. Views receive argv and only
@@ -144,47 +107,29 @@ directory; stdout is read-only bytes. Scripts may use a standard-library
 language with a shebang.
 
 For a parameterized view, make the zero-argument form its discoverable index:
-print concise usage plus the valid keys or actionable items a reader can choose.
-Valid arguments render detail. Fail only on malformed or excess arguments, not
-because the reader omitted a key they could not yet know.
+usage plus the valid keys or actionable items. Valid arguments render detail.
+Fail only on malformed or excess arguments, never because the reader omitted a
+key they could not yet know.
 
-When a capability manages stable named records rather than an unbounded stream,
-give later wakings the complete append-only lifecycle by default: create/add,
-revise/update, and remove/retire via a tombstone event, with reads supplied by
-views. Use one stable key across those events. A tombstone never erases history;
-it makes the record non-live until a later explicit create or restore. Without
-revision and tombstone paths, stale records remain permanently actionable and
-later wakings cannot distinguish current state from history. Do not invent CRUD
-for journals or other event streams whose history is itself the domain.
+When a capability manages stable named records rather than a stream, give later
+wakings the complete append-only lifecycle: create, revise, and retire via a
+tombstone event, one stable key across them, reads via views. A tombstone never
+erases history; it makes the record non-live until a later create or restore.
+Without revision and tombstone paths,
+stale records remain permanently actionable and later wakings cannot tell
+current state from history. Do not invent CRUD for journals or other streams
+whose history is the domain.
 
 If this domain repeatedly produces locally verified practices, give them a
 domain-named append-only lifecycle and selective views. Retain the final
-sanitized method, recognizable trigger, local constraints, verification
-evidence, and source references — not the raw session, failed attempts, secrets,
-or full tool transcript. Lead views with practices relevant to active work,
-recently reused, or failing verification; keep the archive out of the default
-surface. A method that reads live external state is a command that appends a
-structured observation; a view only replays what was witnessed. Repeated reuse
-may justify automation as a command, but one successful use does not require
-installation.
+sanitized method, trigger, constraints, verification evidence, and source
+references — not the raw session, failed attempts, secrets, or tool transcript.
+Lead views with practices relevant to active work, recently reused, or failing
+verification; keep the archive off the default surface. A method that
+reads live external state is a command that appends an observation; a view
+only replays what was witnessed. Repeated reuse may justify automation as a
+command; one successful use does not.
 <!-- prompt:growth:end -->
-
-### Practices, not transcripts
-
-Tool activity is not itself durable knowledge. Across domains, the reusable
-unit is a locally proven response to a situation a future mind can recognize:
-its trigger, desired outcome, final method, local constraints, and verification
-evidence. The admission signal is verified compression plus likely recurrence,
-high rediscovery cost, or material consequence. Both forgetting metis and
-retaining transient glue impose future context cost, so selection belongs near
-the moment exploration becomes trusted method.
-
-Practice vocabulary is domain-owned, not kernel vocabulary. A printer may keep
-material profiles and recovery recipes; a kitchen may keep service playbooks; a
-home instance may keep maintenance diagnostics. Their lifecycle should permit
-use, re-verification, revision, supersession, failure, and tombstone retirement.
-The noisy source session may remain as provenance, but should not become the
-working surface.
 
 Escaping a script into JSON by hand is miserable. Don't:
 
@@ -193,28 +138,14 @@ jq -nc --arg t command --arg n entry --rawfile s /tmp/entry.sh \
   '{name:"script.authored",payload:{type:$t,name:$n,script:$s}}' | self hear
 ```
 
-### A capability may declare capabilities
-
-Nothing special is needed for this, and it is the sharpest form of the loop. A
-command's stdout is event JSONL, and `command.declared` / `view.declared` are
-events, so a command can emit one. The *instance* then has pending work that no
-mind asked for, it rides the next prompt like any other, and a mind authors it.
-
-```sh
-self run propose census "how many events of each name this log holds"
-self                      # exit 0: view/census is pending, and the instance asked
-self | claude -p | self hear
-self view census          # the instance grew a capability it proposed itself
-```
-
+**A capability may declare capabilities.** A command's stdout is event JSONL and
+declarations are events, so a command can emit one; the instance then has
+pending work no mind asked for, and it rides the next prompt like any other.
 The kernel does not distinguish growth a human asked for from growth the
-instance asked for. That is deliberate: both are declarations in the log, and
-both converge the same way.
+instance asked for.
 
-Retiring is an event too — no verb, no special path. The script leaves the
-surface and every event stays; re-declaring the capability brings it back as
-**pending work**, to be authored fresh. A retired script does not silently
-return:
+**Retiring is an event.** The script leaves the surface, every event stays, and
+re-declaring brings it back as pending work to author fresh:
 
 ```json
 {"name":"capability.retired","payload":{"type":"view","name":"journal"}}
@@ -222,271 +153,191 @@ return:
 
 ## Capability scripts
 
-Any language with a shebang; standard library only. The environment is scrubbed:
-a fixed `PATH`, `TZ=UTC`, `LC_ALL=C`, `PYTHONHASHSEED=0`, and any `SELF_*`
-variable of the caller — which is the documented way to hand a capability
-configuration on purpose. Nothing else is inherited, because determinism is a
-claim this kernel makes and an inherited `$TZ` or a randomized hash seed
-silently breaks it.
+Any language with a shebang; standard library only. Environment scrubbed for
+determinism: fixed `PATH`, `TZ=UTC`, `LC_ALL=C`, `PYTHONHASHSEED=0`, plus the
+caller's `SELF_*` variables, which is how you hand a capability configuration.
 
-The two kinds are told different things, and the difference is the boundary:
-
-- A **command** is an effect on one instance, so it gets `SELF_HOME` and runs
-  with the instance as its working directory.
-- A **view** is a pure function of its events, so it gets **no path to the
-  instance at all**: no `SELF_HOME`, and an empty scratch directory to run in.
-  Its whole input arrives on stdin. This is not a sandbox — a script can still
-  guess a path — but the kernel does not hand a view the log to read, or to
-  write.
-
-**command** — argv is the arguments after `self run <name>`. stdin is the whole
-log as JSONL. stdout is new events as JSONL. Exit non-zero and nothing is
-appended.
-
-**view** — never ingested: whatever it prints goes to the reader, not the log.
-argv is the arguments after `self view <name>`; the view is handed no path to
-the instance. stdin is exactly the events its
-receipt's `consumes` list names, as
-JSONL, in log order (an empty list or `["*"]` means every event). stdout is
-opaque bytes: text, HTML, JSON, whatever you like. A view is a **pure function
-of those events** — same events in, same bytes out. Do not read the clock, the
-network, or anything not on stdin. A view is never materialized to disk; it is
-replayed on demand.
+- **command**: an effect on one instance. argv after `self run <name>`; stdin
+  the whole log as JSONL; `SELF_HOME` set; cwd the instance; stdout new events.
+  Exit non-zero and nothing is appended.
+- **view**: a pure function of its events. argv after `self view <name>`; stdin
+  exactly its receipt's `consumes` events in log order (`[]` or `["*"]` means
+  all); no `SELF_HOME`; cwd an empty scratch directory; stdout opaque bytes for
+  the reader, never the log. Same events in, same bytes out: no clock, no
+  network. Never materialized; replayed on demand. Not a sandbox — the kernel
+  simply hands a view no path.
 
 ## Answering
 
-You are expected to have tools. The prompt is a wake-up card, not a context
-dump: read `events.jsonl`, `cap/`, run `self brief`, `self view <name>`,
-`self help` before you answer.
+The prompt is a wake-up card, not a context dump. Read `events.jsonl`, `cap/`,
+`self brief`, `self view <name>`, `self help` before answering.
 
-- Do durable work through `self run <command> …`, or by printing events.
-- To grow the instance, print a declaration and, when you can verify the script
-  now, its `script.authored` in the same body — test the script by running it
-  before you print it. A declaration left without a script is pending work for
-  the next waking, not a mistake.
-- If a pending declaration lists a previous rejection, do not repeat it.
-- If there is nothing worth doing, print nothing. Silence is a valid turn.
-- Never edit `events.jsonl` and never write into `cap/` yourself. Only a
-  kernel-signed receipt installs, and only for a capability this log declared.
+- Durable work: `self run <command> …`, or print events.
+- Growth: print a declaration and, when you can verify the script now, its
+  `script.authored` in the same body. Run the script before printing it.
+  A declaration left without a script is pending work, not a mistake.
+- A pending declaration listing a rejection: do not repeat it.
+- Nothing worth doing: print nothing.
+- Never edit `events.jsonl`; never write into `cap/`. Only a kernel-signed
+  receipt installs, and only for a capability this log declared.
 
 ## Events
 
-The kernel's own vocabulary — eight names it acts on. Everything else in the
-log is a domain event, appended verbatim and interpreted only by views.
+Eight names the kernel acts on. Everything else is a domain event, appended
+verbatim, interpreted only by views.
 
-| name | who writes it | what it means |
+| name | writer | meaning |
 |---|---|---|
-| `command.declared` | anyone | a command capability exists, pending a script |
-| `view.declared` | anyone | a view capability exists, pending a script |
-| `script.installed` | the kernel | a receipt: these bytes are installed, signed under the local key |
-| `script.rejected` | the kernel | an authored script was refused, and why |
-| `capability.retired` | anyone | a tombstone: off the surface, still in the log |
+| `command.declared` | anyone | a command exists, pending a script |
+| `view.declared` | anyone | a view exists, pending a script |
+| `script.installed` | kernel | receipt: these bytes are installed, signed under the local key |
+| `script.rejected` | kernel | an authored script was refused, and why |
+| `capability.retired` | anyone | tombstone: off the surface, still in the log |
 | `intent.declared` | `self learn` | prose someone brought here: what an account is for |
-| `lesson.learned` | the kernel | an attestation: what an account actually deposited |
+| `lesson.learned` | kernel | attestation: what an account actually deposited |
 | `account.given` | `self give` | this instance gave an account away |
 
-`script.authored` is the wire schema above; it is never appended.
+`script.authored` is the wire schema above; never appended.
 
-An event is `{id, seq, name, occurred_at, via, by, payload}`. Records are never
-changed or deleted. A deletion is a later event.
+An event is `{id, seq, name, occurred_at, via, by, payload}`. Never changed or
+deleted; a deletion is a later event.
 
 ## Provenance
 
-- **`via` — the door.** The channel the kernel *witnessed* the event entering
-  through: `cli`, `hear`, `kernel`, or `learn:<account>`. Stamped by the kernel
-  from what it saw. Never accepted from a script, a mind, or a record. A door is
-  a local fact, like `seq`.
-- **`by` — the speaker.** Whatever the caller claimed via `SELF_CALLER`,
-  recorded verbatim as a claim and never verified. It is portable, like
-  `occurred_at`: testimony keeps its speaker when it travels between instances.
+- `via`, the door: `cli`, `hear`, `kernel`, or `learn:<account>`. Stamped by the
+  kernel from what it witnessed, never accepted from a script, mind or record.
+  A local fact, like `seq`.
+- `by`, the speaker: `SELF_CALLER` recorded verbatim, a claim, never verified.
+  Portable, like `occurred_at`.
 
-The author claim is signed *into* the receipt, so authorship cannot be
-relabelled after the fact.
+The author claim is signed into the receipt: authorship cannot be relabelled.
 
 ## Signed installation
 
-A receipt is `{type, name, script, consumes, by, sig}` where `sig` is
-HMAC-SHA256 over those fields, domain-separated and length-prefixed, under
-`SELF_HOME/.secret` (32 random bytes, mode 0600). Only a receipt that verifies
-under the local key ever installs, and only for a capability this log declared
-and has not retired. Anything else in the log is inert data.
+A receipt is `{type, name, script, consumes, by, sig}`; `sig` is HMAC-SHA256
+over those fields, domain-separated and length-prefixed, under
+`SELF_HOME/.secret` (32 random bytes, 0600). Only a receipt verifying under the
+local key installs, and only for a capability this log declared and has not
+retired. Anything else in the log is inert.
 
-Installed bytes are content-addressed at `cap/blob/<sha256>`; the readable path
-`cap/<type>/<name>/run` is a symlink to that blob. Execution resolves the
-latest live verified receipt, checks the blob against its own hash, rewrites it
-if it differs, and runs the blob — so a running script's bytes can never change
-under it, and a hand-edit is simply overwritten by the log. Editing files under
-`cap/` has no effect: the log is authoritative by construction, not by check.
+Bytes live at `cap/blob/<sha256>`; `cap/<type>/<name>/run` symlinks to the blob.
+Execution resolves the latest live verified receipt, checks the blob's hash,
+rewrites it if it differs, runs it. Hand-edits under `cap/` are overwritten by
+the log.
 
-`self rehydrate` makes disk match the log exactly — materializing what live
-receipts require, removing what they do not, and garbage-collecting unreferenced
-blobs. It needs `events.jsonl` and `.secret` and nothing else: no model, no
-network.
+`self rehydrate` makes disk match the log exactly from `events.jsonl` and
+`.secret` alone: no model, no network.
 
-Byte-identity is guaranteed for one log and one key: two instances holding the
-same two files rebuild identical scripts and render identical views. It is
-never guaranteed across two bodies — `id` is random, and `seq` and `via` are
-local facts.
+Byte-identity holds for one log and one key. Never across bodies: `id` is
+random; `seq` and `via` are local.
 
 ## Accounts
 
-An account is the one wire format between instances, and it is a directory of
-plain text. **Nothing runnable travels.**
+The one wire format between instances: a directory of plain text. **Nothing
+runnable travels.**
 
 ```
 account/
-  intent.md      the telling: who this is from, what it means, what you hope it
-                 becomes (required — intent alone is a valid account)
-  record.jsonl   the evidence: events verbatim, moments preserved (optional)
-  manifest.json  the attestation: {events, record_sha256, prefix?, capability?}
-                 (optional; written by give, advisory on learn)
+  intent.md      who this is from, what it means, what you hope it becomes (required)
+  record.jsonl   events verbatim (optional)
+  manifest.json  {events, record_sha256, prefix?, capability?} (optional; give writes, learn treats as advisory)
 ```
 
-`self give <selector> <dir>` writes one from the log. A selector is an
-event-name prefix (`note.`) for the knowledge flavour, or `command/<name>` /
-`view/<name>` for the capability flavour — declarations and receipts, renamed
-to lineage.
+`self give <selector> <dir>` writes one. Selector: an event-name prefix
+(`note.`) for knowledge, or `command/<name>` / `view/<name>` for a capability's
+declarations and receipts, renamed to lineage.
 
-`self learn <dir>` is the only way in, and it splits along the seam:
-
-- **The mechanical half** needs no mind. `intent.declared` records the prose
-  first, the record is deposited verbatim next, and `lesson.learned` attests
-  last — it must be last, because it hashes what actually landed.
-- **The intelligent half** rides the pipe: learn prints the learning prompt, and
-  whatever mind you pipe it to reads the intent against local state and declares
-  *its own* capabilities, authored and signed locally.
+`self learn <dir>` is the only way in. Mechanical half, no mind: `intent.declared`
+first, the record verbatim, `lesson.learned` last (it hashes what landed).
+Intelligent half rides the pipe: learn prints the learning prompt; the mind reads
+the intent against local state and declares its own capabilities, authored and
+signed locally.
 
 ```sh
 self learn account/ | claude -p | self hear
 ```
 
-Four rules keep the exchange honest, all mechanical:
+Four mechanical rules:
 
-1. **The kernel's vocabulary never travels raw.** `give` renames it to
-   `lineage.<name>`; `learn` refuses a record containing it and appends nothing
-   at all. Without this a deposited `command.declared` would become pending work
-   and the next pass would author and sign an attacker's script under your key.
-
-   The refused set is **frozen**: it holds the eight names above plus every name
-   any earlier kernel acted on — `kernel.initialized`, `projector.declared`,
-   `script.compiled`, `self.asked`, `self.replied`, `self.reflected`,
-   `learn.orchestrated`, `capability.revision.requested`. A name may leave the
-   vocabulary; it never leaves this set, because otherwise retiring a name would
-   quietly make it depositable and yesterday's vocabulary would become
-   tomorrow's injection. If a record you are writing needs one of them, rename
-   it `lineage.<name>` — that is what `give` does, and it lands inert.
-2. **Moments are preserved.** Deposited events keep their own `occurred_at` and
-   their own `by`. The door is re-stamped `learn:<account>`: doors are this
-   log's facts, never another body's. A record arriving is history, not news.
-
-   That re-stamped door is also what lets a view tell the difference. A learned
-   record lands under the event names this instance already reads, so it changes
-   what existing views print — which is the point of learning evidence, and also
-   the way a hostile account reaches your pages. A view that should show only
-   local testimony filters on `via`; one that should show both makes the
-   provenance visible. Deciding which is the receiving mind's job, not the
-   kernel's.
+1. **Kernel vocabulary never travels raw.** `give` renames it `lineage.<name>`;
+   `learn` refuses a record containing it and appends nothing. Otherwise a
+   deposited `command.declared` becomes pending work and the next pass signs an
+   attacker's script under your key. The refused set is **frozen**: the eight
+   names above plus every name any earlier kernel acted on —
+   `kernel.initialized`, `projector.declared`, `script.compiled`, `self.asked`,
+   `self.replied`, `self.reflected`, `learn.orchestrated`,
+   `capability.revision.requested`. A name may leave the vocabulary; it never
+   leaves this set.
+2. **Moments are preserved.** Deposited events keep `occurred_at` and `by`. The
+   door is re-stamped `learn:<account>`, which is how a view tells local
+   testimony from learned history. Filtering on `via` is the receiving mind's
+   job, not the kernel's.
 3. **Interventions are visible.** `lesson.learned` records the sha256 of the
-   record file **as read** beside what the manifest claimed. Deleting a line
-   before learning is legitimate curation — and it shows, in both logs, forever.
-   It is a hash of bytes, so a transport that rewrites line endings also shows
-   up as a divergence: the honest reading of a mismatch is "this file is not the
-   file that was given", not "someone removed a line".
-4. **Only the local key installs.** An account cannot install anything, ever.
-   It can only be read.
+   record as read beside what the manifest claimed. A mismatch means "this file
+   is not the file that was given", whether a line was curated or a transport
+   rewrote line endings.
+4. **Only the local key installs.** An account can only be read.
 
 Giving is cheap; learning is the work. That asymmetry is the Self Protocol.
 
 ## The CLI
 
-Every verb names a different primitive. There is no sugar: no `ask`, no
-`reply`, no `author`, no `retire` — those are the wire.
+Every verb is a different primitive. No sugar: no `ask`, `reply`, `author`,
+`retire` — those are the wire.
 
 ```
-self                        situate the naked default ask and full instance brief (READ)
+self                        situate the default ask and the full brief (READ)
 self <ask…>                 situate that ask (READ)
-… | self hear               hear: event lines land, scripts install (WRITE)
+… | self hear               events land, scripts install (WRITE)
 self brief [name]           the state card; with a name, that declaration in full
-self run <cmd> [args…]      execute a command capability
-self view <name> [args…]    replay a view to stdout ("log" is built in, shadowable)
-self view log [--all]       the built-in: the last 10 events, or with --all every one
-self loop [opts] -- <mind>  run situated turns to an unchanged-state fixed point
+self run <cmd> [args…]      execute a command
+self view <name> [args…]    replay a view ("log" is built in, shadowable)
+self view log [--all]       last 10 events, or every one
+self loop [opts] -- <mind>  situated turns to an unchanged-state fixed point
 self learn <dir>            deposit an account, print its learning prompt
 self give <sel> <dir>       write an account from the log
-self rehydrate              make cap/ match the log exactly
-self completion <shell>     print a completion shim (zsh|bash|fish)
+self rehydrate              make cap/ match the log
+self completion <shell>     completion shim (zsh|bash|fish)
 self help                   this file
 ```
 
-Every rung answers a wrong invocation with the rung below it. A verb with no
-argument prints what it could take — `self run` and `self view` print the
-capability index, `self brief` prints the surface. A name this log does not hold
-prints that index too; a name the other kind holds redirects to it. A capability
-that ran and refused its arguments prints its declaration: all of it when the
-script said nothing, and otherwise only the pointer to `self brief <name>`,
-because a tool that documented itself has already answered and does not need a
-second answer stapled on. An unknown verb prints the verb list above.
-
-All of that is **stderr**, and the exit code still says failure. Stdout is the
-wire: a command's stdout is event JSONL the kernel appends and a view's stdout is
-the page a pipeline reads, so an index printed there would be parsed as events.
-Diagnostics never touch it.
+A wrong invocation answers with the rung below: a verb with no argument prints
+its index; an unknown name prints the index; a name of the other kind redirects;
+a capability that refused its arguments prints its declaration, or only the
+pointer to `self brief <name>` if the script already said something; an unknown
+verb prints the verb list. All on **stderr**, exit code failing. Stdout is the
+wire; diagnostics never touch it.
 
 ### Completion
 
-`self completion zsh` (or `bash`, `fish`) prints a static shim; source it or
-install it where the shell expects. The shim is dumb on purpose: every
-candidate comes from `self __complete <words…>` — the words typed after
-`self`, the last being the partial word under the cursor — so capabilities
-grown after the shim was installed complete without reinstalling anything.
-`__complete` prints one candidate per line, optionally `candidate<TAB>description`,
-and degrades to silence: it never errors into a prompt line.
+`self completion <shell>` prints a static shim. Every candidate comes from
+`self __complete <words…>` (the words after `self`, last one partial), one per
+line, optionally `candidate<TAB>description`; it degrades to silence.
 
-The kernel completes what it already knows: verbs, then installed capability
-names for `run` and `view` (pending ones annotated), selectors for `give`.
-An argument position — `self view context <TAB>` — is domain state, and the
-kernel holds no domain model. It delegates: if a view named `complete.context`
-is installed, the kernel replays it like any view — its declared `consumes` on
-stdin, no `SELF_HOME` — passing the typed words as argv, and offers its stdout
-lines as candidates. Under a deadline, stderr discarded: a completer that
-hangs or fails costs silence, not a frozen shell.
-
-So tab-completion is a grown capability. Author `complete.<name>` beside a
-view or command whose arguments name domain things — goals, tasks, moods — and
-let it consume the same events and print the names that exist, filtered by the
-last argv word. A capability may declare capabilities, so `context`'s author
-can declare `complete.context` in the same breath, and the instance completes
-its own goals.
+The kernel completes verbs, installed capability names for `run` and `view`
+(pending annotated), and selectors for `give`. Argument positions are domain
+state: if a view `complete.<name>` is installed, the kernel replays it with the
+typed words as argv and offers its stdout lines, under a deadline, stderr
+discarded. Tab-completion is a grown capability; a capability's author can
+declare its completer in the same breath.
 
 ## The loop
 
-Capability work and domain work are both state a mind discovers by exploring
-the brief and its views. The kernel does not decide which state counts as work.
-Bare `self` therefore always prints the situated surface, even when no
-declaration is pending.
-
-`self loop` drives that surface to an append fixed point:
+Bare `self` always prints the situated surface; the kernel does not decide
+which state counts as work. `self loop` drives it to an append fixed point:
 
 ```sh
 self loop -- claude -p
-self loop -- pi --provider github-copilot --model gpt-5.6-luna --no-session -p
+self loop --max-passes 12 --settle 2 --timeout 30m --ask 'advance X' -- <mind> [args…]
 ```
 
-Each pass is a **waking**. The mind is told which waking this is and how many
-remain, hears the ask that woke the body on every waking rather than only the
-first, and is invited to leave the next waking something. Its stdout is heard
-through the normal write door, and then the kernel checks authoritative state.
-It repeats after any append — whether the append came back on stdout or a
-tool-capable mind called `self run` itself — and rests after `--settle`
-consecutive wakings (default 2) that leave the log unchanged. The last of those
-is asked plainly whether there is anything else, so a half-formed idea gets a
-second chance before the body rests. Users do not hash or inspect the log;
-witnessing change is kernel work. The loop knows nothing about goals, tasks, or
-declarations.
-
-The loop's ask is this layer, under a few lines of facts the kernel writes — the
-waking number, the wakings left, how long this waking may last, and what woke
-the body:
+Each pass is a **waking**. The mind hears which waking this is, how many remain,
+how long it has, and what woke the body (the `--ask`, on every waking). Its
+stdout goes through `hear`; the kernel then checks the log. Any append (on
+stdout, or by a tool-capable mind calling `self run`) means another pass; the
+body rests after `--settle` consecutive unchanged wakings (default 2), the last
+of which is asked plainly whether there is anything else. The loop knows nothing
+about goals, tasks, or declarations.
 
 <!-- prompt:loop:begin -->
 You are being woken in a series. Each waking reads what the last one left and
@@ -498,142 +349,72 @@ exists before adding to it — revising is as valid as growing. If, having looke
 you want nothing more for this body, append nothing and it rests.
 <!-- prompt:loop:end -->
 
-A refused script does not end the loop. The refusal is recorded as
-`script.rejected`, its reason rides the next waking beside the declaration, and
-the loop continues: a refusal is the mind learning, not the driver failing.
+A refused script does not end the loop: `script.rejected` rides the next waking.
 
-The mind command is required unless `SELF_LOOP_MIND` is set; there is no resident
-model. Options stop at `--` or the first positional argument. Everything after
-that is the mind command and its arguments, executed directly. Use `--` to make
-the boundary explicit. Options accept both `--timeout 5s` and `--timeout=5s`.
-Driver policy is explicit and generic:
+The mind command is required unless `SELF_LOOP_MIND` is set. Options stop at
+`--` or the first positional; the rest is the mind's argv, executed directly
+(not via a shell; use `sh -c '…'` when you mean shell syntax). It inherits cwd
+and environment (`SELF_HOME`, `SELF_CALLER`), gets the prompt on stdin, returns
+the wire on stdout. Mind stderr and progress go to stderr; `hear` output to
+stdout. Timeout or interruption SIGKILLs the mind's process group, no grace.
 
-```sh
-self loop --max-passes 12 --settle 2 --timeout 30m -- <mind> [args…]
-```
+`SELF_LOOP_MIND` is a shell string run via `sh -c`; argv after `--` takes
+precedence. `--ask`, `--max-passes`, `--settle`, `--timeout` override
+`SELF_LOOP_ASK`, `SELF_LOOP_MAX_PASSES`, `SELF_LOOP_SETTLE`, `SELF_LOOP_TIMEOUT`;
+only final values are validated. `--timeout 5s` and `--timeout=5s` both work.
 
-An optional ask directs attention without teaching the kernel domain semantics.
-It is what woke the body: pass one is told to start there, and every later
-waking still sees it, so a nudge does not evaporate after the turn it caused:
-
-```sh
-self loop --ask 'advance backoffice-preprod-proof' -- <mind> [args…]
-```
-
-On timeout or interruption, the loop kills the mind's process group with
-SIGKILL. It gives no shutdown grace period. A process that deliberately leaves
-that group is outside this mechanism.
-
-The mind is executed directly, not through a shell. It inherits the caller's
-working directory and environment (including `SELF_HOME` and `SELF_CALLER`),
-receives the situated prompt on stdin, and returns the ordinary event wire on
-stdout. Mind stderr and loop progress go to stderr; `hear` output goes to the
-loop's stdout. Use a shell explicitly only when shell syntax is intended:
-
-```sh
-self loop -- sh -c 'my-mind --flag'
-```
-
-For a pinned local setup, environment defaults make the short form complete:
-
-```sh
-export SELF_LOOP_MIND='pi --provider github-copilot --model gpt-5.6-luna --no-session -p'
-export SELF_LOOP_ASK='advance the one goal I selected'
-export SELF_LOOP_MAX_PASSES=12
-export SELF_LOOP_SETTLE=2
-export SELF_LOOP_TIMEOUT=30m
-self loop
-```
-
-`SELF_LOOP_MIND` is necessarily a shell command string and runs through
-`sh -c`; explicit argv after `--` is safer and takes precedence. CLI
-`--ask`, `--max-passes`, `--settle`, and `--timeout` likewise override their
-environment defaults. Only the final values are validated, so a valid CLI
-override replaces even an invalid environment default.
-
-Reaching the pass cap while the last waking still changed state, a mind failure,
-a timeout, or a hear failure other than a refused script exits non-zero. A
-converged fixed point exits zero — including a pass cap reached on a quiet
-waking, since the log did not move.
+Exit non-zero: pass cap hit while the last waking still changed state, a mind
+failure, a timeout, or a hear failure other than a refused script. Exit zero: a
+fixed point, including a pass cap reached on a quiet waking.
 
 ## Exit codes
 
-`0` did the thing. `1` did not. `self run` and `self view` without a name
-list available capabilities; requesting an unknown or unrunnable capability
-fails, with diagnostics on stderr and no output on stdout. A command that
-emits no events succeeds silently. Output write failures also fail; events
-already committed by a command remain committed.
-
-Bare orientation is a read; read or output errors still fail.
-`self loop` reports convergence or failure rather than overloading an exit code
-with the kernel's opinion about whether domain work exists.
+`0` did the thing, `1` did not. Unknown or unrunnable capability: stderr
+diagnostics, empty stdout, failure. A command emitting no events succeeds
+silently. Output write failures fail; already committed events stay committed.
 
 ## Environment
 
 ```
-SELF_HOME    the instance: a directory holding events.jsonl and .secret
-             (default: the current directory; pin one in your shell rc)
-SELF_CALLER  your claim, recorded verbatim as `by` on events you cause and
-             signed into the receipts of scripts you author
-SELF_LOOP_MIND          default shell command for `self loop` when `--` is absent
-SELF_LOOP_ASK           default explicit objective for every waking
-SELF_LOOP_MAX_PASSES    default loop pass cap (12 when unset)
-SELF_LOOP_SETTLE        quiet wakings in a row before the body rests (2 when unset)
-SELF_LOOP_TIMEOUT       default per-mind timeout (30m when unset)
+SELF_HOME              the instance: events.jsonl and .secret (default: cwd)
+SELF_CALLER            recorded verbatim as `by`, signed into your receipts
+SELF_LOOP_MIND         default mind shell command for `self loop`
+SELF_LOOP_ASK          default ask for every waking
+SELF_LOOP_MAX_PASSES   pass cap (12)
+SELF_LOOP_SETTLE       quiet wakings before rest (2)
+SELF_LOOP_TIMEOUT      per-mind timeout (30m)
+SELF_*                 anything else passes through to capability scripts
 ```
-
-Any other `SELF_*` variable is passed through to capability scripts.
 
 ## Lineage
 
-This kernel begins a new log lineage. It does not read the previous kernel's
-receipts: `script.compiled` is not a name it acts on, and the signature is
-domain-separated even where it is. What that means for a v1 `events.jsonl`,
-verified rather than assumed:
+This kernel starts a new lineage and does not read the previous kernel's
+receipts (`script.compiled` is not acted on; signatures are domain-separated).
+On a v1 `events.jsonl`: every event still reads; every v1 `command.declared` is
+pending, so the loop re-authors it under this key; v1 `projector.declared` is
+invisible — re-declare as views. The clean path is `self give` under the old
+kernel, `self learn` under this one: the protocol is its own migration path.
 
-- Every event still **reads**. `self view log --all` shows the whole history,
-  domain events included, with their moments and speakers intact.
-- Every v1 `command.declared` appears as a **pending declaration**, because its
-  receipt no longer verifies. So the loop offers to re-author it, locally and
-  under this key — a migration that runs itself.
-- v1 `projector.declared` events are invisible here: the kind was renamed to
-  `view`. Re-declare those as views.
+## Limits
 
-The clean path for a grown instance is the one anything else travels: `self
-give` under the old kernel, `self learn` under this one. That is not a
-workaround — the protocol being its own migration path is the claim.
-
-## Limits, stated plainly
-
-- **The mind is driven by the log, and the log can contain untrusted input.** A
-  learned account or a crafted event becomes context for the mind that writes
-  your scripts. There is **no human review step between authoring and signing**:
-  piping a mind's output into `self` signs whatever it authored. Hold the output
-  in a file and read it first if you want that pause; nothing enforces it.
+- **The log drives the mind, and the log can hold untrusted input.** There is no
+  review step between authoring and signing: piping a mind into `self hear`
+  signs whatever it wrote. Hold the output in a file first if you want a pause.
 - **The write door trusts its caller.** Anyone who can run `self` against your
-  `SELF_HOME` can declare and install — the same power they already have holding
-  the directory and its key. The signed-receipt gate is about reconstruction and
-  foreign accounts, not local privilege.
-- **Nothing is sandboxed.** The environment is scrubbed for determinism, not
-  containment. Installed scripts run as you.
-- **The log is unbounded.** Every install stores its script bytes; every view
-  replays its events. Compaction is not in the kernel; a snapshot is a
+  `SELF_HOME` can install. The receipt gate is about reconstruction and foreign
+  accounts, not local privilege.
+- **Nothing is sandboxed.** Scrubbed for determinism, not containment. Scripts
+  run as you.
+- **The log is unbounded.** No compaction in the kernel; a snapshot is a
   capability someone can grow.
 - **Appends are locked; operations are not transactions.** One `hear` body is
-  one critical section, but a command that emits several events and a
-  concurrent operation can still interleave.
-- **Capability scripts are not timed out.** A capability that hangs still hangs
-  its invocation. `self loop` times out the external mind process because that
-  is explicit driver policy; it does not impose timeouts on capabilities the
-  mind invokes.
-- **The last line of the log is judged by whether it is a whole event.**
-  Terminated by a newline, it is a record. Unterminated but parsing as an event,
-  it is also a record — complete, missing only its terminator, which is what an
-  editor that strips trailing newlines leaves behind — and the next append gives
-  it one. Unterminated and unparseable, it is a torn write: skipped, and dropped
-  by the next append, which says so. Real corruption further up is an error
-  naming the line, never a silent skip: the log is authoritative, so it is not
-  the kernel's place to decide which of your committed records to ignore.
-- **A command's runtime failure is not an event.** Its exit code and stderr are
-  the caller's to see; nothing is appended, so a failing command leaves no trace
-  in the log. Only a refused *authoring* attempt becomes state.
+  one critical section; a multi-event command and a concurrent operation can
+  interleave.
+- **Capability scripts are not timed out.** Only the loop's mind process is.
+- **The last log line is judged by whether it is a whole event.** Terminated: a
+  record. Unterminated but parsing: a record, given its newline by the next
+  append. Unterminated and unparseable: a torn write, skipped and dropped by the
+  next append, which says so. Corruption further up is an error naming the
+  line, never a silent skip.
+- **A command's runtime failure is not an event.** Exit code and stderr are the
+  caller's; nothing is appended. Only a refused authoring attempt becomes state.
