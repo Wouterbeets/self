@@ -1,0 +1,14 @@
+[
+  {
+    "name": "explore",
+    "instruction": "Investigate an important uncertainty. Preserve a finding with its evidence and limits; a new question alone is not a discovery."
+  },
+  {
+    "name": "finish",
+    "instruction": "Resume an existing commitment. Seek a verifiable completion or an evidence-backed decision to abandon it; declaring more goals is not completion."
+  },
+  {
+    "name": "simplify",
+    "instruction": "Look for repeated friction or unused structure. Improve or retire something only when the evidence warrants it. Another organizer is not automatically an improvement."
+  }
+]

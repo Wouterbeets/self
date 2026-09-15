@@ -89,6 +89,11 @@ log is unbounded. Read a generated script before you trust it. What you inspect
 is readable intent and readable output rather than an opaque binary; that is
 the advantage, not safety.
 
+## Experiments
+
+[Drive rotation](experiments/drives/README.md) compares repeated and alternating
+perspectives over identical starting instances, using a fixed pass budget.
+
 ## Status
 
 Experimental. Apache-2.0. The scripts your instance generates and the events in

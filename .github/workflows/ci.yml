@@ -48,3 +48,8 @@ jobs:
         # No model, no network, no API key. If this stops passing, the README
         # is lying.
         run: ./demo.sh
+
+      - name: drive experiment mechanics (no model)
+        run: |
+          go build -o /tmp/self-drive-test .
+          SELF_TEST_BIN=/tmp/self-drive-test python3 -m unittest discover -s experiments/drives -v
