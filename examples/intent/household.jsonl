@@ -2,4 +2,4 @@
 {"name":"pantry.counted","payload":{"items":["pasta","olive oil"]}}
 {"name":"recipe.saved","payload":{"name":"tomato pasta","minutes":15,"ingredients":["pasta","tomatoes","olive oil"]}}
 {"name":"recipe.saved","payload":{"name":"roast vegetables","minutes":45,"ingredients":["potatoes","carrots"]}}
-{"name":"work.declared","payload":{"name":"thursday-dinner","summary":"Plan Thursday dinner and missing groceries","description":"Choose a recorded recipe that fits Thursday's witnessed calendar availability. Record the meal and ingredients missing from the witnessed pantry. This prepares a shopping list; it does not buy anything or change calendar events."}}
+{"name":"intent.declared","payload":{"name":"thursday-dinner","summary":"Plan Thursday dinner and missing groceries","description":"Choose a recorded recipe that fits Thursday's witnessed calendar availability. Record the meal and ingredients missing from the witnessed pantry. This prepares a shopping list; it does not buy anything or change calendar events."}}

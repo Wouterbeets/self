@@ -1,3 +1,0 @@
-{"name":"spool.weighed","payload":{"spool":"blue-pla","gross_g":410,"tare_g":250}}
-{"name":"model.sliced","payload":{"model":"enclosure-v3","material":"blue-pla","required_g":125}}
-{"name":"work.declared","payload":{"name":"enclosure-fit","summary":"Can the blue spool finish enclosure v3?","description":"Compare spool.weighed with model.sliced using a 15% filament margin. Record the measurements, calculation, and conclusion; leave unresolved if either input is missing."}}

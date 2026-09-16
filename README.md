@@ -81,21 +81,22 @@ The whole contract is [`PROTOCOL.md`](PROTOCOL.md), which is also what
 `self help` prints. Nothing else restates it. `./demo.sh` drives all of it
 offline through `examples/mind-stub`, in about fifteen seconds.
 
-## Leave work for another mind
+## Declare an intent
 
 ```sh
-printf '%s\n' '{"name":"work.declared","payload":{"name":"spool-fit","summary":"Can the blue spool finish the enclosure?","description":"Compare witnessed remaining filament with the sliced model requirement, including a stated margin. Record the evidence; if measurements are missing, leave what is needed."}}' | self hear
-self brief work/spool-fit
+printf '%s\n' '{"name":"intent.declared","payload":{"name":"spool-fit","summary":"Can the blue spool finish the enclosure?","description":"Compare witnessed remaining filament with the sliced model requirement, including a stated margin. Record the evidence; if measurements are missing, leave what is needed."}}' | self hear
+self brief intent/spool-fit
 self loop -- claude -p
 ```
 
 The same declaration can ask for a meal plan that respects witnessed calendar
 constraints, a deduplicated shopping list, an investigation, or a reusable script.
-A mind records its result and closes the work with evidence, or leaves it open
-when inputs are missing. The loop can settle while work waits. Domain records
+A mind records its result and closes the intent with evidence, or leaves it open
+when inputs are missing. The loop can settle while an intent waits. Domain records
 remain domain records; no shopping-list or goal schema is built into the kernel.
-`self give work. account/` shares intent and history; the receiving mind decides
-what to adopt through `self learn account/`.
+`self give intent. account/` shares intent and history; the receiving mind decides
+what it becomes through `self learn account/`. Learning itself leaves a named
+intent, so another mind can finish interpreting the account later.
 
 ## Limits
 

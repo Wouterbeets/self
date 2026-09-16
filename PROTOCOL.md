@@ -68,27 +68,27 @@ You set `name` and `payload` only. The kernel assigns `id`, `seq`,
 
 ## Desired outcomes
 
-<!-- prompt:work:begin -->
+<!-- prompt:intent:begin -->
 Declare what you want to become possible:
 
 ```json
-{"name":"work.declared","payload":{"name":"check-fit","summary":"Check whether the replacement fits","description":"Desired outcome, context or references, and evidence needed to resolve it."}}
+{"name":"intent.declared","payload":{"name":"check-fit","summary":"Check whether the replacement fits","description":"Desired outcome, context or references, and evidence needed to resolve it."}}
 ```
 
-Read details with `self brief work/<name>`; `self brief work/` lists open outcomes.
+Read details with `self brief intent/<name>`; `self brief intent/` lists open outcomes.
 The result may be a finding, decision, artifact, or capability. Act within the
 user's scope. Redeclare the same name to revise or reopen it.
 
-Close with `work.closed` and `{name, outcome, reason}`. Use `completed` with
+Close with `intent.closed` and `{name, outcome, reason}`. Use `completed` with
 evidence and result references, or `dropped` with a reason. Completion records
 a judgment, not kernel proof. Keep findings in domain events. When input is
 missing, record what is needed and leave the outcome open; avoid unchanged
 appends. Pending capabilities already carry their own construction intent.
-<!-- prompt:work:end -->
+<!-- prompt:intent:end -->
 
-A work name is 1–200 ASCII letters, digits, dots, underscores, hyphens, or
+An intent name is 1–200 ASCII letters, digits, dots, underscores, hyphens, or
 slashes. A nonempty description is required. Invalid declarations and closures
-remain in the log but do not change the work index. A closure needs an existing
+remain in the log but do not change the intent index. A closure needs an existing
 name, a recognized outcome, and a nonempty reason. Replay uses local append
 order; redeclaring replaces the description and reopens the item. This is not
 a distributed ownership or conflict-resolution protocol.
@@ -99,15 +99,15 @@ it when no longer relevant. Closing that contribution need not close the larger
 domain record. Avoid mirroring whole backlogs into the brief.
 
 The brief shows at most twelve open summaries; full descriptions are read on
-demand. Closed work stays addressable by name. No owners, priorities, due dates,
+demand. Closed intents stay addressable by name. No owners, priorities, due dates,
 leases, or domain schemas are prescribed by the kernel. Shopping items, spool
 measurements, calendar entries, and goal hierarchies remain domain records.
 External artifacts need durable references; they are not rebuilt by `rehydrate`.
 
-`self give work. <dir>` exports the work lifecycle as inert `lineage.*` evidence.
-`learn` does not open or close local work from an account. A receiving mind may
-adopt a relevant outcome by declaring it locally, with source references and
-criteria suited to that instance, or decline it without creating any work.
+`self give intent. <dir>` exports the intent lifecycle as inert `lineage.*` evidence.
+`learn` declares a local intent to interpret the account. The account's own
+intentions remain lineage; a receiving mind may adopt a relevant outcome with
+local criteria, or close the learning intent after declining it.
 
 ## Capabilities
 
@@ -243,19 +243,18 @@ The execution prompt is a pointer, not a context dump. Read `events.jsonl`, `cap
 
 ## Events
 
-Ten names the kernel acts on. Everything else is a domain event, appended
-verbatim, interpreted only by views.
+Nine current kernel event names, plus the historical aliases listed below.
+Other names are domain events, appended verbatim and interpreted by minds and views.
 
 | name | writer | meaning |
 |---|---|---|
-| `work.declared` | anyone | declare, revise, or reopen a desired outcome |
-| `work.closed` | anyone | record completion evidence or a reason to drop work |
+| `intent.declared` | anyone | declare, revise, or reopen a desired outcome |
+| `intent.closed` | anyone | record completion evidence or a reason to let an intent go |
 | `command.declared` | anyone | a command exists, pending a script |
 | `view.declared` | anyone | a view exists, pending a script |
 | `script.installed` | kernel | receipt: these bytes are installed, signed under the local key |
 | `script.rejected` | kernel | an authored script was refused, and why |
 | `capability.retired` | anyone | tombstone: out of the brief, still in the log |
-| `intent.declared` | `self learn` | prose someone brought here: what an account is for |
 | `lesson.learned` | kernel | receipt: what an account actually deposited |
 | `account.given` | `self give` | this instance gave an account away |
 
@@ -309,11 +308,22 @@ account/
 (`note.`) for knowledge, or `command/<name>` / `view/<name>` for a capability's
 declarations and receipts, renamed to `lineage.*`.
 
-`self learn <dir>` is the only way in. Mechanical half, no mind: `intent.declared`
-first, the record verbatim, `lesson.learned` last (it hashes what landed).
-Second half rides the pipe: learn prints the learning prompt; the mind reads the
-intent against local state and decides what to retain, adopt as local work,
-or realize as locally authored capabilities. Learning need not produce code.
+`self learn <dir>` deposits an account and declares a local intent to learn it:
+`intent.declared` first, the record verbatim, `lesson.learned` last. The receipt
+hashes what landed; it does not claim that a mind understood it.
+
+The declaration has a unique `learn/<event-id>` name, a summary, and a description
+carrying the learning instructions and quoted `intent.md`. The original `account`
+and `intent` fields remain available to existing views. Even if no mind reads the
+printed prompt now, the learning intent remains discoverable by a later loop.
+The account directory is useful reference, but the deposited log retains the
+intent and evidence when that directory is gone.
+
+The mind interprets the account against local state: retain knowledge, adapt an
+outcome, build a capability, or explain why nothing applies. Close the learning
+intent with that evidence; leave it open if interpretation is unfinished.
+Importing another instance's intent does not make its proposed actions locally
+authorized. Learning need not produce code.
 
 ```sh
 self learn account/ | claude -p | self hear
@@ -324,11 +334,11 @@ Four mechanical rules:
 1. **Kernel vocabulary never travels raw.** `give` renames it `lineage.<name>`;
    `learn` refuses a record containing it and appends nothing. Otherwise a
    deposited `command.declared` becomes pending work and the next pass signs an
-   attacker's script under your key. The refused set is **cumulative**: the ten
+   attacker's script under your key. The refused set is **cumulative**: the nine
    names above plus every name any earlier kernel acted on —
    `kernel.initialized`, `projector.declared`, `script.compiled`, `self.asked`,
    `self.replied`, `self.reflected`, `learn.orchestrated`,
-   `capability.revision.requested`. A name may leave the vocabulary; it never
+   `capability.revision.requested`, `work.declared`, `work.closed`. A name may leave the vocabulary; it never
    leaves this set.
 2. **Timestamps and authors are preserved.** Deposited events keep `occurred_at`
    and `by`. `via` is re-stamped `learn:<account>`, which is how a view tells
@@ -352,7 +362,7 @@ self                        session guidance + capability index (READ)
 self prompt [ask…]          execution prompt: default or explicit ask (READ)
 self <ask…>                 shorthand for self prompt <ask…> (READ)
 … | self hear               events land, scripts install (WRITE)
-self brief [name]           the state card; with a name or work/<name>, full detail
+self brief [name]           the state card; with a name or intent/<name>, full detail
 self run <cmd> [args…]      execute a command
 self view <name> [args…]    replay a view ("log" is built in, shadowable)
 self view log [--all]       last 10 events, or every one
@@ -449,6 +459,12 @@ SELF_*                 anything else passes through to capability scripts
 ```
 
 ## Lineage
+
+`work.declared` and `work.closed` are accepted as historical aliases of
+`intent.declared` and `intent.closed`; `self brief work/<name>` still resolves.
+New events and prompts use intent. Old account `intent.declared` events carrying
+only `{account, intent}` remain testimony: they do not retroactively open intents.
+
 
 This kernel starts a new lineage and does not read the previous kernel's
 receipts (`script.compiled` is not acted on; signatures are domain-separated).

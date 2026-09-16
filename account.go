@@ -13,15 +13,16 @@ import (
 )
 
 var refused = map[string]bool{
-	"work.declared":                 true,
+	"work.declared":                 true, // historical kernel vocabulary remains reserved
 	"work.closed":                   true,
+	"intent.declared":               true,
+	"intent.closed":                 true,
 	"command.declared":              true,
 	"view.declared":                 true,
 	"script.authored":               true,
 	"script.installed":              true,
 	"script.rejected":               true,
 	"capability.retired":            true,
-	"intent.declared":               true,
 	"lesson.learned":                true,
 	"account.given":                 true,
 	"kernel.initialized":            true,
@@ -44,6 +45,7 @@ type manifest struct {
 }
 
 type account struct {
+	IntentName string // local learning intention; not supplied by the account
 	Name       string
 	Intent     string
 	Deposit    []Event
@@ -118,8 +120,15 @@ func cmdLearn(home, ref string, out io.Writer) error {
 
 	batch := make([]Event, 0, len(a.Deposit)+2)
 
-	intent, _ := json.Marshal(map[string]any{"account": a.Name, "intent": a.Intent})
-	ie := newEvent("intent.declared", intent)
+	ie := newEvent("intent.declared", nil)
+	a.IntentName = "learn/" + ie.ID
+	ie.Payload, _ = json.Marshal(map[string]any{
+		"name":        a.IntentName,
+		"summary":     "Learn account " + a.Name,
+		"description": learnAsk(ref, a),
+		"account":     a.Name,
+		"intent":      a.Intent,
+	})
 	ie.Via, ie.By = doorCLI, callerClaim()
 	batch = append(batch, ie)
 
@@ -158,7 +167,10 @@ func cmdLearn(home, ref string, out io.Writer) error {
 }
 
 func learnAsk(ref string, a *account) string {
-	ask := fmt.Sprintf("Learn the account %q: decide what, if anything, belongs on THIS instance. Preserve useful knowledge, adopt relevant unfinished work with a local work.declared, or build capabilities when they are needed. Receiving work does not commit this instance to doing it; a finding or no further action can be the right result.\n\nFix the public names the intent fixes; choose everything else yourself against what this instance already has. Do not transplant another instance's design.", a.Name)
+	ask := fmt.Sprintf("Learn the account %q: decide what, if anything, belongs on THIS instance. Preserve useful knowledge, adopt relevant unfinished work with a local intent.declared, or build capabilities when they are needed. Receiving an account does not commit this instance to its proposed actions; a finding or no further action can be the right result.\n\nFix the public names the intent fixes; choose everything else yourself against what this instance already has. Do not transplant another instance's design.", a.Name)
+	if a.IntentName != "" {
+		ask += fmt.Sprintf("\n\nThis learning pass is intent %q. Close it with intent.closed and evidence of what you retained, adapted, or declined. If interpretation needs another pass, leave it open. Imported declarations remain lineage until you adopt them locally.", a.IntentName)
+	}
 	if len(a.Deposit) > 0 {
 		abs := ref
 		if p, err := filepath.Abs(ref); err == nil {

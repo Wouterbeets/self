@@ -68,12 +68,12 @@ type rejection struct {
 const excerptCap = 1024
 
 type state struct {
-	Events []Event
-	Key    []byte
-	Caps   []*capability
-	byKey  map[string]*capability
-	Reject []*rejection
-	Work   []*workItem
+	Events  []Event
+	Key     []byte
+	Caps    []*capability
+	byKey   map[string]*capability
+	Reject  []*rejection
+	Intents []*intentItem
 }
 
 func loadState(home string) (*state, error) {
@@ -114,7 +114,7 @@ func (st *state) apply(events []Event) {
 	}
 
 	for _, e := range events {
-		st.applyWork(e)
+		st.applyIntent(e)
 		switch e.Name {
 		case "command.declared", "view.declared":
 			typ := strings.TrimSuffix(e.Name, ".declared")

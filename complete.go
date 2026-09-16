@@ -67,8 +67,8 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 			return nil
 		}
 		completeDeclNames(st, cur, out)
-		for _, w := range st.openWork() {
-			if name := "work/" + w.Name; strings.HasPrefix(name, cur) {
+		for _, w := range st.openIntents() {
+			if name := "intent/" + w.Name; strings.HasPrefix(name, cur) {
 				fmt.Fprintf(out, "%s\t%s\n", name, w.declaration().summary())
 			}
 		}

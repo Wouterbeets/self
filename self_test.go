@@ -1303,13 +1303,13 @@ func TestAccountEdgesAreRefused(t *testing.T) {
 }
 
 func TestExecutionPromptCarriesTheDietNotTheProtocol(t *testing.T) {
-	for _, layer := range []string{"core", "session", "execution", "work", "growth", "loop"} {
+	for _, layer := range []string{"core", "session", "execution", "intent", "growth", "loop"} {
 		if protocolLayer(layer) == "" {
 			t.Fatalf("PROTOCOL.md lost prompt layer %q", layer)
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"your persistent self", "append-only log", "Only what you append to self", "Context is finite", "views are compressed reads", "verified methods", "event JSONL or silence", "work.declared", "self help"} {
+	for _, want := range []string{"your persistent self", "append-only log", "Only what you append to self", "Context is finite", "views are compressed reads", "verified methods", "event JSONL or silence", "intent.declared", "self help"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}

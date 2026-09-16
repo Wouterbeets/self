@@ -2,20 +2,21 @@
 
 ## Unreleased
 
-`work.declared` and `work.closed` carry arbitrary desired outcomes between
-minds. Open summaries appear in the brief; `self brief work/<name>` reads the
-full declaration and closure evidence, and `self brief work/` lists open work.
-The loop can settle while work waits for input. Learning can retain knowledge
-or adopt unfinished work without building a capability; giving work exports
-inert lineage, requiring local adoption at the receiver. These two event names
-are now reserved kernel vocabulary. Replay uses local append order, without
-ownership, leases, or cross-instance conflict resolution.
+`intent.declared` and `intent.closed` carry desired outcomes between minds.
+Open summaries appear in the brief; `self brief intent/<name>` reads the full
+intent and closure evidence, and `self brief intent/` lists open intentions.
+`intent.md` remains the account's purpose. Learning declares a named intent to
+interpret it, so an interrupted learning pass can resume in a later loop.
+Imported intentions remain lineage until adopted locally. Old `work.*` events
+and `brief work/` selectors still replay; old unnamed account intent receipts
+do not become pending. Replay uses local append order, without ownership,
+leases, or cross-instance conflict resolution.
 
 Prompts now lead with desired outcomes, keep capability construction conditional,
 and leave detailed design guidance in `self help`.
 
 Runnable examples for a printer hobbyist, household, and standalone script
-author live in `examples/work/`.
+author live in `examples/intent/`.
 
 Bare `self` reconnects an agent with its persistent identity and capability
 index while it continues the user's task. Pass instructions and pending

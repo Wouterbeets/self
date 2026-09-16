@@ -15,9 +15,9 @@ home = Path(os.environ["SELF_HOME"])
 events = [json.loads(line) for line in (home / "events.jsonl").read_text().splitlines()]
 work = {}
 for event in events:
-    if event["name"] == "work.declared":
+    if event["name"] == "intent.declared":
         work[event["payload"]["name"]] = event["payload"]
-    elif event["name"] == "work.closed":
+    elif event["name"] == "intent.closed":
         work.pop(event["payload"]["name"], None)
 
 
@@ -30,7 +30,7 @@ def emit(name, payload):
 
 
 for name in work:
-    if f"- work/{name} —" not in prompt:
+    if f"- intent/{name} —" not in prompt:
         continue
     if name == "enclosure-fit":
         spool, model = latest("spool.weighed"), latest("model.sliced")
@@ -75,5 +75,5 @@ print(sum(values, Decimal(0)))
         reason = f"Verified {artifact}: 12.5 + 7.5 = 20.0; negative input rejected. Source preserved in artifact.written."
     else:
         continue
-    emit("work.closed", {"name": name, "outcome": "completed", "reason": reason})
+    emit("intent.closed", {"name": name, "outcome": "completed", "reason": reason})
     break
