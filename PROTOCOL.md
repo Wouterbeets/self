@@ -7,6 +7,14 @@ Nothing else restates it.
 
 **Reads project. Writes append. Printing the prompt is a read.**
 
+`hear`, successful commands, and account operations share one internal ingestion
+path: commit the batch under the log lock, apply kernel event handling, then
+report. Their input contracts remain distinct: `hear` accepts event wire and
+authored scripts; commands must succeed and emit only valid events before any
+are committed; accounts validate foreign vocabulary before depositing anything.
+Each entry point assigns provenance. `run` records automatically; no shell pipe
+is needed and its stdout remains the committed-event summary.
+
 The log carries knowledge, desired outcomes, and installed capabilities between
 minds. Views project it; commands append to it. External actions and artifacts
 need recorded evidence or references to remain discoverable.

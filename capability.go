@@ -473,7 +473,7 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 	if parseErr != nil {
 		return nil, fmt.Errorf("%w (nothing appended)", parseErr)
 	}
-	if err := appendEvents(home, out); err != nil {
+	if err := ingest(home, out, nil, nil, by, io.Discard); err != nil {
 		return nil, err
 	}
 	return out, nil

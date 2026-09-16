@@ -72,7 +72,11 @@ func cmdHear(home string, input []byte, out io.Writer) error {
 		_, err := out.Write(input)
 		return err
 	}
-	return hear(home, evs, scripts, prose, out)
+	by := callerClaim()
+	for i := range evs {
+		evs[i].Via, evs[i].By = doorHear, by
+	}
+	return ingest(home, evs, scripts, prose, by, out)
 }
 
 type authored struct {
@@ -153,7 +157,14 @@ func lines(body string) ([]string, error) {
 	return out, nil
 }
 
-func hear(home string, evs []Event, scripts []authored, prose []string, out io.Writer) error {
+// ingest is the shared commit path for validated input. Entry points retain
+// their parsing policy and assign provenance before handing over the batch.
+// Reports are written after unlocking; callers may discard them without losing
+// declaration, installation, or retirement handling.
+func ingest(home string, evs []Event, scripts []authored, prose []string, by string, out io.Writer) error {
+	if len(evs) == 0 && len(scripts) == 0 && len(prose) == 0 {
+		return nil
+	}
 	key, err := ensureSecret(home)
 	if err != nil {
 		return err
@@ -167,7 +178,7 @@ func hear(home string, evs []Event, scripts []authored, prose []string, out io.W
 			return lerr
 		}
 		defer unlock()
-		return heardLocked(home, key, evs, scripts, prose, &report)
+		return ingestLocked(home, key, evs, scripts, prose, by, &report)
 	}()
 	if _, werr := out.Write(report.Bytes()); werr != nil && err == nil {
 		return werr
@@ -175,11 +186,7 @@ func hear(home string, evs []Event, scripts []authored, prose []string, out io.W
 	return err
 }
 
-func heardLocked(home string, key []byte, evs []Event, scripts []authored, prose []string, out io.Writer) error {
-	by := callerClaim()
-	for i := range evs {
-		evs[i].Via, evs[i].By = doorHear, by
-	}
+func ingestLocked(home string, key []byte, evs []Event, scripts []authored, prose []string, by string, out io.Writer) error {
 	if err := appendLocked(home, evs); err != nil {
 		return err
 	}

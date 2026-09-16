@@ -154,3 +154,51 @@ func TestCallerAttributionIsVerbatim(t *testing.T) {
 		}
 	}
 }
+
+// Commands and hear must apply the same kernel-event effects, while a failed
+// producer still cannot commit any prefix or retire a capability.
+func TestCommandRetirementUsesSharedIngestion(t *testing.T) {
+	for _, tc := range []struct {
+		name, tail string
+		succeeds   bool
+	}{
+		{"success", "", true},
+		{"failed producer", "exit 7\n", false},
+		{"malformed suffix", "printf 'not an event\\n'\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := home(t)
+			growJournal(t, h)
+			script := "#!/bin/sh\ncat >/dev/null\ncat <<'EVENTS'\n" +
+				line(t, "capability.retired", map[string]string{"type": "view", "name": "journal"}) + "EVENTS\n" + tc.tail
+			heard(t, h, line(t, "command.declared", decl{Name: "remove-journal"})+
+				line(t, "script.authored", authored{Type: kindCommand, Name: "remove-journal", Script: script}))
+			before, err := os.ReadFile(logPath(h))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			err = dispatch(h, "run", []string{"remove-journal"}, &out)
+			if (err == nil) != tc.succeeds {
+				t.Fatalf("unexpected result: %v", err)
+			}
+			_, linkErr := os.Lstat(linkPath(h, kindView, "journal"))
+			if tc.succeeds {
+				if !os.IsNotExist(linkErr) || replayed(t, h).cap(kindView, "journal") != nil {
+					t.Fatal("committed retirement did not remove capability and link")
+				}
+				if !strings.Contains(out.String(), "capability.retired") || strings.Contains(out.String(), "heard ") {
+					t.Fatalf("run output changed: %q", out.String())
+				}
+			} else {
+				after, err := os.ReadFile(logPath(h))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if linkErr != nil || !bytes.Equal(before, after) {
+					t.Fatal("failed producer partially committed retirement")
+				}
+			}
+		})
+	}
+}

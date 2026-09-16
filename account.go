@@ -153,7 +153,7 @@ func cmdLearn(home, ref string, out io.Writer) error {
 	ae.Via = doorKernel
 	batch = append(batch, ae)
 
-	if err := appendEvents(home, batch); err != nil {
+	if err := ingest(home, batch, nil, nil, callerClaim(), io.Discard); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "self: learned %q — %d event(s) deposited; pipe this prompt to a mind:  self learn %s | claude -p | self hear\n", a.Name, len(a.Deposit), ref)
@@ -263,7 +263,7 @@ func cmdGive(home, selector, dir string) error {
 	})
 	e := newEvent("account.given", given)
 	e.Via, e.By = doorCLI, callerClaim()
-	if err := appendEvents(home, []Event{e}); err != nil {
+	if err := ingest(home, []Event{e}, nil, nil, callerClaim(), io.Discard); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "self: gave %d event(s) to %s — edit %s, then pass the directory on\n", len(selected), dir, intentPath)

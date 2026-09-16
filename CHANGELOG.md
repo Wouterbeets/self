@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+All event-producing entry points now share internal ingestion: `hear`, commands,
+and accounts use the same locked commit and kernel event handling. Commands keep
+strict batch validation, provenance, automatic recording, and existing stdout.
+Command-emitted retirements now clean up capability links immediately, as `hear`
+already did.
+
 `intent.declared` and `intent.closed` carry desired outcomes between minds.
 Open summaries appear in the brief; `self brief intent/<name>` reads the full
 intent and closure evidence, and `self brief intent/` lists open intentions.
