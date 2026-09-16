@@ -2168,3 +2168,109 @@ func TestBriefPreservesNestedNamesAndDescriptionLayout(t *testing.T) {
 		}
 	}
 }
+
+
+// dropFragment repairs a partially written trailing line. It is the only code
+// path that shortens the log, so its arithmetic is load-bearing: a wrong `keep`
+// discards committed events. These lock in the three shapes it can meet.
+
+func writeLog(t *testing.T, home, body string) {
+	t.Helper()
+	if err := os.MkdirAll(home, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "events.jsonl"), []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readLog(t *testing.T, home string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(home, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestDropFragmentKeepsCompleteLinesAndDropsTheTail(t *testing.T) {
+	home := t.TempDir()
+	complete := `{"seq":1,"name":"a.b","payload":{}}` + "\n" + `{"seq":2,"name":"c.d","payload":{}}` + "\n"
+	writeLog(t, home, complete+`{"seq":3,"name":"e.f"`)
+	if err := dropFragment(home); err != nil {
+		t.Fatalf("dropFragment: %v", err)
+	}
+	if got := readLog(t, home); got != complete {
+		t.Fatalf("committed lines were not preserved.\n got: %q\nwant: %q", got, complete)
+	}
+}
+
+func TestDropFragmentLeavesACleanLogAlone(t *testing.T) {
+	home := t.TempDir()
+	clean := `{"seq":1,"name":"a.b","payload":{}}` + "\n"
+	writeLog(t, home, clean)
+	if err := dropFragment(home); err != nil {
+		t.Fatalf("dropFragment: %v", err)
+	}
+	if got := readLog(t, home); got != clean {
+		t.Fatalf("clean log was modified: %q", got)
+	}
+}
+
+// The one case where truncating to zero is correct: the file holds no complete
+// line at all, so there is nothing committed to lose.
+func TestDropFragmentClearsALogThatIsOnlyAFragment(t *testing.T) {
+	home := t.TempDir()
+	writeLog(t, home, `{"seq":1,"name":"a.b"`)
+	if err := dropFragment(home); err != nil {
+		t.Fatalf("dropFragment: %v", err)
+	}
+	if got := readLog(t, home); got != "" {
+		t.Fatalf("lone fragment should have been cleared, got %q", got)
+	}
+}
+
+// The regression this guards: a log far larger than the initial 64 KiB scan
+// window must never lose committed events to a trailing fragment.
+func TestDropFragmentPreservesALogLargerThanTheScanWindow(t *testing.T) {
+	home := t.TempDir()
+	var b strings.Builder
+	for i := 1; i <= 4000; i++ {
+		fmt.Fprintf(&b, `{"seq":%d,"name":"a.b","payload":{"pad":"%s"}}`+"\n", i, strings.Repeat("x", 64))
+	}
+	complete := b.String()
+	if len(complete) < 64*1024 {
+		t.Fatalf("fixture must exceed the 64 KiB window, got %d bytes", len(complete))
+	}
+	writeLog(t, home, complete+`{"seq":4001,"name":"trunc`)
+	if err := dropFragment(home); err != nil {
+		t.Fatalf("dropFragment: %v", err)
+	}
+	got := readLog(t, home)
+	if got != complete {
+		t.Fatalf("large log lost data: kept %d of %d bytes", len(got), len(complete))
+	}
+	if n := strings.Count(got, "\n"); n != 4000 {
+		t.Fatalf("expected 4000 committed lines, got %d", n)
+	}
+}
+
+// An append must never shrink the log, whatever state the tail is in.
+func TestAppendAfterFragmentNeverLosesCommittedEvents(t *testing.T) {
+	home := t.TempDir()
+	complete := `{"seq":1,"name":"a.b","payload":{}}` + "\n" + `{"seq":2,"name":"c.d","payload":{}}` + "\n"
+	writeLog(t, home, complete+`{"seq":3,"name":"part`)
+	if err := appendEvents(home, []Event{{Name: "e.f", Payload: json.RawMessage(`{}`)}}); err != nil {
+		t.Fatalf("appendEvents: %v", err)
+	}
+	evs, err := readEvents(home)
+	if err != nil {
+		t.Fatalf("readEvents: %v", err)
+	}
+	if len(evs) != 3 {
+		t.Fatalf("expected the 2 committed events plus the new one, got %d", len(evs))
+	}
+	if evs[0].Seq != 1 || evs[1].Seq != 2 || evs[2].Seq != 3 {
+		t.Fatalf("sequence broken after fragment repair: %d %d %d", evs[0].Seq, evs[1].Seq, evs[2].Seq)
+	}
+}

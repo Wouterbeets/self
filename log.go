@@ -193,6 +193,22 @@ func dropFragment(home string) error {
 		return err
 	}
 
+	// keep == 0 means the scan concluded the entire file is one unterminated
+	// fragment, so the truncate below would discard every record in it. That is
+	// only ever right for a log that genuinely holds no complete line; if a
+	// windowing or short-read fault reports it for a log full of events,
+	// truncating destroys the whole body. The log is the only durable thing a
+	// self has, so re-read and refuse rather than take the scan on faith.
+	if keep == 0 {
+		whole := make([]byte, size)
+		if n, rerr := f.ReadAt(whole, 0); rerr != nil && int64(n) < size {
+			return rerr
+		}
+		if bytes.IndexByte(whole, '\n') >= 0 {
+			return fmt.Errorf("refusing to truncate events.jsonl to zero: the trailing-fragment scan found no newline in %d bytes, but the file holds complete lines", size)
+		}
+	}
+
 	fmt.Fprintf(os.Stderr, "self: dropping %d incomplete byte(s) from the end of events.jsonl — they parse as no event, so they were never a record\n", size-keep)
 	return f.Truncate(keep)
 }
