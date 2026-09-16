@@ -13,6 +13,8 @@ import (
 )
 
 var refused = map[string]bool{
+	"work.declared":                 true,
+	"work.closed":                   true,
 	"command.declared":              true,
 	"view.declared":                 true,
 	"script.authored":               true,
@@ -156,7 +158,7 @@ func cmdLearn(home, ref string, out io.Writer) error {
 }
 
 func learnAsk(ref string, a *account) string {
-	ask := fmt.Sprintf("Learn the account %q: decide how its intent should live on THIS instance, declare the capabilities that realize it, and author their scripts in this same answer.\n\nFix the public names the intent fixes; choose everything else yourself against what this instance already has. Do not transplant another instance's design.", a.Name)
+	ask := fmt.Sprintf("Learn the account %q: decide what, if anything, belongs on THIS instance. Preserve useful knowledge, adopt relevant unfinished work with a local work.declared, or build capabilities when they are needed. Receiving work does not commit this instance to doing it; a finding or no further action can be the right result.\n\nFix the public names the intent fixes; choose everything else yourself against what this instance already has. Do not transplant another instance's design.", a.Name)
 	if len(a.Deposit) > 0 {
 		abs := ref
 		if p, err := filepath.Abs(ref); err == nil {

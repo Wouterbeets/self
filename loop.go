@@ -132,7 +132,7 @@ func loopAsk(pass, maxPasses, quiet, settle int, timeout time.Duration, nudge st
 	default:
 		fmt.Fprintf(&b, "Pass %d of this self; at most %d more before the loop stops.", pass, remaining)
 	}
-	fmt.Fprintf(&b, "\nThis pass ends after %s. Only what is appended by then persists; a declaration left pending is safe, a script still on disk is not.", timeout)
+	fmt.Fprintf(&b, "\nThis pass ends after %s. Only what is appended by then persists; leave enough evidence and unresolved work in the log for another mind to continue. External artifacts need durable references; only installed capability bytes can be rebuilt by self.", timeout)
 	if nudge = strings.TrimSpace(nudge); nudge != "" {
 		fmt.Fprintf(&b, "\nThe ask: %s", nudge)
 		if pass == 1 {

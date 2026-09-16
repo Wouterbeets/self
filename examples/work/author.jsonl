@@ -1,0 +1,1 @@
+{"name":"work.declared","payload":{"name":"sum-filament","summary":"Write a standalone filament-estimate script","description":"Create a Python script that sums nonnegative gram amounts passed as arguments. Verify 12.5 + 7.5 = 20 and reject negative input. Preserve its source and verification result in the log with a file reference. No reusable self command is needed."}}

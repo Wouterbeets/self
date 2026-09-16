@@ -73,6 +73,7 @@ type state struct {
 	Caps   []*capability
 	byKey  map[string]*capability
 	Reject []*rejection
+	Work   []*workItem
 }
 
 func loadState(home string) (*state, error) {
@@ -113,6 +114,7 @@ func (st *state) apply(events []Event) {
 	}
 
 	for _, e := range events {
+		st.applyWork(e)
 		switch e.Name {
 		case "command.declared", "view.declared":
 			typ := strings.TrimSuffix(e.Name, ".declared")

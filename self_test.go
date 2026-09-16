@@ -1303,13 +1303,13 @@ func TestAccountEdgesAreRefused(t *testing.T) {
 }
 
 func TestExecutionPromptCarriesTheDietNotTheProtocol(t *testing.T) {
-	for _, layer := range []string{"core", "session", "execution", "growth", "loop"} {
+	for _, layer := range []string{"core", "session", "execution", "work", "growth", "loop"} {
 		if protocolLayer(layer) == "" {
 			t.Fatalf("PROTOCOL.md lost prompt layer %q", layer)
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"your persistent self", "You are making one pass", "append-only log", "Only what you append to self", "Context is finite", "views are compressed reads", "Exploration sometimes yields", "one-off scaffolding", "trigger, method, constraints, and evidence", "event JSONL or silence", "self help"} {
+	for _, want := range []string{"your persistent self", "append-only log", "Only what you append to self", "Context is finite", "views are compressed reads", "verified methods", "event JSONL or silence", "work.declared", "self help"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}
@@ -1322,7 +1322,7 @@ func TestExecutionPromptCarriesTheDietNotTheProtocol(t *testing.T) {
 	if !strings.Contains(p, protocolLayer("core")) {
 		t.Fatal("ordinary prompt does not splice the authoritative core layer")
 	}
-	if len(p) > 4000 {
+	if len(p) > 3200 {
 		t.Fatalf("empty situated prompt is %d bytes; diet regressed", len(p))
 	}
 }
@@ -1331,7 +1331,7 @@ func TestPendingPromptCarriesConditionalAuthoringContract(t *testing.T) {
 	h := home(t)
 	heard(t, h, line(t, "command.declared", decl{Name: "entry", Description: "append an entry"}))
 	p := situated(t, h, "")
-	for _, want := range []string{"script.authored", "not a failure", "carries to its next pass", "Commands receive argv", "Views receive argv", "standard-library", "zero-argument form", "discoverable index", "complete append-only lifecycle", "later passes", "tombstone event", "stale records remain permanently actionable", "Do not invent CRUD", "locally verified methods", "sanitized method", "not the raw session", "reads live external state is a command", "Repeated reuse", "justify automation", "command \"entry\" declared"} {
+	for _, want := range []string{"script.authored", "Commands receive argv", "Views receive argv", "standard-library", "zero-argument form", "revision and", "retirement paths", "Test before authoring", "command \"entry\" declared"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("pending prompt is missing %q:\n%s", want, p)
 		}

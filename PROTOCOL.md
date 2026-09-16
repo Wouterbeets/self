@@ -7,8 +7,9 @@ Nothing else restates it.
 
 **Reads project. Writes append. Printing the prompt is a read.**
 
-No hidden state: no session store, no cache, no sidecar. What is not in the log
-did not happen; every capability and view is a replay of it.
+The log carries knowledge, desired outcomes, and installed capabilities between
+minds. Views project it; commands append to it. External actions and artifacts
+need recorded evidence or references to remain discoverable.
 
 ## The dispatcher
 
@@ -20,7 +21,8 @@ self prompt [ask…]    print an execution prompt: brief + ask.                 
 
 Bare `self` supports an agent checking in before its existing task. It shares
 persistent identity with execution prompts, but adds no pass assignment, stdout
-contract, or authoring tutorial. Pending capabilities remain in the brief.
+contract, or authoring tutorial. Pending capabilities and open outcomes remain
+in the brief.
 `self prompt` prepares a mind whose output will be piped into `self hear`;
 `self <ask…>` remains shorthand for it. Neither mode reads stdin or writes state.
 
@@ -35,21 +37,19 @@ pipe prose about events (this file, say) into it.
 Identical in a terminal, a pipe, a script, a sandbox and cron.
 
 <!-- prompt:core:begin -->
-This is your persistent self: an append-only log of the knowledge and capabilities you carry between sessions. Your current context is temporary; what you preserve here remains available to future sessions. Read what matters for the task, build on what you already know, and leave behind what is worth keeping.
+This is your persistent self: an append-only log carrying knowledge, desired outcomes, and capabilities between sessions. Read what matters now and preserve what another mind will need.
 
-The brief is an index; views are compressed reads of the log. Context is finite: preserve evidence, not narration.
+The brief is an index; views are compressed reads. Context is finite: preserve evidence, not narration. Retain verified methods with their trigger, constraints, and evidence when reuse or rediscovery cost warrants it.
 
-Exploration sometimes yields a locally verified response to a recognizable situation. Re-deriving it wastes future context; retaining one-off scaffolding does too. Preserve the smallest record carrying its trigger, method, constraints, and evidence when recurrence, rediscovery cost, or consequence justifies it.
-
-Use `self view <name> [args...]` to read, `self brief <name>` for usage, and `self run <command> [args...]` to act. Full contract: `self help`.
+Read with `self view <name> [args...]`, inspect declarations with `self brief <name>`, and act with `self run <command> [args...]`. Full contract: `self help`.
 <!-- prompt:core:end -->
 
 <!-- prompt:session:begin -->
-Continue with the user's task. Preserve useful findings through commands or event JSONL piped into `self hear`; your reply to the user stays in the conversation. Pending capabilities are available work, not an assignment. Read `self help` when you need to declare or author one.
+Continue the user's task; reply in the conversation. Preserve useful findings through commands or event JSONL piped into `self hear`. The brief shows possibilities to consider, not assignments. Read `self help` to declare an outcome or author a capability.
 <!-- prompt:session:end -->
 
 <!-- prompt:execution:begin -->
-You are making one pass over this self. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel assigns identity, sequence, time, and provenance. Only what you append to self is carried into later passes; prose on stdout cannot persist.
+Make one pass. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel adds identity, time, and provenance. Only what you append to self enters its memory.
 <!-- prompt:execution:end -->
 
 ## The wire
@@ -66,7 +66,50 @@ event some view renders, never kernel vocabulary. Empty stdout is a valid turn.
 You set `name` and `payload` only. The kernel assigns `id`, `seq`,
 `occurred_at`, `via`, `by`. Name: `^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`.
 
-### Declaring a capability
+## Desired outcomes
+
+<!-- prompt:work:begin -->
+Declare what you want to become possible:
+
+```json
+{"name":"work.declared","payload":{"name":"check-fit","summary":"Check whether the replacement fits","description":"Desired outcome, context or references, and evidence needed to resolve it."}}
+```
+
+Read details with `self brief work/<name>`; `self brief work/` lists open outcomes.
+The result may be a finding, decision, artifact, or capability. Act within the
+user's scope. Redeclare the same name to revise or reopen it.
+
+Close with `work.closed` and `{name, outcome, reason}`. Use `completed` with
+evidence and result references, or `dropped` with a reason. Completion records
+a judgment, not kernel proof. Keep findings in domain events. When input is
+missing, record what is needed and leave the outcome open; avoid unchanged
+appends. Pending capabilities already carry their own construction intent.
+<!-- prompt:work:end -->
+
+A work name is 1–200 ASCII letters, digits, dots, underscores, hyphens, or
+slashes. A nonempty description is required. Invalid declarations and closures
+remain in the log but do not change the work index. A closure needs an existing
+name, a recognized outcome, and a nonempty reason. Replay uses local append
+order; redeclaring replaces the description and reopens the item. This is not
+a distributed ownership or conflict-resolution protocol.
+
+Domain backlogs stay in their own views. A domain command can declare the next
+useful contribution to an active goal, meal plan, or investigation, and withdraw
+it when no longer relevant. Closing that contribution need not close the larger
+domain record. Avoid mirroring whole backlogs into the brief.
+
+The brief shows at most twelve open summaries; full descriptions are read on
+demand. Closed work stays addressable by name. No owners, priorities, due dates,
+leases, or domain schemas are prescribed by the kernel. Shopping items, spool
+measurements, calendar entries, and goal hierarchies remain domain records.
+External artifacts need durable references; they are not rebuilt by `rehydrate`.
+
+`self give work. <dir>` exports the work lifecycle as inert `lineage.*` evidence.
+`learn` does not open or close local work from an account. A receiving mind may
+adopt a relevant outcome by declaring it locally, with source references and
+criteria suited to that instance, or decline it without creating any work.
+
+## Capabilities
 
 Two kinds. The kernel appends what a command prints and never appends what a
 view prints; a view has no path to the log through the kernel.
@@ -100,27 +143,30 @@ bytes and records a signed `script.installed`, or refuses with
 prompt until superseded.
 
 <!-- prompt:growth:begin -->
-A declaration without installed bytes cannot run, and it is not a failure: it
-is pending work this self carries to its next pass, where it rides the prompt.
-Declare what you want to exist. Author and test what you can verify in this
-pass, then print this wire message; the kernel installs it and replaces it with
-a signed receipt, so `script.authored` never lands as an event. Leave the rest
-declared and unbuilt for a later pass:
+A pending capability awaits a script. Inspect what exists, then author and test
+what you can verify now. Leave the rest declared for a later pass.
 
 ```json
 {"name":"script.authored","payload":{"type":"command|view","name":"<declared name>","script":"<shebang and bytes>"}}
 ```
 
-`summary` is one terse line, clipped at 110 characters, read by every later
-pass in the brief. `description` is usage, argument order, and the consequence
-of skipping this capability; one mind reads it through `self brief <name>`.
-Rationale goes there, not in the summary.
+The kernel signs and installs bytes or records a refusal. `script.authored`
+is a wire message, never a stored event. Test before authoring; an installation
+receipt proves which bytes were installed, not that their behavior is correct.
 
 Commands receive argv, the whole log on stdin, `SELF_HOME`, and the instance
-working directory; stdout must be new event JSONL. Views receive argv and only
-their signed `consumes` events on stdin, with no `SELF_HOME` and an empty scratch
-directory; stdout is read-only bytes. Scripts may use a standard-library
-language with a shebang.
+working directory; stdout is new event JSONL. Views receive argv and their
+signed `consumes` events, no `SELF_HOME`, and an empty scratch directory; stdout
+is read-only bytes. Use a shebang and a standard-library language.
+
+Keep summaries terse; put usage and rationale in descriptions. A parameterized
+view's zero-argument form lists valid keys. Named records need revision and
+retirement paths; streams retain history. Preserve reusable verified methods
+with evidence, and automate when repeated use warrants it. Full design guidance:
+`self help`.
+<!-- prompt:growth:end -->
+
+### Capability design
 
 For a parameterized view, make the zero-argument form its discoverable index:
 usage plus the valid keys or actionable items. Valid arguments render detail.
@@ -145,7 +191,7 @@ verification; keep the archive off the default view. A method that
 reads live external state is a command that appends an observation; a view
 only replays what was witnessed. Repeated reuse may justify automation as a
 command; one successful use does not.
-<!-- prompt:growth:end -->
+
 
 Escaping a script into JSON by hand is error-prone. Use `jq`:
 
@@ -154,11 +200,9 @@ jq -nc --arg t command --arg n entry --rawfile s /tmp/entry.sh \
   '{name:"script.authored",payload:{type:$t,name:$n,script:$s}}' | self hear
 ```
 
-**A capability may declare capabilities.** A command's stdout is event JSONL and
-declarations are events, so a command can emit one; the instance then has
-pending work no mind asked for, and it rides the next prompt like any other.
-The kernel does not distinguish a declaration a human made from one the
-instance made.
+**Commands may declare outcomes and capabilities.** Declarations are events,
+so a command can leave an intention for a future mind. Human and generated
+declarations have the same lifecycle; neither grants additional authority.
 
 **Retiring is an event.** The script leaves the brief, every event stays, and
 re-declaring brings it back as pending work to author fresh:
@@ -199,11 +243,13 @@ The execution prompt is a pointer, not a context dump. Read `events.jsonl`, `cap
 
 ## Events
 
-Eight names the kernel acts on. Everything else is a domain event, appended
+Ten names the kernel acts on. Everything else is a domain event, appended
 verbatim, interpreted only by views.
 
 | name | writer | meaning |
 |---|---|---|
+| `work.declared` | anyone | declare, revise, or reopen a desired outcome |
+| `work.closed` | anyone | record completion evidence or a reason to drop work |
 | `command.declared` | anyone | a command exists, pending a script |
 | `view.declared` | anyone | a view exists, pending a script |
 | `script.installed` | kernel | receipt: these bytes are installed, signed under the local key |
@@ -266,8 +312,8 @@ declarations and receipts, renamed to `lineage.*`.
 `self learn <dir>` is the only way in. Mechanical half, no mind: `intent.declared`
 first, the record verbatim, `lesson.learned` last (it hashes what landed).
 Second half rides the pipe: learn prints the learning prompt; the mind reads the
-intent against local state and declares its own capabilities, authored and
-signed locally.
+intent against local state and decides what to retain, adopt as local work,
+or realize as locally authored capabilities. Learning need not produce code.
 
 ```sh
 self learn account/ | claude -p | self hear
@@ -278,7 +324,7 @@ Four mechanical rules:
 1. **Kernel vocabulary never travels raw.** `give` renames it `lineage.<name>`;
    `learn` refuses a record containing it and appends nothing. Otherwise a
    deposited `command.declared` becomes pending work and the next pass signs an
-   attacker's script under your key. The refused set is **frozen**: the eight
+   attacker's script under your key. The refused set is **cumulative**: the ten
    names above plus every name any earlier kernel acted on —
    `kernel.initialized`, `projector.declared`, `script.compiled`, `self.asked`,
    `self.replied`, `self.reflected`, `learn.orchestrated`,
@@ -294,7 +340,7 @@ Four mechanical rules:
    endings.
 4. **Only the local key installs.** An account can only be read.
 
-Giving is cheap; learning is the work.
+Giving shares evidence and intent; learning decides what they become here.
 
 ## The CLI
 
@@ -306,7 +352,7 @@ self                        session guidance + capability index (READ)
 self prompt [ask…]          execution prompt: default or explicit ask (READ)
 self <ask…>                 shorthand for self prompt <ask…> (READ)
 … | self hear               events land, scripts install (WRITE)
-self brief [name]           the state card; with a name, that declaration in full
+self brief [name]           the state card; with a name or work/<name>, full detail
 self run <cmd> [args…]      execute a command
 self view <name> [args…]    replay a view ("log" is built in, shadowable)
 self view log [--all]       last 10 events, or every one
@@ -359,13 +405,10 @@ whether there is anything else. The loop knows nothing about goals, tasks, or
 declarations.
 
 <!-- prompt:loop:begin -->
-You are the mind for one pass in a series. Each pass reads what the last one left and leaves
-something for the next: a declaration not yet built, a view half-formed, a
-question or a note written as an event. A pending declaration is how this self
-carries work across passes; the kernel asks the next pass to build it. Build
-what you can verify now, and look at what already exists before adding to it —
-revising is as valid as adding. If, having looked, you want nothing more for
-this self, append nothing and the loop stops.
+Consider the ask and open outcomes. Advance what you can support with evidence,
+record the result, and leave enough context for another mind to continue.
+Use what already exists; build capabilities when they help. If nothing useful
+can advance now, append nothing. The loop may settle while outcomes await input.
 <!-- prompt:loop:end -->
 
 A refused script does not end the loop: `script.rejected` rides the next pass.

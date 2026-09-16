@@ -1,6 +1,6 @@
 # self
 
-`self` stores knowledge and capabilities for your agents, and for you, to use.
+`self` carries knowledge, desired outcomes, and capabilities between minds.
 Add "use self" to your agent instructions and your agents grow long-term memory
 and capabilities over time, without exploding your context window.
 
@@ -36,8 +36,8 @@ For Claude Code, in `.claude/settings.json`:
 
 **3. Work as usual.** `self` reconnects the agent with its persistent knowledge
 and capabilities while it continues your task. It keeps replying to you normally;
-useful findings go through commands or into `self hear`. Pending capabilities
-stay visible without assigning the agent to build them.
+useful findings go through commands or into `self hear`. Declared outcomes and
+pending capabilities stay visible for later minds to consider.
 
 The agent reads the brief, acts, and writes what should
 outlive the session. The first time it needs a way to remember something, it
@@ -60,8 +60,8 @@ A capability is an ordinary executable in any language. The agent declares it
 and authors its script in the same breath, the kernel signs and installs it,
 and it is live on the next turn. `self run <cmd>` appends what a command
 prints; `self view <name>` prints a view and appends nothing. `self rehydrate`
-rebuilds the whole instance from `events.jsonl` and `.secret`, with no model
-and no network.
+rebuilds installed capabilities from `events.jsonl` and `.secret`, with no model
+and no network. Other artifacts need their own storage and recorded references.
 
 `self prompt` explicitly prepares a pass whose stdout goes to `self hear`;
 `self "<ask>"` remains shorthand. `self loop` runs repeated passes with that same
@@ -80,6 +80,22 @@ self learn lessons/chat | claude -p | self hear   # learn from another instance
 The whole contract is [`PROTOCOL.md`](PROTOCOL.md), which is also what
 `self help` prints. Nothing else restates it. `./demo.sh` drives all of it
 offline through `examples/mind-stub`, in about fifteen seconds.
+
+## Leave work for another mind
+
+```sh
+printf '%s\n' '{"name":"work.declared","payload":{"name":"spool-fit","summary":"Can the blue spool finish the enclosure?","description":"Compare witnessed remaining filament with the sliced model requirement, including a stated margin. Record the evidence; if measurements are missing, leave what is needed."}}' | self hear
+self brief work/spool-fit
+self loop -- claude -p
+```
+
+The same declaration can ask for a meal plan that respects witnessed calendar
+constraints, a deduplicated shopping list, an investigation, or a reusable script.
+A mind records its result and closes the work with evidence, or leaves it open
+when inputs are missing. The loop can settle while work waits. Domain records
+remain domain records; no shopping-list or goal schema is built into the kernel.
+`self give work. account/` shares intent and history; the receiving mind decides
+what to adopt through `self learn account/`.
 
 ## Limits
 

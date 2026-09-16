@@ -17,7 +17,7 @@ Usage:
   self prompt [ask...]         print a prompt for an event-producing mind
   self <ask...>                shorthand for self prompt <ask...>
   self hear                     ingest event JSONL or authored scripts from stdin
-  self brief [name]             the state; with a name, that one capability in full
+  self brief [name]             the state; with a name or work/<name>, full detail
   self run <command> [args...]  execute a command capability and append its events
   self view <name> [args...]    replay a pure view; built-in log is always available
   self loop [opts] [-- mind...] run a mind until the log stops changing (quiet passes in a row)
@@ -207,7 +207,9 @@ func brief(home string, st *state) string {
 			fmt.Fprintf(&b, "- %s (seq %d): %s\n", where, r.Seq, oneLine(r.Reason))
 		}
 	}
-	if st.capabilitiesReady() {
+	b.WriteString(workBrief(st))
+
+	if st.capabilitiesReady() && len(st.openWork()) == 0 {
 		b.WriteString("\nnothing pending, nothing refused.\n")
 	}
 
@@ -259,6 +261,9 @@ func otherKind(typ string) string {
 }
 
 func briefOne(st *state, selector string) (string, error) {
+	if name, ok := strings.CutPrefix(selector, "work/"); ok {
+		return workDetail(st, name)
+	}
 	var found []*capability
 	if typ, name, qualified := strings.Cut(selector, "/"); qualified {
 		if typ != kindCommand && typ != kindView {
