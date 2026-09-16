@@ -44,18 +44,15 @@ func cmdOrient(home string, out io.Writer) error {
 }
 
 func cmdSituate(home string, ask string, out io.Writer) error {
-	empty := strings.TrimSpace(ask) == ""
-	if empty {
+	if strings.TrimSpace(ask) == "" {
 		ask = defaultAsk
 	}
 	st, err := loadState(home)
 	if err != nil {
 		return err
 	}
-	if _, err := io.WriteString(out, situate(home, st, ask)); err != nil {
-		return err
-	}
-	return nil
+	_, err = io.WriteString(out, situate(home, st, ask))
+	return err
 }
 
 func cmdHear(home string, input []byte, out io.Writer) error {
@@ -91,7 +88,7 @@ func wire(body string) (evs []Event, scripts []authored, prose []string, err err
 		return nil, nil, nil, err
 	}
 	for _, line := range all {
-		probe, ok := eventLine(line)
+		probe, ok := eventLine(strings.TrimSpace(strings.Trim(line, "`")))
 		if !ok {
 			prose = append(prose, line)
 			continue
@@ -131,13 +128,9 @@ type wireLine struct {
 }
 
 func eventLine(line string) (wireLine, bool) {
-	for _, candidate := range []string{line, strings.TrimSpace(strings.Trim(line, "`"))} {
-		var w wireLine
-		if json.Unmarshal([]byte(candidate), &w) == nil && validEventName(w.Name) && w.Payload != nil {
-			return w, true
-		}
-	}
-	return wireLine{}, false
+	var w wireLine
+	err := json.Unmarshal([]byte(line), &w)
+	return w, err == nil && validEventName(w.Name) && w.Payload != nil
 }
 
 const lineLimit = 64 * 1024 * 1024
@@ -324,19 +317,13 @@ func applyRetirements(home string, st *state, evs []Event) []string {
 }
 
 func situate(home string, st *state, ask string) string {
-	var b strings.Builder
-	b.WriteString(protocolLayer("core"))
-	b.WriteString("\n\n")
-	b.WriteString(protocolLayer("execution"))
-	b.WriteString("\n\n")
-	b.WriteString(brief(home, st))
-	b.WriteString("\n## Intent\n\n")
-	b.WriteString(protocolLayer("intent"))
-	b.WriteString(pendingSection(st))
-	b.WriteString("\n## The ask\n\n")
-	b.WriteString(strings.TrimSpace(ask))
-	b.WriteString("\n")
-	return b.String()
+	return strings.Join([]string{
+		protocolLayer("core"), protocolLayer("execution"),
+		strings.TrimSpace(brief(home, st)),
+		"## Intent\n\n" + protocolLayer("intent"),
+		strings.TrimSpace(pendingSection(st)),
+		"## The ask\n\n" + strings.TrimSpace(ask),
+	}, "\n\n") + "\n"
 }
 
 func pendingSection(st *state) string {
@@ -348,17 +335,12 @@ func pendingSection(st *state) string {
 	b.WriteString("\n## Pending — declared, awaiting a script\n\n")
 	b.WriteString(protocolLayer("growth"))
 	b.WriteString("\n")
-	skip := map[string]bool{}
 	for _, c := range pending {
-		skip[c.key()] = true
 		d, _ := json.Marshal(c.Decl)
 		fmt.Fprintf(&b, "\n%s %q declared at seq %d:\n%s\n", c.Type, c.Name, c.DeclSeq, d)
 		if c.Reject != nil {
 			fmt.Fprintf(&b, "Your previous attempt was REFUSED: %s\nDo not repeat that mistake.\n", c.Reject.Reason)
 		}
-	}
-	if name, script := st.exemplar(skip); script != "" {
-		fmt.Fprintf(&b, "\nAn installed capability of this instance, as idiom — learn its shape, do not copy it:\n\n--- %s ---\n%s\n--- end ---\n", name, script)
 	}
 	return b.String()
 }

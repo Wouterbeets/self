@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+A Unix and simplicity pass removes automatic script examples from pending
+prompts, shares event validation and completion loading, and shortens loop
+guidance. Pending declarations and refusal evidence still ride the prompt.
+`brief` preserves multiline descriptions and accepts unqualified nested names.
+Fixed-form verbs reject extra arguments before acting; unknown verbs suggest a
+working `self prompt` invocation. `self-serve` now requires
+POST for `/run/`; GET and HEAD cannot execute commands. Existing HTTP clients
+that use GET for actions must switch to POST.
+
 All event-producing entry points now share internal ingestion: `hear`, commands,
 and accounts use the same locked commit and kernel event handling. Commands keep
 strict batch validation, provenance, automatic recording, and existing stdout.

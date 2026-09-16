@@ -19,6 +19,7 @@ func TestCommandOutputIsAnAtomicEventBatch(t *testing.T) {
 		{"missing payload", `{"name":"note.added"}`, "0", false},
 		{"invalid name", `{"name":"note","payload":{}}`, "0", false},
 		{"prose", `not an event`, "0", false},
+		{"quoted JSON", "`{\"name\":\"note.added\",\"payload\":{}}`", "0", false},
 		{"authored script", `{"name":"script.authored","payload":{}}`, "0", false},
 		{"failed producer", `{"name":"note.added","payload":{}}`, "7", false},
 	} {

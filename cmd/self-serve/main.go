@@ -1,5 +1,5 @@
 // self-serve — HTTP face of a self instance. GET / is brief, /view/… is
-// `self view`, /run/… is `self run`. PORT and SELF_BIN select the listen
+// `self view`, POST /run/… is `self run`. PORT and SELF_BIN select the listen
 // address and kernel.
 package main
 
@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -35,17 +36,13 @@ func main() {
 
 func handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", index)
-	mux.HandleFunc("/view/", view)
-	mux.HandleFunc("/run/", run)
+	mux.HandleFunc("GET /{$}", index)
+	mux.HandleFunc("GET /view/", view)
+	mux.HandleFunc("POST /run/", run)
 	return mux
 }
 
 func index(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
 	out, errOut, code, err := selfOutput("brief")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -219,14 +216,7 @@ func resolveName(segs, names []string) (name string, args []string) {
 		if len(nsegs) == 0 || len(nsegs) > len(segs) {
 			continue
 		}
-		ok := true
-		for i, s := range nsegs {
-			if segs[i] != s {
-				ok = false
-				break
-			}
-		}
-		if ok && len(nsegs) > bestN {
+		if len(nsegs) > bestN && slices.Equal(segs[:len(nsegs)], nsegs) {
 			bestN, best = len(nsegs), n
 		}
 	}
@@ -306,7 +296,7 @@ func pathEscapeName(name string) string {
 
 func selfOutput(argv ...string) (out []byte, errOut string, code int, err error) {
 	cmd := exec.Command(lookSelf(), argv...)
-	cmd.Env = selfEnv()
+	cmd.Env = append(os.Environ(), "SELF_CALLER=browser")
 	b, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -331,16 +321,6 @@ func lookSelf() string {
 		return p
 	}
 	return "self"
-}
-
-func selfEnv() []string {
-	env := []string{}
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "SELF_CALLER=") {
-			env = append(env, kv)
-		}
-	}
-	return append(env, "SELF_CALLER=browser")
 }
 
 func page(title, body string) string {

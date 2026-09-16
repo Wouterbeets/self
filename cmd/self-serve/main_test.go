@@ -155,7 +155,7 @@ func TestHTTPOverKernel(t *testing.T) {
 	})
 
 	t.Run("slash command is one name", func(t *testing.T) {
-		res := get(t, client, srv.URL+"/run/timer/set/bell/+30s")
+		res := post(t, client, srv.URL+"/run/timer/set/bell/+30s")
 		defer res.Body.Close()
 		body := read(t, res)
 		if res.StatusCode != 200 {
@@ -167,7 +167,7 @@ func TestHTTPOverKernel(t *testing.T) {
 	})
 
 	t.Run("ordinary command", func(t *testing.T) {
-		res := get(t, client, srv.URL+"/run/capture/hello")
+		res := post(t, client, srv.URL+"/run/capture/hello")
 		defer res.Body.Close()
 		body := read(t, res)
 		if strings.TrimSpace(body) != "run capture hello" {
@@ -177,7 +177,7 @@ func TestHTTPOverKernel(t *testing.T) {
 
 	t.Run("caller is the browser", func(t *testing.T) {
 		t.Setenv("SELF_CALLER", "someone-else")
-		res := get(t, client, srv.URL+"/run/capture/x")
+		res := post(t, client, srv.URL+"/run/capture/x")
 		res.Body.Close()
 		got, err := os.ReadFile(filepath.Join(filepath.Dir(stub), "caller"))
 		if err != nil {
@@ -273,6 +273,15 @@ esac
 	return path
 }
 
+func post(t *testing.T, c *http.Client, url string) *http.Response {
+	t.Helper()
+	res, err := c.Post(url, "application/octet-stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
 func get(t *testing.T, c *http.Client, url string) *http.Response {
 	t.Helper()
 	res, err := c.Get(url)
@@ -316,5 +325,20 @@ func TestHTTPWithRealKernel(t *testing.T) {
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.want) {
 			t.Errorf("%s: status %d, missing %q in %s", tc.path, response.Code, tc.want, response.Body.String())
 		}
+	}
+}
+
+func TestReadMethodsCannotRunCommands(t *testing.T) {
+	stub := writeStub(t)
+	t.Setenv("SELF_BIN", stub)
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut} {
+		response := httptest.NewRecorder()
+		handler().ServeHTTP(response, httptest.NewRequest(method, "/run/capture/hello", nil))
+		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "POST" {
+			t.Fatalf("%s: %d %v", method, response.Code, response.Header())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(stub), "argv")); !os.IsNotExist(err) {
+		t.Fatal("rejected method invoked the kernel")
 	}
 }

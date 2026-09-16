@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -22,17 +23,9 @@ type intentClosure struct {
 	Reason  string `json:"reason"`
 }
 
-func validIntentName(name string) bool {
-	if name == "" || len(name) > 200 {
-		return false
-	}
-	for _, c := range name {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._-/", c)) {
-			return false
-		}
-	}
-	return true
-}
+var intentName = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
+
+func validIntentName(name string) bool { return intentName.MatchString(name) }
 
 func (w *intentItem) declaration() decl {
 	return decl{Name: w.Name, Summary: w.Summary, Description: w.Description}
@@ -102,11 +95,7 @@ func intentBrief(st *state) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n## Open intents — %d declared outcomes\n\n", len(open))
 	b.WriteString("Intentions to consider within the current scope. Read details with `self brief intent/<name>`.\n\n")
-	shown := open
-	if len(shown) > limit {
-		shown = shown[:limit]
-	}
-	b.WriteString(intentIndex(shown))
+	b.WriteString(intentIndex(open[:min(len(open), limit)]))
 	if len(open) > limit {
 		fmt.Fprintf(&b, "\n%d more; `self brief intent/` lists all open intents.\n", len(open)-limit)
 	}
@@ -115,10 +104,11 @@ func intentBrief(st *state) string {
 
 func intentDetail(st *state, name string) (string, error) {
 	if name == "" {
-		if len(st.openIntents()) == 0 {
+		open := st.openIntents()
+		if len(open) == 0 {
 			return "No open intents.\n", nil
 		}
-		return intentIndex(st.openIntents()), nil
+		return intentIndex(open), nil
 	}
 	w := st.intent(name)
 	if w == nil {

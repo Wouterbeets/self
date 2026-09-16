@@ -196,22 +196,6 @@ func (st *state) pending() []*capability {
 
 func (st *state) capabilitiesReady() bool { return len(st.pending()) == 0 && len(st.Reject) == 0 }
 
-func (st *state) exemplar(skip map[string]bool) (string, string) {
-	var name, script string
-	best := 0
-	for _, c := range st.Caps {
-		if c.Receipt == nil || skip[c.key()] || c.RcptSeq < best {
-			continue
-		}
-		best, name, script = c.RcptSeq, c.key(), c.Receipt.Script
-	}
-	const cap = 4096
-	if len(script) > cap {
-		script = trunc(script, cap) + "\n… (truncated)"
-	}
-	return name, script
-}
-
 func validCapability(typ, name string) bool {
 	if typ != kindCommand && typ != kindView {
 		return false
@@ -249,10 +233,7 @@ func materialize(home string, st *state, typ, name string) (string, error) {
 	c := st.cap(typ, name)
 	switch {
 	case c == nil:
-		other := kindView
-		if typ == kindView {
-			other = kindCommand
-		}
+		other := otherKind(typ)
 		if st.cap(other, name) != nil {
 			return "", fmt.Errorf("no %s %q in this log — but there is a %s by that name: try `self %s %s`",
 				typ, name, other, map[string]string{kindCommand: "run", kindView: "view"}[other], name)
@@ -447,13 +428,9 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 		if line == "" {
 			continue
 		}
-		var p wireLine
-		if err := json.Unmarshal([]byte(line), &p); err != nil || p.Payload == nil {
+		p, ok := eventLine(line)
+		if !ok {
 			parseErr = fmt.Errorf("command %q printed a line that is not an event: %s", name, trunc(line, 120))
-			continue
-		}
-		if !validEventName(p.Name) {
-			parseErr = fmt.Errorf("command %q emitted the event name %q, which is not lowercase dotted", name, p.Name)
 			continue
 		}
 		e := newEvent(p.Name, p.Payload)

@@ -123,16 +123,8 @@ func stateRevision(st *state) string {
 
 func loopAsk(pass, maxPasses, quiet, settle int, timeout time.Duration, nudge string) string {
 	var b strings.Builder
-	remaining := maxPasses - pass
-	switch remaining {
-	case 0:
-		fmt.Fprintf(&b, "Pass %d of this self, and the last: only what you append remains.", pass)
-	case 1:
-		fmt.Fprintf(&b, "Pass %d of this self; at most one more before the loop stops.", pass)
-	default:
-		fmt.Fprintf(&b, "Pass %d of this self; at most %d more before the loop stops.", pass, remaining)
-	}
-	fmt.Fprintf(&b, "\nThis pass ends after %s. Only what is appended by then persists; leave enough evidence and unresolved work in the log for another mind to continue. External artifacts need durable references; only installed capability bytes can be rebuilt by self.", timeout)
+	fmt.Fprintf(&b, "Pass %d of this self; at most %d more (limit %d).", pass, maxPasses-pass, maxPasses)
+	fmt.Fprintf(&b, "\nThis pass ends after %s. Record results and artifact references before then.", timeout)
 	if nudge = strings.TrimSpace(nudge); nudge != "" {
 		fmt.Fprintf(&b, "\nThe ask: %s", nudge)
 		if pass == 1 {

@@ -50,6 +50,10 @@ func main() {
 }
 
 func dispatch(home, verb string, args []string, out io.Writer) error {
+	limits := map[string]int{"": 0, "hear": 0, "brief": 1, "rehydrate": 0, "help": 0, "-h": 0, "--help": 0}
+	if max, fixed := limits[verb]; fixed && len(args) > max {
+		return fmt.Errorf("self %s accepts at most %d argument(s); see self --help", verb, max)
+	}
 	switch verb {
 	case "":
 		return cmdOrient(home, out)
@@ -164,7 +168,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		// One bare unknown word is a mistyped verb, not an ask.
 		if len(args) == 0 && !strings.ContainsAny(verb, " \t\n") {
 			fmt.Fprintf(os.Stderr, "%s\n\n", cliUsage)
-			return fmt.Errorf("unknown verb %q — to ask a question instead, quote it: self %q", verb, verb)
+			return fmt.Errorf("unknown verb %q — to make an ask, use: self prompt %q", verb, verb)
 		}
 		return cmdSituate(home, strings.Join(append([]string{verb}, args...), " "), out)
 	}
@@ -268,10 +272,7 @@ func briefOne(st *state, selector string) (string, error) {
 		return intentDetail(st, name)
 	}
 	var found []*capability
-	if typ, name, qualified := strings.Cut(selector, "/"); qualified {
-		if typ != kindCommand && typ != kindView {
-			return "", fmt.Errorf("a capability selector is command/<name> or view/<name>")
-		}
+	if typ, name, qualified := strings.Cut(selector, "/"); qualified && (typ == kindCommand || typ == kindView) {
 		if c := st.cap(typ, name); c != nil {
 			found = append(found, c)
 		}
@@ -290,7 +291,7 @@ func briefOne(st *state, selector string) (string, error) {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "# %s\n\n%s\n", c.key(), oneLine(c.Decl.Description))
+		fmt.Fprintf(&b, "# %s\n\n%s\n", c.key(), strings.TrimSpace(c.Decl.Description))
 		if c.Type == kindView {
 			consumes := strings.Join(c.Decl.Consumes, ", ")
 			if consumes == "" {

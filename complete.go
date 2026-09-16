@@ -42,12 +42,18 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 		return nil
 	}
 
+	var st *state
 	switch prev[0] {
-	case "view", "run":
-		st, err := loadState(home)
+	case "view", "run", "brief", "give":
+		var err error
+		st, err = loadState(home)
 		if err != nil {
 			return nil
 		}
+	}
+
+	switch prev[0] {
+	case "view", "run":
 		typ := kindView
 		if prev[0] == "run" {
 			typ = kindCommand
@@ -62,10 +68,6 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 		if len(prev) != 1 {
 			return nil
 		}
-		st, err := loadState(home)
-		if err != nil {
-			return nil
-		}
 		completeDeclNames(st, cur, out)
 		for _, w := range st.openIntents() {
 			if name := "intent/" + w.Name; strings.HasPrefix(name, cur) {
@@ -75,10 +77,6 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 
 	case "give":
 		if len(prev) != 1 {
-			return nil
-		}
-		st, err := loadState(home)
-		if err != nil {
 			return nil
 		}
 		for _, typ := range []string{kindCommand, kindView} {
@@ -173,10 +171,7 @@ func runCompleter(home string, st *state, name string, args []string) []string {
 		return nil
 	}
 	lines := strings.Split(strings.ReplaceAll(string(out), "\r", ""), "\n")
-	if len(lines) > completerMaxLines {
-		lines = lines[:completerMaxLines]
-	}
-	return lines
+	return lines[:min(len(lines), completerMaxLines)]
 }
 
 func emitLines(out io.Writer, lines []string) {

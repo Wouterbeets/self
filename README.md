@@ -98,6 +98,12 @@ remain domain records; no shopping-list or goal schema is built into the kernel.
 what it becomes through `self learn account/`. Learning itself leaves a named
 intent, so another mind can finish interpreting the account later.
 
+## Browser adapter
+
+Optional `self-serve` exposes read-only GET `/` and `/view/<name>`, and POST
+`/run/<command>`. `self-browse [view]` opens the local adapter. Commands require
+POST; simply following a link cannot run one.
+
 ## Limits
 
 There is no human review step between authoring and signing: piping a mind's

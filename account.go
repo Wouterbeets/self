@@ -114,18 +114,15 @@ func cmdLearn(home, ref string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if _, err := ensureSecret(home); err != nil {
-		return err
-	}
-
 	batch := make([]Event, 0, len(a.Deposit)+2)
 
 	ie := newEvent("intent.declared", nil)
 	a.IntentName = "learn/" + ie.ID
+	description := learnAsk(ref, a)
 	ie.Payload, _ = json.Marshal(map[string]any{
 		"name":        a.IntentName,
 		"summary":     "Learn account " + a.Name,
-		"description": learnAsk(ref, a),
+		"description": description,
 		"account":     a.Name,
 		"intent":      a.Intent,
 	})
@@ -162,7 +159,7 @@ func cmdLearn(home, ref string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(out, situate(home, st, learnAsk(ref, a)))
+	_, err = io.WriteString(out, situate(home, st, description))
 	return err
 }
 

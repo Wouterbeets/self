@@ -139,20 +139,13 @@ Rationale in the summary costs every pass for the benefit of one. A declaration
 without `summary` shows the opening sentence of its `description`, clipped: a
 fallback, not the contract.
 
-A declaration is **pending** until a script arrives:
-
-```json
-{"name":"script.authored","payload":{"type":"command","name":"entry","script":"#!/bin/sh\n…"}}
-```
-
-`script.authored` is a wire message, never an event. The kernel installs the
-bytes and records a signed `script.installed`, or refuses with
-`script.rejected` and the reason, which stays in the brief and rides the next
-prompt until superseded.
+A declaration stays pending until a script is installed. A refused attempt
+records `script.rejected`; its reason remains in the brief until superseded.
 
 <!-- prompt:growth:begin -->
 A pending capability awaits a script. Inspect what exists, then author and test
-what you can verify now. Leave the rest declared for a later pass.
+what you can verify now. Leave the rest declared for a later pass. Installed
+source stays in `cap/` for selective inspection; prompts carry declarations.
 
 ```json
 {"name":"script.authored","payload":{"type":"command|view","name":"<declared name>","script":"<shebang and bytes>"}}
@@ -176,30 +169,16 @@ with evidence, and automate when repeated use warrants it. Full design guidance:
 
 ### Capability design
 
-For a parameterized view, make the zero-argument form its discoverable index:
-usage plus the valid keys or actionable items. Valid arguments render detail.
-Fail only on malformed or excess arguments, never because the reader omitted a
-key they could not yet know.
+A view without arguments should list its valid keys or actionable items.
+Reserve failure for malformed arguments. Named records need create, revise,
+and retire events under a stable key; retirement hides the live record without
+erasing history. Streams such as journals retain their history directly.
 
-When a capability manages stable named records rather than a stream, give later
-passes the complete append-only lifecycle: create, revise, and retire via a
-tombstone event, one stable key across them, reads via views. A tombstone never
-erases history; it makes the record non-live until a later create or restore.
-Without revision and tombstone paths,
-stale records remain permanently actionable and later passes cannot tell
-current state from history. Do not invent CRUD for journals or other streams
-whose history is the domain.
-
-If this domain repeatedly produces locally verified methods, give them a
-domain-named append-only lifecycle and selective views. Retain the final
-sanitized method, trigger, constraints, verification evidence, and source
-references — not the raw session, failed attempts, secrets, or tool transcript.
-Lead views with methods relevant to active work, recently reused, or failing
-verification; keep the archive off the default view. A method that
-reads live external state is a command that appends an observation; a view
-only replays what was witnessed. Repeated reuse may justify automation as a
-command; one successful use does not.
-
+Retain reusable methods with their trigger, constraints, verification, and
+source references. Keep raw sessions, failed attempts, and secrets out of those
+records. Lead selective views with relevant or failing methods; leave archives
+off the default read. Observing live state is a command that records evidence;
+a view only replays it. Automate a method when repeated use warrants it.
 
 Escaping a script into JSON by hand is error-prone. Use `jq`:
 
@@ -234,20 +213,6 @@ caller's `SELF_*` variables, which is how you hand a capability configuration.
   the reader, never the log. Same events in, same bytes out: no clock, no
   network. Never materialized; replayed on demand. Not a sandbox — the kernel
   simply hands a view no path.
-
-## Answering
-
-The execution prompt is a pointer, not a context dump. Read `events.jsonl`, `cap/`,
-`self brief`, `self view <name>`, `self help` before answering.
-
-- Durable work: `self run <command> …`, or print events.
-- New capability: print a declaration and, when you can verify the script now,
-  its `script.authored` in the same input. Run the script before printing it.
-  A declaration left without a script is pending work, not a mistake.
-- A pending declaration listing a rejection: do not repeat it.
-- Nothing worth doing: print nothing.
-- Never edit `events.jsonl`; never write into `cap/`. Only a kernel-signed
-  receipt installs, and only for a capability this log declared.
 
 ## Events
 
@@ -289,6 +254,7 @@ over those fields, domain-separated and length-prefixed, under
 local key installs, and only for a capability this log declared and has not
 retired. Anything else in the log is inert.
 
+Never edit `events.jsonl` or author files directly into `cap/`; use the wire.
 Bytes live at `cap/blob/<sha256>`; `cap/<type>/<name>/run` symlinks to the blob.
 Execution resolves the latest live verified receipt, checks the blob's hash,
 rewrites it if it differs, runs it. Hand-edits under `cap/` are overwritten by
@@ -363,7 +329,8 @@ Giving shares evidence and intent; learning decides what they become here.
 ## The CLI
 
 No `ask`, `reply`, `author`, or `retire` verbs — declarations and authoring
-travel on the wire. An unrecognized ask remains shorthand for `self prompt`.
+travel on the wire. An unrecognized multi-word ask is shorthand for
+`self prompt`. Use `self prompt <word>` for a single-word ask.
 
 ```
 self                        session guidance + capability index (READ)
@@ -382,12 +349,17 @@ self completion <shell>     completion shim (zsh|bash|fish)
 self help                   this file
 ```
 
-A wrong invocation answers one level down: a verb with no argument prints its
-index; an unknown name prints the index; a name of the other kind redirects; a
-capability that refused its arguments prints its declaration, or only the
-pointer to `self brief <name>` if the script already said something; an unknown
-verb prints the verb list. All on **stderr**, exit code failing. Stdout is the
-wire; diagnostics never touch it.
+`self run` and `self view` without a name print their index and succeed.
+Unknown names, wrong kinds, malformed arguments, and command failures report
+on stderr and fail. Fixed-form verbs reject extra arguments before acting.
+`self brief <name>` preserves the full description, including line breaks;
+`command/<name>` and `view/<name>` disambiguate names shared by both kinds.
+
+Stdout carries the verb's result: prompts, views, and indices are text; `run`
+prints committed-event summaries; `hear` prints ingestion receipts. When no
+wire events are present, `hear` passes its input through unchanged and explains
+nonempty input on stderr. Only a mind or capability's event-producing stdout
+is the event wire; CLI reports are not replayable events.
 
 ### Completion
 
@@ -493,9 +465,9 @@ kernel, `self learn` under this one: the protocol is its own migration path.
   run as you.
 - **The log is unbounded.** No compaction in the kernel; a snapshot is a
   capability someone can declare.
-- **Appends are locked; operations are not transactions.** One `hear` input is
-  one critical section; a multi-event command and a concurrent operation can
-  interleave.
+- **Batches are locked; execution is not a transaction.** One ingestion is one
+  critical section. Concurrent commands may read the same earlier state; their
+  committed batches cannot interleave. External effects are not rolled back.
 - **Capability scripts are not timed out.** Only the loop's mind process is.
 - **The last log line is judged by whether it is a whole event.** Terminated: a
   record. Unterminated but parsing: a record, given its newline by the next

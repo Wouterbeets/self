@@ -1353,19 +1353,20 @@ func TestRefusalReasonRidesTheNextPrompt(t *testing.T) {
 	}
 }
 
-// A cold mind should not spend its first minutes rediscovering this instance's
-// idiom, so one installed script rides along — and never the broken one it is
-// being asked to replace.
-func TestPromptCarriesAnExemplarButNotTheBrokenOne(t *testing.T) {
+// Pending descriptions are sufficient orientation; installed script bytes stay
+// on disk until the mind chooses to inspect a relevant capability.
+func TestPendingPromptDoesNotInjectInstalledScripts(t *testing.T) {
 	h := home(t)
 	growJournal(t, h)
 	heard(t, h, line(t, "view.declared", decl{Name: "second", Description: "x", Consumes: []string{"*"}}))
 	p := situated(t, h, "")
-	if !strings.Contains(p, "as idiom") {
-		t.Fatal("no exemplar in the prompt")
+	if !strings.Contains(p, `view "second" declared`) {
+		t.Fatal("missing pending declaration")
 	}
-	if strings.Contains(p, "--- view/second ---") {
-		t.Fatal("the exemplar is the capability being asked about")
+	for _, c := range replayed(t, h).Caps {
+		if c.Receipt != nil && strings.Contains(p, c.Receipt.Script) {
+			t.Fatal("installed source leaked into prompt")
+		}
 	}
 }
 
@@ -1645,7 +1646,7 @@ func TestLoopNudgeStandsOnEveryPass(t *testing.T) {
 	if strings.Contains(passes[1], "about to stop") || !strings.Contains(passes[2], "about to stop") {
 		t.Fatalf("the closing question is asked on the wrong pass:\n--2--\n%s\n--3--\n%s", passes[1], passes[2])
 	}
-	if !strings.Contains(passes[0], "at most 3 more") || !strings.Contains(passes[2], "at most one more") {
+	if !strings.Contains(passes[0], "at most 3 more") || !strings.Contains(passes[2], "at most 1 more") {
 		t.Fatal("the remaining budget is not counted down")
 	}
 	if !strings.Contains(passes[0], "This pass ends after 5s") {
@@ -1791,8 +1792,11 @@ func TestCapabilityDiscovery(t *testing.T) {
 
 func TestUnknownVerbIsNotSilentlyAnAsk(t *testing.T) {
 	h := home(t)
-	if err := dispatch(h, "brif", nil, &bytes.Buffer{}); err == nil {
-		t.Fatal("a mistyped verb was answered as a question")
+	if err := dispatch(h, "brif", nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `self prompt "brif"`) {
+		t.Fatalf("a mistyped verb needs a working recovery command: %v", err)
+	}
+	if err := dispatch(h, "prompt", []string{"brif"}, &bytes.Buffer{}); err != nil {
+		t.Fatal("the recommended single-word ask failed:", err)
 	}
 	var out bytes.Buffer
 	if err := dispatch(h, "what", []string{"is", "going", "on"}, &out); err != nil {
@@ -2130,5 +2134,37 @@ func TestUnfoldingStaysOffTheWire(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("unfolding wrote to the wire: %q", out.String())
+	}
+}
+
+func TestFixedCLIArgumentsRejectExtrasBeforeActing(t *testing.T) {
+	h := home(t)
+	for _, tc := range []struct {
+		verb string
+		args []string
+	}{
+		{"", []string{"extra"}}, {"hear", []string{"extra"}}, {"rehydrate", []string{"extra"}},
+		{"help", []string{"extra"}}, {"--help", []string{"extra"}}, {"-h", []string{"extra"}},
+		{"brief", []string{"entry", "extra"}},
+	} {
+		var out bytes.Buffer
+		if err := dispatch(h, tc.verb, tc.args, &out); err == nil || out.Len() != 0 {
+			t.Fatalf("%s accepted extra args or polluted stdout", tc.verb)
+		}
+	}
+	if files, _ := os.ReadDir(h); len(files) != 0 {
+		t.Fatal("bad invocation created state")
+	}
+}
+
+func TestBriefPreservesNestedNamesAndDescriptionLayout(t *testing.T) {
+	h := home(t)
+	description := "usage: spool/check <id>\n\nCompare remaining filament:\n- read the weight\n- allow a margin"
+	heard(t, h, line(t, "command.declared", decl{Name: "spool/check", Description: description}))
+	for _, selector := range []string{"spool/check", "command/spool/check"} {
+		text, err := briefOne(replayed(t, h), selector)
+		if err != nil || !strings.Contains(text, description) {
+			t.Fatalf("%s lost description: %q %v", selector, text, err)
+		}
 	}
 }
