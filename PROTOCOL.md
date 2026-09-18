@@ -107,8 +107,9 @@ it when no longer relevant. Closing that contribution need not close the larger
 domain record. Avoid mirroring whole backlogs into the brief.
 
 The brief shows at most twelve open summaries; full descriptions are read on
-demand. Closed intents stay addressable by name. No owners, priorities, due dates,
-leases, or domain schemas are prescribed by the kernel. Shopping items, spool
+demand. Closed intents stay addressable by name. Generic intents prescribe no
+owners, priorities, due dates, or domain schemas; guarded loop leases are a
+separate opt-in execution protocol. Shopping items, spool
 measurements, calendar entries, and goal hierarchies remain domain records.
 External artifacts need durable references; they are not rebuilt by `rehydrate`.
 
@@ -342,6 +343,8 @@ self run <cmd> [args…]      execute a command
 self view <name> [args…]    replay a view ("log" is built in, shadowable)
 self view log [--all]       last 10 events, or every one
 self loop [opts] -- <mind>  run a mind until the log stops changing
+self lease <operation> ...  atomically manage an expiring goal writer lease
+self checkpoint <op> ...    request, approve, or reject one-shot action approval
 self learn <dir>            deposit an account, print its learning prompt
 self give <sel> <dir>       write an account from the log
 self rehydrate              make cap/ match the log
@@ -419,6 +422,67 @@ Exit non-zero: pass cap hit while the last pass still changed state, a mind
 failure, a timeout, or a hear failure other than a refused script. Exit zero: a
 fixed point, including a pass cap reached on a quiet pass.
 
+### Guarded repository passes
+
+`self loop --guarded --goal ID --repo PATH --branch NAME -- <planner>` is an
+opt-in Linux controller for repository-writing work. It preserves the legacy
+loop unchanged unless selected explicitly. The guarded planner emits exactly one
+JSON object:
+
+```json
+{"goal":"issue-123","project":"/repo","summary":"implement it","commit_message":"implement issue 123","actions":[{"kind":"worker","goal":"issue-123","project":"/repo","command":["sh","-c","edit-command"],"files":["file.go"]},{"kind":"push","goal":"issue-123","project":"/repo"}],"checks":[{"command":["go","test","./..."],"heavy":true}]}
+```
+
+The controller requires `bwrap`, `prlimit`, and Git. It rejects a `SELF_HOME` or
+worktree root inside the invocation checkout. The planner sees `/` and the
+repository read-only, no shared network namespace, a private PID namespace, and
+private `/tmp`, `/run`, and `HOME`. The worker gets the same boundary with only
+its newly-created goal worktree bind-mounted writable. It cannot update shared
+Git metadata; the trusted controller stages only declared files, commits, and
+may perform one additive (never forced) push to the exact leased branch.
+
+Guarded limits default to one dispatch, one repository, twenty changed files,
+one push, one PR mutation, two decomposed goals, and one heavyweight check.
+Adjacent and scope-expanding actions, PR opening, and infrastructure changes
+produce a durable checkpoint. An approval is matched to the exact canonical
+action set, consumed atomically once, and does not add an executor the
+controller lacks. Force-push, merge, production writes, rollout, comments, and
+external messages are forbidden. A heavyweight check holds one per-instance
+advisory lock. `--memory-mb`, `--cpu-seconds`, `--timeout`, and
+`--min-free-mb` enforce process and temporary-space limits; enclosing systemd
+unit limits remain inherited as a second ceiling.
+
+Every pass records start, plan, check, push, checkpoint, budget, failure or
+completion events. Completion is recorded only after the commit is the expected
+remote branch head, the worktree is clean, changed files are declared, checks
+passed, the invocation checkout status is byte-identical, and the fixed push
+path proves no force flag was used. `self view loop [pass-id]` replays summaries,
+consumed and remaining budgets, leases, failures, and human decisions.
+
+Atomic leases use `self lease acquire|renew|release|steal`. Acquisition,
+renewal, release, and explicit stealing after expiry replay and compare under
+the event-log lock, so concurrent acquisition has one winner. Failed and timed
+out workers are killed as process groups and leave a `loop.pass.resumable`
+event plus an expiring lease. The dirty worktree is deliberately preserved for
+inspection; recovery must explicitly steal the expired lease and reconcile or
+remove that worktree. There is never a direct-edit fallback.
+
+This is a strong, narrow contract, not security theater. Bubblewrap mechanically
+denies ordinary filesystem writes outside mounted writable paths and removes the
+network namespace, but it is not a VM, separate user account, seccomp policy, or
+proof against kernel exploits and every local IPC side channel. The controller
+itself is trusted for Git and log writes. Legacy loop minds and command
+capabilities retain ambient user authority.
+
+Kernel-acted guarded events are `loop.lease.acquired`, `loop.lease.renewed`,
+`loop.lease.released`, `loop.lease.stolen`, `loop.lease.refused`,
+`loop.checkpoint.requested`, `loop.checkpoint.approved`,
+`loop.checkpoint.rejected`, `loop.checkpoint.consumed`, `loop.pass.started`,
+`loop.pass.planned`, `loop.pass.check.passed`, `loop.pass.push.completed`,
+`loop.pass.checkpoint.consumed`, `loop.pass.completed`, `loop.pass.failed`,
+`loop.pass.resumable`, and `loop.budget.exhausted`. Foreign accounts cannot
+inject them as live local policy; they must travel under `lineage.`.
+
 ## Exit codes
 
 `0` did the thing, `1` did not. Unknown or unrunnable capability: stderr
@@ -461,8 +525,10 @@ kernel, `self learn` under this one: the protocol is its own migration path.
 - **The write side trusts its caller.** Anyone who can run `self` against your
   `SELF_HOME` can install. The receipt gate is about reconstruction and foreign
   accounts, not local privilege.
-- **Nothing is sandboxed.** Scrubbed for determinism, not containment. Scripts
-  run as you.
+- **Legacy minds and capability scripts are not sandboxed.** Scrubbed capability
+  environments provide determinism, not containment. Only the explicitly
+  selected guarded planner/worker path has the narrower Bubblewrap boundary
+  described above.
 - **The log is unbounded.** No compaction in the kernel; a snapshot is a
   capability someone can declare.
 - **Batches are locked; execution is not a transaction.** One ingestion is one

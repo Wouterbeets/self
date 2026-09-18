@@ -68,12 +68,16 @@ type rejection struct {
 const excerptCap = 1024
 
 type state struct {
-	Events  []Event
-	Key     []byte
-	Caps    []*capability
-	byKey   map[string]*capability
-	Reject  []*rejection
-	Intents []*intentItem
+	Events      []Event
+	Key         []byte
+	Caps        []*capability
+	byKey       map[string]*capability
+	Reject      []*rejection
+	Intents     []*intentItem
+	Leases      map[string]*goalLease
+	Checkpoints map[string]*checkpoint
+	Passes      map[string]*passAudit
+	PassOrder   []string
 }
 
 func loadState(home string) (*state, error) {
@@ -85,7 +89,10 @@ func loadState(home string) (*state, error) {
 }
 
 func replay(events []Event, key []byte) *state {
-	st := &state{Events: events[:0], Key: key, byKey: map[string]*capability{}}
+	st := &state{
+		Events: events[:0], Key: key, byKey: map[string]*capability{},
+		Leases: map[string]*goalLease{}, Checkpoints: map[string]*checkpoint{}, Passes: map[string]*passAudit{},
+	}
 	st.apply(events)
 	return st
 }
@@ -115,6 +122,7 @@ func (st *state) apply(events []Event) {
 
 	for _, e := range events {
 		st.applyIntent(e)
+		st.applyRails(e)
 		switch e.Name {
 		case "command.declared", "view.declared":
 			typ := strings.TrimSuffix(e.Name, ".declared")
@@ -461,6 +469,9 @@ func runView(home string, st *state, name string, args ...string) ([]byte, error
 }
 
 func runViewDiag(home string, st *state, name string, diag io.Writer, args ...string) ([]byte, error) {
+	if name == "loop" && st.cap(kindView, name) == nil {
+		return builtinLoopView(st, args)
+	}
 	if name == "log" && st.cap(kindView, "log") == nil {
 		all := false
 		for _, a := range args {

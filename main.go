@@ -21,6 +21,8 @@ Usage:
   self run <command> [args...]  execute a command capability and append its events
   self view <name> [args...]    replay a pure view; built-in log is always available
   self loop [opts] [-- mind...] run a mind until the log stops changing (quiet passes in a row)
+  self lease <operation> ...     atomically manage an expiring goal writer lease
+  self checkpoint <operation>... manage durable one-shot action approval
   self learn <account-dir>      deposit an account and print its learning prompt
   self give <selector> <dir>    write an event or capability account
   self rehydrate                rebuild derived capability files from the log
@@ -126,6 +128,12 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 
 	case "loop":
 		return cmdLoop(home, args, out, os.Stderr)
+
+	case "lease":
+		return cmdLease(home, args, out)
+
+	case "checkpoint":
+		return cmdCheckpoint(home, args, out)
 
 	case "learn":
 		if len(args) != 1 {
@@ -322,6 +330,9 @@ func capabilityList(st *state, typ string) string {
 	}
 	if typ == kindView && st.cap(kindView, "log") == nil {
 		fmt.Fprintf(&b, "- log — the last %d events; `--all` for every one (built in, shadowable)\n", builtinLogTail)
+	}
+	if typ == kindView && st.cap(kindView, "loop") == nil {
+		b.WriteString("- loop — guarded pass plans, actions, budgets, leases, checkpoints, and failures (built in, shadowable)\n")
 	}
 	if len(caps) == 0 {
 		if b.Len() > 0 {
