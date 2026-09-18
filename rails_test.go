@@ -104,6 +104,32 @@ func TestLeaseRejectsConflictingBranchAcrossGoals(t *testing.T) {
 	}
 }
 
+func TestLeaseBranchConflictsAreRepositoryScoped(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	for _, lease := range []goalLease{
+		{Goal: "one", Owner: "a", Invocation: "i1", Repository: "/repo/one", Branch: "goal/shared", Worktree: "/wt/shared"},
+		{Goal: "two", Owner: "b", Invocation: "i2", Repository: "/repo/two", Branch: "goal/shared", Worktree: "/wt/two"},
+	} {
+		if _, err := leaseChange(home, "acquire", lease, time.Minute, now); err != nil {
+			t.Fatalf("cross-repository lease conflict: %v", err)
+		}
+	}
+}
+
+func TestLeaseWorktreeConflictIsGlobal(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	first := goalLease{Goal: "one", Owner: "a", Invocation: "i1", Repository: "/repo/one", Branch: "one", Worktree: "/wt/shared"}
+	second := goalLease{Goal: "two", Owner: "b", Invocation: "i2", Repository: "/repo/two", Branch: "two", Worktree: "/wt/shared"}
+	if _, err := leaseChange(home, "acquire", first, time.Minute, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := leaseChange(home, "acquire", second, time.Minute, now); err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("shared worktree error=%v", err)
+	}
+}
+
 func TestForgedRailEventsAreInert(t *testing.T) {
 	payload, _ := json.Marshal(goalLease{Goal: "g", Owner: "attacker", Invocation: "fake", ExpiresAt: time.Now().Add(time.Hour)})
 	forged := newEvent(leaseAcquired, payload)

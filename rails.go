@@ -205,6 +205,17 @@ func withRailLock(home string, fn func(*state) ([]Event, error)) ([]Event, error
 }
 
 func leaseChange(home, op string, lease goalLease, ttl time.Duration, now time.Time) ([]Event, error) {
+	if op == "acquire" || op == "steal" {
+		var err error
+		lease.Repository, err = canonicalPath(lease.Repository)
+		if err != nil {
+			return nil, fmt.Errorf("canonical repository: %w", err)
+		}
+		lease.Worktree, err = canonicalPath(lease.Worktree)
+		if err != nil {
+			return nil, fmt.Errorf("canonical worktree: %w", err)
+		}
+	}
 	return withRailLock(home, func(st *state) ([]Event, error) {
 		current := st.Leases[lease.Goal]
 		refuse := func(reason string) ([]Event, error) {
@@ -217,7 +228,7 @@ func leaseChange(home, op string, lease goalLease, ttl time.Duration, now time.T
 				if goal == lease.Goal || !other.active(now) {
 					continue
 				}
-				if lease.Branch == other.Branch || lease.Worktree == other.Worktree {
+				if (lease.Repository == other.Repository && lease.Branch == other.Branch) || lease.Worktree == other.Worktree {
 					return refuse(fmt.Sprintf("conflicts with goal %q owned by %q until %s", goal, other.Owner, other.ExpiresAt.Format(time.RFC3339)))
 				}
 			}
@@ -253,7 +264,7 @@ func leaseChange(home, op string, lease goalLease, ttl time.Duration, now time.T
 				return refuse(fmt.Sprintf("owned by %q until %s", current.Owner, current.ExpiresAt.Format(time.RFC3339)))
 			}
 			for goal, other := range st.Leases {
-				if goal != lease.Goal && other.active(now) && (lease.Branch == other.Branch || lease.Worktree == other.Worktree) {
+				if goal != lease.Goal && other.active(now) && ((lease.Repository == other.Repository && lease.Branch == other.Branch) || lease.Worktree == other.Worktree) {
 					return refuse(fmt.Sprintf("conflicts with goal %q owned by %q until %s", goal, other.Owner, other.ExpiresAt.Format(time.RFC3339)))
 				}
 			}

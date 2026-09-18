@@ -3,13 +3,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"debug/elf"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -108,6 +114,28 @@ func TestSandboxProtectsLinkedWorktreeGitPointer(t *testing.T) {
 	}
 }
 
+func TestSandboxSupportsRepositoriesUnderTmp(t *testing.T) {
+	requireSandbox(t)
+	root, err := os.MkdirTemp("/tmp", "self-guarded-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	repo := filepath.Join(root, "repo")
+	if err := os.Mkdir(repo, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "readable"), []byte("yes"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSandbox(context.Background(), "", repo, []string{"test", "-f", "readable"}, nil, io.Discard, io.Discard, 512, 30); err != nil {
+		t.Fatalf("read-only /tmp repository unavailable: %v", err)
+	}
+	if err := runSandbox(context.Background(), repo, repo, []string{"sh", "-c", "printf yes > writable"}, nil, io.Discard, io.Discard, 512, 30); err != nil {
+		t.Fatalf("writable /tmp worktree unavailable: %v", err)
+	}
+}
+
 func TestGuardedLoopCompletesInIsolatedWorktreeAndVerifiesRemote(t *testing.T) {
 	requireSandbox(t)
 	repo, remote := testRepository(t)
@@ -169,7 +197,8 @@ func shellQuote(s string) string {
 func TestGuardedDispatchFailureIsDurableAndNeverFallsBack(t *testing.T) {
 	requireSandbox(t)
 	repo, _ := testRepository(t)
-	testGit(t, repo, "branch", "goal/existing")
+	external := filepath.Join(t.TempDir(), "external")
+	testGit(t, repo, "worktree", "add", "-b", "goal/existing", external, "HEAD")
 	home := t.TempDir()
 	before := testGit(t, repo, "status", "--porcelain=v1", "--untracked-files=all")
 	plan := guardedPlan{
@@ -179,7 +208,7 @@ func TestGuardedDispatchFailureIsDurableAndNeverFallsBack(t *testing.T) {
 	}
 	raw, _ := json.Marshal(plan)
 	err := cmdGuardedLoop(home, []string{"--guarded", "--goal", "g", "--repo", repo, "--branch", "goal/existing", "--worktree-root", filepath.Join(t.TempDir(), "worktrees"), "--min-free-mb=1", "--", "sh", "-c", "printf '%s' " + shellQuote(string(raw))}, io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "no direct-edit fallback") {
+	if err == nil || !strings.Contains(err.Error(), "registered worktree") {
 		t.Fatalf("error=%v", err)
 	}
 	if after := testGit(t, repo, "status", "--porcelain=v1", "--untracked-files=all"); after != before {
@@ -190,9 +219,277 @@ func TestGuardedDispatchFailureIsDurableAndNeverFallsBack(t *testing.T) {
 		t.Fatalf("passes=%d", len(st.Passes))
 	}
 	for _, pass := range st.Passes {
-		if pass.Status != "failed" || !strings.Contains(strings.Join(pass.Failures, " "), "after one retry") {
+		if pass.Status != "failed" || !strings.Contains(strings.Join(pass.Failures, " "), "registered worktree") {
 			t.Fatalf("pass=%+v", pass)
 		}
+	}
+}
+
+func guardedArgs(repo, worktrees, goal, branch string, plan guardedPlan) []string {
+	raw, _ := json.Marshal(plan)
+	return []string{"--guarded", "--goal", goal, "--repo", repo, "--branch", branch, "--worktree-root", worktrees, "--min-free-mb=1", "--timeout=2s", "--", "sh", "-c", "printf '%s' " + shellQuote(string(raw))}
+}
+
+func TestChecksCannotMutateWorkerOutput(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	plan := guardedPlan{
+		Goal: "g", Project: repo, CommitMessage: "must not commit",
+		Actions: []plannedAction{{Kind: "worker", Goal: "g", Project: repo, Command: []string{"sh", "-c", "printf worker > result.txt"}, Files: []string{"result.txt"}}, {Kind: "push", Goal: "g", Project: repo}},
+		Checks:  []plannedCheck{{Command: []string{"sh", "-c", "printf adversary > result.txt"}}},
+	}
+	home := t.TempDir()
+	err := cmdGuardedLoop(home, guardedArgs(repo, filepath.Join(t.TempDir(), "worktrees"), "g", "goal/check-ro", plan), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "check 1 failed") {
+		t.Fatalf("mutating check error=%v", err)
+	}
+	if out := testGit(t, repo, "ls-remote", "origin", "refs/heads/goal/check-ro"); out != "" {
+		t.Fatalf("mutating check produced remote branch: %s", out)
+	}
+}
+
+func TestCheckMutationDetectorRejectsAnyStatusChange(t *testing.T) {
+	if err := checkDidNotMutate(" M declared\n", " M declared\n?? surprise\n", 3); err == nil || !strings.Contains(err.Error(), "check 3 mutated") {
+		t.Fatalf("detector error=%v", err)
+	}
+}
+
+func TestRepeatedPassesAttachBranchAndCleanWorktrees(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	home, root := t.TempDir(), filepath.Join(t.TempDir(), "worktrees")
+	run := func(file string) {
+		plan := guardedPlan{
+			Goal: "g", Project: repo, CommitMessage: "add " + file,
+			Actions: []plannedAction{{Kind: "worker", Goal: "g", Project: repo, Command: []string{"sh", "-c", "printf pass > " + file}, Files: []string{file}}, {Kind: "push", Goal: "g", Project: repo}},
+			Checks:  []plannedCheck{{Command: []string{"test", "-f", file}}},
+		}
+		if err := cmdGuardedLoop(home, guardedArgs(repo, root, "g", "goal/repeated", plan), io.Discard, io.Discard); err != nil {
+			t.Fatalf("pass for %s: %v", file, err)
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("successful worktree leaked: entries=%v err=%v", entries, err)
+		}
+	}
+	run("one.txt")
+	first := strings.Fields(testGit(t, repo, "ls-remote", "origin", "refs/heads/goal/repeated"))[0]
+	run("two.txt")
+	second := strings.Fields(testGit(t, repo, "ls-remote", "origin", "refs/heads/goal/repeated"))[0]
+	if first == second {
+		t.Fatal("second pass did not advance remote branch")
+	}
+	if parent := testGit(t, repo, "rev-parse", second+"^"); parent != first {
+		t.Fatalf("second pass is not additive: parent=%s first=%s", parent, first)
+	}
+}
+
+func TestCreateGoalWorktreeAttachesRemoteOnlyBranch(t *testing.T) {
+	repo, _ := testRepository(t)
+	head := testGit(t, repo, "rev-parse", "HEAD")
+	testGit(t, repo, "push", "origin", "HEAD:refs/heads/goal/remote-only")
+	testGit(t, repo, "update-ref", "-d", "refs/remotes/origin/goal/remote-only")
+	if cmd := exec.Command("git", "-C", repo, "show-ref", "--verify", "refs/remotes/origin/goal/remote-only"); cmd.Run() == nil {
+		t.Fatal("test setup unexpectedly has a remote-tracking ref")
+	}
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	if err := createGoalWorktree(repo, worktree, "goal/remote-only"); err != nil {
+		t.Fatal(err)
+	}
+	if branch := testGit(t, worktree, "branch", "--show-current"); branch != "goal/remote-only" {
+		t.Fatalf("branch=%q", branch)
+	}
+	if got := testGit(t, worktree, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("HEAD=%s, want remote %s", got, head)
+	}
+}
+
+func TestCreateGoalWorktreeRejectsDeletedRemoteWithStaleTrackingRef(t *testing.T) {
+	repo, remote := testRepository(t)
+	testGit(t, repo, "push", "origin", "HEAD:refs/heads/goal/deleted")
+	if _, err := repoOutput(repo, "show-ref", "--verify", "refs/remotes/origin/goal/deleted"); err != nil {
+		t.Fatal("test setup has no tracking ref")
+	}
+	testGit(t, remote, "update-ref", "-d", "refs/heads/goal/deleted")
+	err := createGoalWorktree(repo, filepath.Join(t.TempDir(), "worktree"), "goal/deleted")
+	if err == nil || !strings.Contains(err.Error(), "stale tracking ref") {
+		t.Fatalf("stale tracking error=%v", err)
+	}
+}
+
+func TestApprovedCheckpointSurvivesPreDispatchConflict(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	home, root := t.TempDir(), filepath.Join(t.TempDir(), "worktrees")
+	plan := guardedPlan{
+		Goal: "g", Project: repo, CommitMessage: "approved",
+		Actions: []plannedAction{{Kind: "worker", Goal: "adjacent", Project: repo, Command: []string{"sh", "-c", "printf x > x"}, Files: []string{"x"}}, {Kind: "push", Goal: "g", Project: repo}},
+		Checks:  []plannedCheck{{Command: []string{"test", "-f", "x"}}},
+	}
+	args := guardedArgs(repo, root, "g", "goal/approval-conflict", plan)
+	if err := cmdGuardedLoop(home, args, io.Discard, io.Discard); err == nil {
+		t.Fatal("checkpoint was not requested")
+	}
+	st, _ := loadState(home)
+	var id string
+	for candidate := range st.Checkpoints {
+		id = candidate
+	}
+	if _, err := checkpointChange(home, "approve", "", id, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "external")
+	testGit(t, repo, "worktree", "add", "-b", "goal/approval-conflict", external, "HEAD")
+	if err := cmdGuardedLoop(home, args, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "registered worktree") {
+		t.Fatalf("pre-dispatch error=%v", err)
+	}
+	st, _ = loadState(home)
+	if !st.Checkpoints[id].usable() {
+		t.Fatalf("approval was consumed before dispatch: %+v", st.Checkpoints[id])
+	}
+}
+
+func TestApprovedCheckpointSurvivesWorkerPreflightFailure(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	if err := os.WriteFile(filepath.Join(repo, "bad-worker"), []byte("\x7fELFtruncated"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, repo, "add", "bad-worker")
+	testGit(t, repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "add invalid worker")
+	home, root := t.TempDir(), filepath.Join(t.TempDir(), "worktrees")
+	plan := guardedPlan{
+		Goal: "g", Project: repo, CommitMessage: "approved",
+		Actions: []plannedAction{{Kind: "worker", Goal: "adjacent", Project: repo, Command: []string{"./bad-worker"}, Files: []string{"x"}}, {Kind: "push", Goal: "g", Project: repo}},
+		Checks:  []plannedCheck{{Command: []string{"true"}}},
+	}
+	args := guardedArgs(repo, root, "g", "goal/approval-preflight", plan)
+	if err := cmdGuardedLoop(home, args, io.Discard, io.Discard); err == nil {
+		t.Fatal("checkpoint was not requested")
+	}
+	st, _ := loadState(home)
+	var id string
+	for candidate := range st.Checkpoints {
+		id = candidate
+	}
+	if _, err := checkpointChange(home, "approve", "", id, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdGuardedLoop(home, args, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "worker executable") {
+		t.Fatalf("preflight error=%v", err)
+	}
+	st, _ = loadState(home)
+	if !st.Checkpoints[id].usable() {
+		t.Fatalf("approval was consumed during worker preflight: %+v", st.Checkpoints[id])
+	}
+}
+
+func TestExecutableValidationRejectsNonExecutableAndWrongArchitectureELF(t *testing.T) {
+	source, err := os.ReadFile("/bin/true")
+	if err != nil || len(source) < 20 {
+		t.Skip("no ELF /bin/true available")
+	}
+	var order binary.ByteOrder = binary.LittleEndian
+	if source[5] == 2 {
+		order = binary.BigEndian
+	}
+	for name, mutate := range map[string]func([]byte){
+		"relocatable":        func(data []byte) { order.PutUint16(data[16:18], uint16(elf.ET_REL)) },
+		"wrong architecture": func(data []byte) { order.PutUint16(data[18:20], uint16(elf.EM_MIPS)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := append([]byte(nil), source...)
+			mutate(data)
+			path := filepath.Join(t.TempDir(), "candidate")
+			if err := os.WriteFile(path, data, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateExecutable(path); err == nil {
+				t.Fatal("invalid ELF accepted as executable")
+			}
+		})
+	}
+}
+
+func TestLiveHerdrAgentBlocksGuardedAcquisition(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	home := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"agent": "writer-one", "goal": "g", "repo": repo, "branch": "goal/live", "worktree": filepath.Join(t.TempDir(), "agent-worktree")})
+	event := newEvent("agent.started", payload)
+	event.Via = doorHear
+	if err := appendEvents(home, []Event{event}); err != nil {
+		t.Fatal(err)
+	}
+	herdr := filepath.Join(t.TempDir(), "herdr")
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"result\":{\"agents\":[{\"name\":\"writer-one\",\"agent_status\":\"working\"}]}}'\n"
+	if err := os.WriteFile(herdr, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	plan := guardedPlan{Goal: "g", Project: repo, CommitMessage: "x", Actions: []plannedAction{{Kind: "worker", Goal: "g", Project: repo, Command: []string{"true"}, Files: []string{"x"}}, {Kind: "push", Goal: "g", Project: repo}}, Checks: []plannedCheck{{Command: []string{"true"}}}}
+	args := guardedArgs(repo, filepath.Join(t.TempDir(), "worktrees"), "g", "goal/live", plan)
+	args = append(args[:1], append([]string{"--herdr", herdr}, args[1:]...)...)
+	err := cmdGuardedLoop(home, args, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "live Herdr agent writer-one") {
+		t.Fatalf("live agent error=%v", err)
+	}
+}
+
+func TestHerdrUnexpectedSchemaFailsClosed(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	home := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"agent": "writer-one", "goal": "g", "repo": repo})
+	event := newEvent("agent.started", payload)
+	event.Via = doorHear
+	if err := appendEvents(home, []Event{event}); err != nil {
+		t.Fatal(err)
+	}
+	herdr := filepath.Join(t.TempDir(), "herdr")
+	if err := os.WriteFile(herdr, []byte("#!/bin/sh\nprintf '{}\\n'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	plan := guardedPlan{Goal: "g", Project: repo, CommitMessage: "x", Actions: []plannedAction{{Kind: "worker", Goal: "g", Project: repo, Command: []string{"true"}, Files: []string{"x"}}, {Kind: "push", Goal: "g", Project: repo}}, Checks: []plannedCheck{{Command: []string{"true"}}}}
+	args := guardedArgs(repo, filepath.Join(t.TempDir(), "worktrees"), "g", "goal/schema", plan)
+	args = append(args[:1], append([]string{"--herdr", herdr}, args[1:]...)...)
+	if err := cmdGuardedLoop(home, args, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "no agents array") {
+		t.Fatalf("schema error=%v", err)
+	}
+}
+
+func TestGitNetworkTimeoutKillsHelperProcessGroup(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	wrapper := filepath.Join(dir, "git")
+	script := "#!/bin/sh\ncase \" $* \" in\n  *\" ls-remote \"*) sleep 30 & echo $! > " + shellQuote(pidFile) + "; wait;;\n  *) exec " + shellQuote(realGit) + " \"$@\";;\nesac\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	start := time.Now()
+	err = verifyRemoteContext(ctx, repo, "never", strings.Repeat("0", 40))
+	cancel()
+	if err == nil || time.Since(start) > 2*time.Second {
+		t.Fatalf("timeout error=%v elapsed=%s", err, time.Since(start))
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	deadline := time.Now().Add(time.Second)
+	for syscall.Kill(pid, 0) == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if syscall.Kill(pid, 0) == nil {
+		t.Fatalf("git helper descendant %d survived timeout", pid)
 	}
 }
 
@@ -278,6 +575,126 @@ func TestTimedOutWorkerCanResumeAfterLeaseExpiry(t *testing.T) {
 	}
 }
 
+func TestPostCommitAndPushCrashesReconcileWithoutWorkerRerun(t *testing.T) {
+	requireSandbox(t)
+	for _, phase := range []string{"after-commit-started", "after-commit-before-event", "after-commit", "after-push"} {
+		t.Run(phase, func(t *testing.T) {
+			repo, _ := testRepository(t)
+			home, root := t.TempDir(), filepath.Join(t.TempDir(), "worktrees")
+			branch := "goal/" + phase
+			plan := guardedPlan{
+				Goal: "g", Project: repo, CommitMessage: phase,
+				Actions: []plannedAction{{Kind: "worker", Goal: "g", Project: repo, Command: []string{"sh", "-c", "test ! -e once && printf once > once"}, Files: []string{"once"}}, {Kind: "push", Goal: "g", Project: repo}},
+				Checks:  []plannedCheck{{Command: []string{"test", "-f", "once"}}},
+			}
+			args := guardedArgs(repo, root, "g", branch, plan)
+			args = append([]string{}, args...)
+			for i, arg := range args {
+				if arg == "--timeout=2s" {
+					args[i] = "--timeout=500ms"
+				}
+			}
+			for i, arg := range args {
+				if arg == "--" {
+					args = append(args[:i], append([]string{"--lease-ttl=1s"}, args[i:]...)...)
+					break
+				}
+			}
+			guardedFault = func(at string) error {
+				if at == phase {
+					return errors.New("simulated crash " + phase)
+				}
+				return nil
+			}
+			err := cmdGuardedLoop(home, args, io.Discard, io.Discard)
+			guardedFault = nil
+			if err == nil || !strings.Contains(err.Error(), "simulated crash") {
+				t.Fatalf("fault error=%v", err)
+			}
+			st, _ := loadState(home)
+			var pass string
+			for id := range st.Passes {
+				pass = id
+			}
+			recovery := recoverPassState(st.Passes[pass])
+			if !recovery.CommitBegan || recovery.Completed {
+				t.Fatalf("recovery state=%+v", recovery)
+			}
+			time.Sleep(1100 * time.Millisecond)
+			resume := append([]string{"--guarded", "--resume", pass}, args[1:]...)
+			if err := cmdGuardedLoop(home, resume, io.Discard, io.Discard); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			st, _ = loadState(home)
+			if !recoverPassState(st.Passes[pass]).Completed {
+				t.Fatal("reconciled pass is not complete")
+			}
+			if err := cmdGuardedLoop(home, resume, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "already completed") {
+				t.Fatalf("completed resume error=%v", err)
+			}
+		})
+	}
+}
+
+func TestPushRaceFailsReconciliationWithoutWorkerRerun(t *testing.T) {
+	requireSandbox(t)
+	repo, remote := testRepository(t)
+	home, root := t.TempDir(), filepath.Join(t.TempDir(), "worktrees")
+	plan := guardedPlan{
+		Goal: "g", Project: repo, CommitMessage: "guarded commit",
+		Actions: []plannedAction{{Kind: "worker", Goal: "g", Project: repo, Command: []string{"sh", "-c", "test ! -e once && printf once > once"}, Files: []string{"once"}}, {Kind: "push", Goal: "g", Project: repo}},
+		Checks:  []plannedCheck{{Command: []string{"test", "-f", "once"}}},
+	}
+	args := guardedArgs(repo, root, "g", "goal/push-race", plan)
+	for i, arg := range args {
+		if arg == "--timeout=2s" {
+			args[i] = "--timeout=500ms"
+		}
+	}
+	for i, arg := range args {
+		if arg == "--" {
+			args = append(args[:i], append([]string{"--lease-ttl=1s"}, args[i:]...)...)
+			break
+		}
+	}
+	guardedFault = func(at string) error {
+		if at != "after-push" {
+			return nil
+		}
+		clone := filepath.Join(t.TempDir(), "racer")
+		if out, err := exec.Command("git", "clone", "-b", "goal/push-race", remote, clone).CombinedOutput(); err != nil {
+			return fmt.Errorf("clone racer: %v: %s", err, out)
+		}
+		if err := os.WriteFile(filepath.Join(clone, "racer"), []byte("ahead\n"), 0644); err != nil {
+			return err
+		}
+		testGit(t, clone, "add", "racer")
+		testGit(t, clone, "-c", "user.name=racer", "-c", "user.email=racer@example.com", "commit", "-m", "race ahead")
+		testGit(t, clone, "push", "origin", "HEAD:refs/heads/goal/push-race")
+		return errors.New("crash after raced push")
+	}
+	err := cmdGuardedLoop(home, args, io.Discard, io.Discard)
+	guardedFault = nil
+	if err == nil || !strings.Contains(err.Error(), "crash after raced push") {
+		t.Fatalf("fault error=%v", err)
+	}
+	st, _ := loadState(home)
+	var pass string
+	for id := range st.Passes {
+		pass = id
+	}
+	time.Sleep(1100 * time.Millisecond)
+	resume := append([]string{"--guarded", "--resume", pass}, args[1:]...)
+	err = cmdGuardedLoop(home, resume, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "post-commit reconciliation failed") {
+		t.Fatalf("race reconciliation error=%v", err)
+	}
+	st, _ = loadState(home)
+	if recoverPassState(st.Passes[pass]).Completed {
+		t.Fatal("diverged remote was marked completed")
+	}
+}
+
 func TestPostBoundaryGuardedFlagStaysLegacyMindArgument(t *testing.T) {
 	home := t.TempDir()
 	var out, diag bytes.Buffer
@@ -307,6 +724,11 @@ func TestGuardedPolicyForbidsDangerousActionsAndNeedsChecks(t *testing.T) {
 	}
 	if _, err := validatePlan(opts, base); err == nil || !strings.Contains(err.Error(), "verification check") {
 		t.Fatalf("missing checks error=%v", err)
+	}
+	withoutPush := base
+	withoutPush.Checks = []plannedCheck{{Command: []string{"true"}}}
+	if _, err := validatePlan(opts, withoutPush); err == nil || !strings.Contains(err.Error(), "push action") {
+		t.Fatalf("missing push error=%v", err)
 	}
 	expanding := base
 	expanding.Actions = []plannedAction{{Kind: "worker", Goal: "other", Project: "/elsewhere", Command: []string{"true"}, Files: []string{"x"}}}

@@ -437,15 +437,21 @@ The controller requires `bwrap`, `prlimit`, and Git. It rejects a `SELF_HOME` or
 worktree root inside the invocation checkout. The planner sees `/` and the
 repository read-only, no shared network namespace, a private PID namespace, and
 private `/tmp`, `/run`, and `HOME`. The worker gets the same boundary with only
-its newly-created goal worktree bind-mounted writable. It cannot update shared
-Git metadata; the trusted controller stages only declared files, commits, and
-may perform one additive (never forced) push to the exact leased branch.
+its goal worktree bind-mounted writable. Checks run with that worktree
+read-only, and the controller rejects any observed check mutation. The worker
+cannot update shared Git metadata; the trusted controller stages only declared
+files, commits, and performs one additive (never forced) push to the exact
+leased branch. A guarded completion always proves the remote branch. Existing
+local or remote goal branches are attached and advanced
+additively; successful worktrees are removed.
 
 Guarded limits default to one dispatch, one repository, twenty changed files,
 one push, one PR mutation, two decomposed goals, and one heavyweight check;
 `--budgets` can lower or raise every named category explicitly. Adjacent work in
 the same repository produces a durable checkpoint. An approval is matched to
-the exact canonical action set and consumed atomically once. The current broker
+the exact canonical action set and consumed atomically with `worker.started`,
+after worktree creation and sandbox process start. Pre-dispatch failures leave
+it usable. The current broker
 has no goal-creation, PR, or infrastructure executor, so those proposals are
 rejected rather than reported as performed. Force-push, merge, production
 writes, rollout, comments, and external messages are forbidden. A heavyweight
@@ -461,19 +467,25 @@ passed, the invocation checkout status is byte-identical, and the fixed push
 path proves no force flag was used. `self view loop [pass-id]` replays summaries,
 consumed and remaining budgets, leases, failures, and human decisions.
 
-Atomic leases use `self lease acquire|renew|release|steal`. Acquisition,
-renewal, release, and explicit stealing after expiry replay and compare under
+Atomic leases use `self lease acquire|renew|release|steal`. Before acquisition,
+the controller fails closed on conflicting Git-registered worktrees and
+unresolved live `agent.started` records. Herdr is discovered from `--herdr`,
+`SELF_HERDR_BIN`, or `PATH`; there is no platform-specific hardcoded path.
+Acquisition, renewal, release, and explicit stealing after expiry replay and compare under
 the event-log lock, so concurrent acquisition has one winner. Failed and timed
 out workers are killed as process groups and leave a `loop.pass.resumable`
 event plus an expiring lease. The dirty worktree is deliberately preserved for
 inspection. After expiry, `--resume PASS` explicitly steals that exact lease
 with a new fencing generation, validates and reuses its recorded worktree, and
-audits the resumed pass. This mechanically supports pre-commit dirty-worktree
-recovery. A crash after commit or push requires manual ref verification and
-reconciliation; the controller does not pretend rerunning a worker is always
-idempotent. A crash before a terminal event leaves the started pass and lease as
-replayable orphan evidence, while Bubblewrap's parent-death and process-group
-handling kills children. There is never a direct-edit fallback.
+audits the resumed pass. Pre-commit recovery may rerun the worker. Once
+`commit.started` is durable, resume can only finish or validate the staged
+commit, reconcile the exact remote ref, clean the worktree, and complete; it
+cannot return to the worker path. Push-started races are settled by comparing
+the remote ref before any retry. Completed passes are rejected as
+non-rerunnable. A crash before a terminal event leaves replayable phase and
+lease evidence, while Bubblewrap's parent-death and process-group handling kills
+children. Git, remote helpers, and Herdr observations use bounded process groups.
+There is never a direct-edit fallback.
 
 This is a strong, narrow contract, not security theater. Bubblewrap mechanically
 denies ordinary filesystem writes outside mounted writable paths and removes the
@@ -486,7 +498,10 @@ Kernel-acted guarded events are `loop.lease.acquired`, `loop.lease.renewed`,
 `loop.lease.released`, `loop.lease.stolen`, `loop.lease.refused`,
 `loop.checkpoint.requested`, `loop.checkpoint.approved`,
 `loop.checkpoint.rejected`, `loop.checkpoint.consumed`, `loop.pass.started`,
-`loop.pass.planned`, `loop.pass.check.passed`, `loop.pass.push.completed`,
+`loop.pass.planned`, `loop.pass.worker.started`, `loop.pass.worker.completed`,
+`loop.pass.check.passed`, `loop.pass.checks.completed`,
+`loop.pass.commit.started`, `loop.pass.commit.completed`, `loop.pass.push.started`, `loop.pass.push.completed`,
+`loop.pass.push.reconciling`, `loop.pass.push.reconciled`, `loop.pass.worktree.cleaned`,
 `loop.pass.checkpoint.consumed`, `loop.pass.completed`, `loop.pass.failed`,
 `loop.pass.resumable`, `loop.pass.resumed`, and `loop.budget.exhausted`. Foreign accounts cannot
 inject them as live local policy; they must travel under `lineage.`.

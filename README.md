@@ -91,9 +91,10 @@ namespaces, permits writes only in that worktree, applies pass budgets, runs
 declared checks, performs a fixed additive push, and verifies the clean worktree
 and expected remote ref before recording completion. Failed dispatch never
 falls back to direct edits. Checkpoints and leases are durable append-only state.
-Pre-commit work interrupted by timeout or crash can be retried after lease
-expiry with `self loop --guarded --resume <pass> ...`; post-commit recovery is
-currently a manual verification/reconciliation boundary.
+Interrupted work can be recovered after lease expiry with
+`self loop --guarded --resume <pass> ...`. Pre-commit work reuses the dirty
+worktree; commit and push phases are reconciled without rerunning the worker.
+Completed passes are non-rerunnable.
 
 Guarded mode requires Linux, `bwrap`, `prlimit`, and Git. It is process
 containment against repository writes and ordinary network access, not a VM or
