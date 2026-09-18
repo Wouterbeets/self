@@ -21,6 +21,7 @@ var verbCandidates = []struct{ name, desc string }{
 	{"loop", "run a mind until the log stops changing"},
 	{"lease", "atomically manage a goal writer lease"},
 	{"checkpoint", "manage durable one-shot action approval"},
+	{"reserve", "coordinate repository writers across processes"},
 	{"learn", "deposit an account and print its learning prompt"},
 	{"give", "write an event or capability account"},
 	{"rehydrate", "rebuild derived capability files from the log"},

@@ -23,6 +23,7 @@ Usage:
   self loop [opts] [-- mind...] run a mind until the log stops changing (quiet passes in a row)
   self lease <operation> ...     atomically manage an expiring goal writer lease
   self checkpoint <operation>... manage durable one-shot action approval
+  self reserve <operation> ...   coordinate repository writers across processes
   self learn <account-dir>      deposit an account and print its learning prompt
   self give <selector> <dir>    write an event or capability account
   self rehydrate                rebuild derived capability files from the log
@@ -134,6 +135,9 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 
 	case "checkpoint":
 		return cmdCheckpoint(home, args, out)
+
+	case "reserve":
+		return cmdReserve(home, args, out, os.Stderr)
 
 	case "learn":
 		if len(args) != 1 {

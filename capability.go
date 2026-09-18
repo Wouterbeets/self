@@ -383,8 +383,11 @@ func scriptEnv(selfHome, work string) []string {
 	if selfHome != "" {
 		env = append(env, "SELF_HOME="+selfHome)
 	}
+	if binary, err := os.Executable(); err == nil {
+		env = append(env, "SELF_BINARY="+binary)
+	}
 	for _, kv := range os.Environ() {
-		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SELF_") && k != "SELF_HOME" {
+		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SELF_") && k != "SELF_HOME" && k != "SELF_BINARY" {
 			env = append(env, kv)
 		}
 	}

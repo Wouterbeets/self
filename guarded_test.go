@@ -457,6 +457,69 @@ func TestHerdrUnexpectedSchemaFailsClosed(t *testing.T) {
 	}
 }
 
+func TestObservedRawHerdrAgentFailsGuardedModeClosed(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	herdr := filepath.Join(t.TempDir(), "herdr")
+	response, _ := json.Marshal(map[string]any{"result": map[string]any{"agents": []map[string]string{
+		{"agent": "opencode", "agent_status": "working", "cwd": repo},
+		{"agent": "opencode", "agent_status": "working", "cwd": "/"},
+	}}})
+	script := "#!/bin/sh\nprintf '%s\\n' " + shellQuote(string(response)) + "\n"
+	if err := os.WriteFile(herdr, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	plan := guardedPlan{Goal: "g", Project: repo, CommitMessage: "x", Actions: []plannedAction{{Kind: "worker", Goal: "g", Project: repo, Command: []string{"true"}, Files: []string{"x"}}, {Kind: "push", Goal: "g", Project: repo}}, Checks: []plannedCheck{{Command: []string{"true"}}}}
+	args := guardedArgs(repo, filepath.Join(t.TempDir(), "worktrees"), "g", "goal/raw", plan)
+	args = append(args[:1], append([]string{"--herdr", herdr}, args[1:]...)...)
+	if err := cmdGuardedLoop(t.TempDir(), args, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "observed raw Herdr agent opencode") {
+		t.Fatalf("raw agent error=%v", err)
+	}
+}
+
+func TestRawHerdrInAllowedWorktreeStillFailsClosed(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	if err := createGoalWorktree(repo, worktree, "goal/raw-same-worktree"); err != nil {
+		t.Fatal(err)
+	}
+	herdr := filepath.Join(t.TempDir(), "herdr")
+	response, _ := json.Marshal(map[string]any{"result": map[string]any{"agents": []map[string]string{{"agent": "raw", "agent_status": "working", "cwd": worktree}}}})
+	if err := os.WriteFile(herdr, []byte("#!/bin/sh\nprintf '%s\\n' "+shellQuote(string(response))+"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	opts := guardedOptions{Goal: "g", Repo: repo, Branch: "goal/raw-same-worktree", Herdr: herdr, Timeout: time.Second}
+	if err := reconcileExternalWriters(t.TempDir(), opts, worktree, true); err == nil || !strings.Contains(err.Error(), "observed raw Herdr agent raw") {
+		t.Fatalf("same-worktree raw agent error=%v", err)
+	}
+}
+
+func TestDispatchCandidateChecksEveryCanonicalPath(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	other, _ := testRepository(t)
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	if err := createGoalWorktree(repo, worktree, "goal/candidate-path"); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"agent": "writer", "goal": "other-goal", "repo": other, "worktree": worktree})
+	event := newEvent("agent.started", payload)
+	event.Via = doorHear
+	if err := appendEvents(home, []Event{event}); err != nil {
+		t.Fatal(err)
+	}
+	herdr := filepath.Join(t.TempDir(), "herdr")
+	if err := os.WriteFile(herdr, []byte("#!/bin/sh\nprintf '%s\\n' '{\"result\":{\"agents\":[{\"agent\":\"writer\",\"agent_status\":\"working\"}]}}'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	opts := guardedOptions{Goal: "g", Repo: repo, Branch: "goal/candidate-path", Herdr: herdr, Timeout: time.Second}
+	if err := reconcileExternalWriters(home, opts, worktree, true); err == nil || !strings.Contains(err.Error(), "live Herdr agent writer") {
+		t.Fatalf("later matching path was ignored: %v", err)
+	}
+}
+
 func TestGitNetworkTimeoutKillsHelperProcessGroup(t *testing.T) {
 	requireSandbox(t)
 	repo, _ := testRepository(t)

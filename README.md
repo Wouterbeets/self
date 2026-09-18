@@ -96,6 +96,12 @@ Interrupted work can be recovered after lease expiry with
 worktree; commit and push phases are reconciled without rerunning the worker.
 Completed passes are non-rerunnable.
 
+Guarded passes hold a canonical repository reservation for their full mutation
+lifecycle. Dispatch integrations use `self reserve dispatch <repo> -- ...` so
+agent startup evidence commits before that same reservation is released. Raw
+Herdr calls that bypass this wrapper remain outside self policy; guarded mode
+fails closed when such a live agent is observable for the repository.
+
 Guarded mode requires Linux, `bwrap`, `prlimit`, and Git. It is process
 containment against repository writes and ordinary network access, not a VM or
 an OS-account boundary. It does not claim to block every local IPC side channel,

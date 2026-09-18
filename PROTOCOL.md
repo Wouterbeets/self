@@ -345,6 +345,7 @@ self view log [--all]       last 10 events, or every one
 self loop [opts] -- <mind>  run a mind until the log stops changing
 self lease <operation> ...  atomically manage an expiring goal writer lease
 self checkpoint <op> ...    request, approve, or reject one-shot action approval
+self reserve <op> ...       coordinate repository writers across processes
 self learn <dir>            deposit an account, print its learning prompt
 self give <sel> <dir>       write an account from the log
 self rehydrate              make cap/ match the log
@@ -487,6 +488,46 @@ lease evidence, while Bubblewrap's parent-death and process-group handling kills
 children. Git, remote helpers, and Herdr observations use bounded process groups.
 There is never a direct-edit fallback.
 
+Guarded mode also holds a repository reservation for its complete
+worker/check/commit/push/cleanup lifecycle. The reservation identity is the
+SHA-256 of the symlink-resolved Git common directory, so every worktree and path
+alias of one repository converges on one private lock below
+`SELF_RESERVATION_DIR`, `XDG_RUNTIME_DIR`, or a mode-0700 per-user temporary
+directory outside the repository. Acquisition is nonblocking and fails closed
+with holder evidence.
+
+`self reserve dispatch <repository> -- <dispatch-helper> ...` is the integration
+surface for dispatch capabilities. It holds the same reservation while the
+helper creates the worktree and starts the agent, then ingests the helper's
+event wire before unlocking. This ordering means guarded mode either loses the
+reservation immediately or acquires after `agent.started` is authoritative and
+refuses the active writer. `self reserve exec` holds the lock around any native
+helper, while `path` and `check` expose canonical identity and availability.
+Direct raw Herdr invocations cannot be forced to honor self policy; when Herdr
+is configured or discoverable, guarded mode observes its live agents and fails
+closed on a matching repository. An undiscoverable raw Herdr process remains
+outside this cooperative boundary.
+
+An installed Python dispatch capability integrates after parsing its repository
+argument and before any Herdr worktree/start call:
+
+```python
+if not os.environ.get("SELF_REPOSITORY_RESERVATION"):
+    result = subprocess.run([
+        os.environ["SELF_BINARY"], "reserve", "dispatch", repo, "--",
+        sys.executable, os.path.realpath(__file__), *sys.argv[1:],
+    ], stdin=sys.stdin.buffer)
+    raise SystemExit(result.returncode)
+```
+
+The re-executed helper sees `SELF_REPOSITORY_RESERVATION` and proceeds once. It
+must discover Herdr from `SELF_HERDR_BIN` or `PATH`, not a platform-specific
+literal. Its stdout remains event JSONL; the native wrapper commits that wire
+under the reservation and emits no wire to the outer `self run dispatch`.
+Apply this to both `command/dispatch` and `command/dispatch.pane`; an
+`agent.failed` terminal event is authoritative only after any partially started
+writer has been stopped or otherwise proved non-live.
+
 This is a strong, narrow contract, not security theater. Bubblewrap mechanically
 denies ordinary filesystem writes outside mounted writable paths and removes the
 network namespace, but it is not a VM, separate user account, seccomp policy, or
@@ -522,6 +563,8 @@ SELF_LOOP_ASK          default ask for every pass
 SELF_LOOP_MAX_PASSES   pass cap (12)
 SELF_LOOP_SETTLE       quiet passes before the loop stops (2)
 SELF_LOOP_TIMEOUT      per-mind timeout (30m)
+SELF_BINARY            current self executable, supplied to command capabilities
+SELF_RESERVATION_DIR   optional private root for repository reservation locks
 SELF_*                 anything else passes through to capability scripts
 ```
 

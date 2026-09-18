@@ -553,7 +553,12 @@ func herdrBinary(configured string) (string, error) {
 	return path, nil
 }
 
-func liveHerdrAgents(ctx context.Context, binary string) (map[string]bool, error) {
+type herdrAgent struct {
+	Name string
+	Cwd  string
+}
+
+func liveHerdrAgents(ctx context.Context, binary string) ([]herdrAgent, error) {
 	cmd := commandWithGroup(ctx, binary, "agent", "list")
 	cmd.Env = os.Environ()
 	out, err := cmd.Output()
@@ -564,7 +569,9 @@ func liveHerdrAgents(ctx context.Context, binary string) (map[string]bool, error
 		Result struct {
 			Agents *[]struct {
 				Name   string `json:"name"`
+				Agent  string `json:"agent"`
 				Status string `json:"agent_status"`
+				Cwd    string `json:"cwd"`
 			} `json:"agents"`
 		} `json:"result"`
 	}
@@ -574,11 +581,18 @@ func liveHerdrAgents(ctx context.Context, binary string) (map[string]bool, error
 	if response.Result.Agents == nil {
 		return nil, fmt.Errorf("herdr agent list response has no agents array")
 	}
-	live := map[string]bool{}
+	var live []herdrAgent
 	for _, agent := range *response.Result.Agents {
 		status := strings.ToLower(agent.Status)
-		if agent.Name != "" && status != "done" && status != "failed" {
-			live[agent.Name] = true
+		name := agent.Name
+		if name == "" {
+			name = agent.Agent
+		}
+		if (name != "" || agent.Cwd != "") && status != "done" && status != "failed" {
+			if name == "" {
+				name = "(unnamed)"
+			}
+			live = append(live, herdrAgent{Name: name, Cwd: agent.Cwd})
 		}
 	}
 	return live, nil
@@ -623,16 +637,35 @@ func reconcileExternalWriters(home string, opts guardedOptions, worktree string,
 	}
 	var candidates []dispatch
 	for _, d := range dispatches {
-		if d.goal == opts.Goal || (d.repo == opts.Repo && (d.branch == opts.Branch || d.worktree == worktree)) {
+		matchesRepository := false
+		for _, path := range []string{d.repo, d.worktree} {
+			if path == "" {
+				continue
+			}
+			_, identity, identityErr := repositoryIdentity(path)
+			if identityErr == nil {
+				_, wanted, _ := repositoryIdentity(opts.Repo)
+				if identity == wanted {
+					matchesRepository = true
+					break
+				}
+			}
+		}
+		if d.goal == opts.Goal || matchesRepository {
 			candidates = append(candidates, d)
 		}
 	}
-	if len(candidates) == 0 {
-		return nil
+	binary := ""
+	if len(candidates) > 0 || opts.Herdr != "" {
+		binary, err = herdrBinary(opts.Herdr)
+		if err != nil {
+			return err
+		}
+	} else if discovered, lookupErr := exec.LookPath("herdr"); lookupErr == nil {
+		binary = discovered
 	}
-	binary, err := herdrBinary(opts.Herdr)
-	if err != nil {
-		return err
+	if binary == "" {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
@@ -641,8 +674,23 @@ func reconcileExternalWriters(home string, opts guardedOptions, worktree string,
 		return err
 	}
 	for _, d := range candidates {
-		if live[d.agent] {
-			return fmt.Errorf("guarded acquisition conflicts with live Herdr agent %s for goal %s at %s", d.agent, d.goal, d.worktree)
+		for _, agent := range live {
+			if agent.Name == d.agent {
+				return fmt.Errorf("guarded acquisition conflicts with live Herdr agent %s for goal %s at %s", d.agent, d.goal, d.worktree)
+			}
+		}
+	}
+	_, wantedIdentity, err := repositoryIdentity(opts.Repo)
+	if err != nil {
+		return err
+	}
+	for _, agent := range live {
+		if agent.Cwd == "" {
+			continue
+		}
+		_, identity, err := repositoryIdentity(agent.Cwd)
+		if err == nil && identity == wantedIdentity {
+			return fmt.Errorf("guarded acquisition conflicts with observed raw Herdr agent %s at %s", agent.Name, agent.Cwd)
 		}
 	}
 	return nil
@@ -1134,6 +1182,9 @@ func reconcileCommittedPass(home string, opts guardedOptions, lease goalLease, p
 	if _, err := repoOutput(opts.Repo, "cat-file", "-e", recovery.Commit+"^{commit}"); err != nil {
 		return fmt.Errorf("recorded commit %s is unavailable: %w", recovery.Commit, err)
 	}
+	if err := reconcileExternalWriters(home, opts, worktree, true); err != nil {
+		return fmt.Errorf("writer appeared during reconciliation: %w", err)
+	}
 	if decision.Push {
 		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 		err = verifyRemoteContext(ctx, opts.Repo, opts.Branch, recovery.Commit)
@@ -1248,15 +1299,23 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 		return err
 	}
 	pass, owner := guardedPassID(), callerClaim()
+	if opts.Resume != "" {
+		pass = opts.Resume
+	}
 	if owner == "" {
 		owner = "guarded:" + pass
 	}
+	reservation, err := acquireRepositoryReservation(opts.Repo, "guarded-pass "+pass)
+	if err != nil {
+		_ = appendRailEvents(home, railEvent("loop.pass.failed", map[string]any{"pass": pass, "goal": opts.Goal, "reason": err.Error(), "stage": "repository-reservation"}))
+		return err
+	}
+	defer reservation.Release()
 	worktree := filepath.Join(opts.WorktreeRoot, pass)
 	resuming := opts.Resume != ""
 	var resumeAudit *passAudit
 	var recovery guardedRecovery
 	if resuming {
-		pass = opts.Resume
 		st, err := loadState(home)
 		if err != nil {
 			return err
@@ -1486,6 +1545,9 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 	if strings.TrimSpace(plan.CommitMessage) == "" {
 		return fail("failed", "plan needs a nonempty commit_message")
 	}
+	if err := reconcileExternalWriters(home, opts, worktree, true); err != nil {
+		return fail("failed", fmt.Sprintf("writer appeared before commit: %v", err))
+	}
 	if _, err := leaseChange(home, "renew", lease, opts.LeaseTTL, time.Now().UTC()); err != nil {
 		return fail("resumable", err.Error())
 	}
@@ -1537,6 +1599,9 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 		}
 	}
 	if decision.Push {
+		if err := reconcileExternalWriters(home, opts, worktree, true); err != nil {
+			return fail("failed", fmt.Sprintf("writer appeared before push: %v", err))
+		}
 		if _, err := leaseChange(home, "renew", lease, opts.LeaseTTL, time.Now().UTC()); err != nil {
 			return fail("resumable", err.Error())
 		}
