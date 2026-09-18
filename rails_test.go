@@ -13,10 +13,12 @@ func TestLeaseLifecycleAndReplay(t *testing.T) {
 	home := t.TempDir()
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
 	first := goalLease{Goal: "g", Owner: "one", Invocation: "i1", Repository: "/repo", Branch: "goal/g", Worktree: "/wt/one"}
-	if _, err := leaseChange(home, "acquire", first, time.Minute, now); err != nil {
+	events, err := leaseChange(home, "acquire", first, time.Minute, now)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := leaseChange(home, "renew", goalLease{Goal: "g", Owner: "one", Invocation: "i1"}, 2*time.Minute, now.Add(30*time.Second)); err != nil {
+	json.Unmarshal(events[0].Payload, &first)
+	if _, err := leaseChange(home, "renew", first, 2*time.Minute, now.Add(30*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	st, err := loadState(home)
@@ -29,13 +31,16 @@ func TestLeaseLifecycleAndReplay(t *testing.T) {
 	if _, err := leaseChange(home, "steal", goalLease{Goal: "g", Owner: "two", Invocation: "i2"}, time.Minute, now.Add(time.Minute)); err == nil {
 		t.Fatal("active lease was stolen")
 	}
-	if _, err := leaseChange(home, "steal", goalLease{Goal: "g", Owner: "two", Invocation: "i2", Repository: "/repo", Branch: "goal/g/two", Worktree: "/wt/two"}, time.Minute, now.Add(3*time.Minute)); err != nil {
+	second := goalLease{Goal: "g", Owner: "two", Invocation: "i2", Repository: "/repo", Branch: "goal/g/two", Worktree: "/wt/two"}
+	events, err = leaseChange(home, "steal", second, time.Minute, now.Add(3*time.Minute))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := leaseChange(home, "release", goalLease{Goal: "g", Owner: "one", Invocation: "i1"}, 0, now); err == nil {
+	json.Unmarshal(events[0].Payload, &second)
+	if _, err := leaseChange(home, "release", first, 0, now); err == nil {
 		t.Fatal("old owner released stolen lease")
 	}
-	if _, err := leaseChange(home, "release", goalLease{Goal: "g", Owner: "two", Invocation: "i2"}, 0, now); err != nil {
+	if _, err := leaseChange(home, "release", second, 0, now); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = loadState(home)
@@ -106,6 +111,37 @@ func TestForgedRailEventsAreInert(t *testing.T) {
 	st := replay([]Event{forged}, nil)
 	if st.Leases["g"] != nil {
 		t.Fatal("a non-kernel rail event acquired a lease")
+	}
+}
+
+func TestCompletionRequiresCurrentLeaseAndReleasesAtomically(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	old := goalLease{Goal: "g", Owner: "one", Invocation: "i1", Repository: "/r", Branch: "b", Worktree: "/w"}
+	events, err := leaseChange(home, "acquire", old, time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	json.Unmarshal(events[0].Payload, &old)
+	newOwner := goalLease{Goal: "g", Owner: "one", Invocation: "i1", Repository: "/r", Branch: "b", Worktree: "/w"}
+	events, err = leaseChange(home, "steal", newOwner, time.Minute, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	json.Unmarshal(events[0].Payload, &newOwner)
+	if err := finishGuardedPass(home, old, map[string]any{"pass": "p", "goal": "g"}, now.Add(2*time.Minute)); err == nil {
+		t.Fatal("stale owner completed work")
+	}
+	if err := finishGuardedPass(home, newOwner, map[string]any{"pass": "p", "goal": "g"}, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := loadState(home)
+	if !st.Leases["g"].Released || st.Passes["p"].Status != "completed" {
+		t.Fatalf("lease=%+v pass=%+v", st.Leases["g"], st.Passes["p"])
+	}
+	completedSeq := st.Passes["p"].Events[len(st.Passes["p"].Events)-1].Seq
+	if st.Leases["g"].Seq != completedSeq+1 {
+		t.Fatalf("completion seq=%d release seq=%d", completedSeq, st.Leases["g"].Seq)
 	}
 }
 
@@ -213,7 +249,7 @@ func TestLoopViewReplaysPassLeaseAndCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"pass-1", "goal=g", "active leases", "owner=o", "checkpoints", "pending"} {
+	for _, want := range []string{"pass-1", "goal=g", "unreleased leases", "owner=o", "checkpoints", "pending"} {
 		if !strings.Contains(string(page), want) {
 			t.Fatalf("view missing %q:\n%s", want, page)
 		}

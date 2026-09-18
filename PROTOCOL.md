@@ -442,15 +442,17 @@ Git metadata; the trusted controller stages only declared files, commits, and
 may perform one additive (never forced) push to the exact leased branch.
 
 Guarded limits default to one dispatch, one repository, twenty changed files,
-one push, one PR mutation, two decomposed goals, and one heavyweight check.
-Adjacent and scope-expanding actions, PR opening, and infrastructure changes
-produce a durable checkpoint. An approval is matched to the exact canonical
-action set, consumed atomically once, and does not add an executor the
-controller lacks. Force-push, merge, production writes, rollout, comments, and
-external messages are forbidden. A heavyweight check holds one per-instance
-advisory lock. `--memory-mb`, `--cpu-seconds`, `--timeout`, and
-`--min-free-mb` enforce process and temporary-space limits; enclosing systemd
-unit limits remain inherited as a second ceiling.
+one push, one PR mutation, two decomposed goals, and one heavyweight check;
+`--budgets` can lower or raise every named category explicitly. Adjacent work in
+the same repository produces a durable checkpoint. An approval is matched to
+the exact canonical action set and consumed atomically once. The current broker
+has no goal-creation, PR, or infrastructure executor, so those proposals are
+rejected rather than reported as performed. Force-push, merge, production
+writes, rollout, comments, and external messages are forbidden. A heavyweight
+check holds one per-instance advisory lock. `--memory-mb`, `--cpu-seconds`, and
+`--timeout` enforce process limits; `--min-free-mb` is a temporary-space
+preflight threshold. Enclosing systemd unit limits remain inherited as a second
+ceiling. Planner output is capped at 1 MiB.
 
 Every pass records start, plan, check, push, checkpoint, budget, failure or
 completion events. Completion is recorded only after the commit is the expected
@@ -464,8 +466,14 @@ renewal, release, and explicit stealing after expiry replay and compare under
 the event-log lock, so concurrent acquisition has one winner. Failed and timed
 out workers are killed as process groups and leave a `loop.pass.resumable`
 event plus an expiring lease. The dirty worktree is deliberately preserved for
-inspection; recovery must explicitly steal the expired lease and reconcile or
-remove that worktree. There is never a direct-edit fallback.
+inspection. After expiry, `--resume PASS` explicitly steals that exact lease
+with a new fencing generation, validates and reuses its recorded worktree, and
+audits the resumed pass. This mechanically supports pre-commit dirty-worktree
+recovery. A crash after commit or push requires manual ref verification and
+reconciliation; the controller does not pretend rerunning a worker is always
+idempotent. A crash before a terminal event leaves the started pass and lease as
+replayable orphan evidence, while Bubblewrap's parent-death and process-group
+handling kills children. There is never a direct-edit fallback.
 
 This is a strong, narrow contract, not security theater. Bubblewrap mechanically
 denies ordinary filesystem writes outside mounted writable paths and removes the
@@ -480,7 +488,7 @@ Kernel-acted guarded events are `loop.lease.acquired`, `loop.lease.renewed`,
 `loop.checkpoint.rejected`, `loop.checkpoint.consumed`, `loop.pass.started`,
 `loop.pass.planned`, `loop.pass.check.passed`, `loop.pass.push.completed`,
 `loop.pass.checkpoint.consumed`, `loop.pass.completed`, `loop.pass.failed`,
-`loop.pass.resumable`, and `loop.budget.exhausted`. Foreign accounts cannot
+`loop.pass.resumable`, `loop.pass.resumed`, and `loop.budget.exhausted`. Foreign accounts cannot
 inject them as live local policy; they must travel under `lineage.`.
 
 ## Exit codes

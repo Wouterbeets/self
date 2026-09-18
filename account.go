@@ -47,6 +47,7 @@ var refused = map[string]bool{
 	"loop.pass.completed":           true,
 	"loop.pass.failed":              true,
 	"loop.pass.resumable":           true,
+	"loop.pass.resumed":             true,
 	"loop.pass.check.passed":        true,
 	"loop.pass.push.completed":      true,
 	"loop.pass.checkpoint.consumed": true,

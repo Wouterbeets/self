@@ -28,6 +28,7 @@ type goalLease struct {
 	Goal       string    `json:"goal"`
 	Owner      string    `json:"owner"`
 	Invocation string    `json:"invocation"`
+	Token      string    `json:"token"`
 	Repository string    `json:"repository"`
 	Branch     string    `json:"branch"`
 	Worktree   string    `json:"worktree"`
@@ -77,17 +78,17 @@ func (st *state) applyRails(e Event) {
 	switch e.Name {
 	case leaseAcquired, leaseRenewed, leaseStolen:
 		var l goalLease
-		if json.Unmarshal(e.Payload, &l) != nil || l.Goal == "" || l.Owner == "" || l.ExpiresAt.IsZero() {
+		if json.Unmarshal(e.Payload, &l) != nil || l.Goal == "" || l.Owner == "" || l.Invocation == "" || l.Token == "" || l.ExpiresAt.IsZero() {
 			return
 		}
 		l.Seq = e.Seq
 		st.Leases[l.Goal] = &l
 	case leaseReleased:
-		var p struct{ Goal, Owner, Invocation string }
+		var p struct{ Goal, Owner, Invocation, Token string }
 		if json.Unmarshal(e.Payload, &p) != nil {
 			return
 		}
-		if l := st.Leases[p.Goal]; l != nil && l.Owner == p.Owner && l.Invocation == p.Invocation {
+		if l := st.Leases[p.Goal]; l != nil && l.Owner == p.Owner && l.Invocation == p.Invocation && l.Token == p.Token {
 			l.Released = true
 			l.Seq = e.Seq
 		}
@@ -226,10 +227,11 @@ func leaseChange(home, op string, lease goalLease, ttl time.Duration, now time.T
 				}
 				return refuse("the prior lease expired; use explicit steal")
 			}
+			lease.Token = newEvent("loop.lease.token", nil).ID
 			lease.ExpiresAt = now.Add(ttl)
 			return []Event{railEvent(leaseAcquired, lease)}, nil
 		case "renew":
-			if current == nil || current.Released || current.Owner != lease.Owner || current.Invocation != lease.Invocation {
+			if current == nil || current.Released || current.Owner != lease.Owner || current.Invocation != lease.Invocation || current.Token != lease.Token {
 				return refuse("no matching owned lease")
 			}
 			if !current.active(now) {
@@ -239,10 +241,10 @@ func leaseChange(home, op string, lease goalLease, ttl time.Duration, now time.T
 			next.ExpiresAt = now.Add(ttl)
 			return []Event{railEvent(leaseRenewed, next)}, nil
 		case "release":
-			if current == nil || current.Released || current.Owner != lease.Owner || current.Invocation != lease.Invocation {
+			if current == nil || current.Released || current.Owner != lease.Owner || current.Invocation != lease.Invocation || current.Token != lease.Token {
 				return refuse("no matching owned lease")
 			}
-			return []Event{railEvent(leaseReleased, map[string]string{"goal": lease.Goal, "owner": lease.Owner, "invocation": lease.Invocation})}, nil
+			return []Event{railEvent(leaseReleased, map[string]string{"goal": lease.Goal, "owner": lease.Owner, "invocation": lease.Invocation, "token": lease.Token})}, nil
 		case "steal":
 			if current == nil || current.Released {
 				return refuse("no expired lease exists; acquire normally")
@@ -255,6 +257,7 @@ func leaseChange(home, op string, lease goalLease, ttl time.Duration, now time.T
 					return refuse(fmt.Sprintf("conflicts with goal %q owned by %q until %s", goal, other.Owner, other.ExpiresAt.Format(time.RFC3339)))
 				}
 			}
+			lease.Token = newEvent("loop.lease.token", nil).ID
 			lease.ExpiresAt = now.Add(ttl)
 			return []Event{railEvent(leaseStolen, lease)}, nil
 		default:
@@ -279,16 +282,16 @@ func cmdLease(home string, args []string, out io.Writer) error {
 		l = goalLease{Goal: args[1], Owner: args[2], Invocation: args[3], Repository: args[4], Branch: args[5], Worktree: args[6]}
 		ttl, err = positiveDuration(args[7], "ttl")
 	case "renew":
-		if len(args) != 5 {
-			return fmt.Errorf("usage: self lease renew <goal> <owner> <invocation> <ttl>")
+		if len(args) != 6 {
+			return fmt.Errorf("usage: self lease renew <goal> <owner> <invocation> <token> <ttl>")
 		}
-		l = goalLease{Goal: args[1], Owner: args[2], Invocation: args[3]}
-		ttl, err = positiveDuration(args[4], "ttl")
+		l = goalLease{Goal: args[1], Owner: args[2], Invocation: args[3], Token: args[4]}
+		ttl, err = positiveDuration(args[5], "ttl")
 	case "release":
-		if len(args) != 4 {
-			return fmt.Errorf("usage: self lease release <goal> <owner> <invocation>")
+		if len(args) != 5 {
+			return fmt.Errorf("usage: self lease release <goal> <owner> <invocation> <token>")
 		}
-		l = goalLease{Goal: args[1], Owner: args[2], Invocation: args[3]}
+		l = goalLease{Goal: args[1], Owner: args[2], Invocation: args[3], Token: args[4]}
 	default:
 		return fmt.Errorf("unknown lease operation %q", op)
 	}
@@ -406,6 +409,17 @@ type passBudget struct {
 	Used   map[string]int `json:"used"`
 }
 
+type budgetExhausted struct {
+	Category  string
+	Used      int
+	Requested int
+	Limit     int
+}
+
+func (e *budgetExhausted) Error() string {
+	return fmt.Sprintf("%s budget exhausted: used %d + requested %d exceeds %d", e.Category, e.Used, e.Requested, e.Limit)
+}
+
 func guardedBudget() passBudget {
 	return passBudget{Limits: map[string]int{
 		"new_goals": 2, "dispatches": 1, "repositories": 1, "changed_files": 20,
@@ -419,7 +433,7 @@ func (b *passBudget) consume(category string, amount int) error {
 		return fmt.Errorf("unknown budget category %q", category)
 	}
 	if b.Used[category]+amount > limit {
-		return fmt.Errorf("%s budget exhausted: used %d + requested %d exceeds %d", category, b.Used[category], amount, limit)
+		return &budgetExhausted{Category: category, Used: b.Used[category], Requested: amount, Limit: limit}
 	}
 	b.Used[category] += amount
 	return nil
@@ -472,7 +486,7 @@ func builtinLoopView(st *state, args []string) ([]byte, error) {
 	} else {
 		return nil, fmt.Errorf("no loop pass %q", args[0])
 	}
-	b.WriteString("\n## active leases\n")
+	b.WriteString("\n## unreleased leases (compare expiry)\n")
 	goals := make([]string, 0, len(st.Leases))
 	for goal := range st.Leases {
 		goals = append(goals, goal)
@@ -481,7 +495,7 @@ func builtinLoopView(st *state, args []string) ([]byte, error) {
 	for _, goal := range goals {
 		l := st.Leases[goal]
 		if !l.Released {
-			fmt.Fprintf(&b, "- %s owner=%s invocation=%s expires=%s repo=%s branch=%s worktree=%s\n", goal, l.Owner, l.Invocation, l.ExpiresAt.Format(time.RFC3339), l.Repository, l.Branch, l.Worktree)
+			fmt.Fprintf(&b, "- %s owner=%s invocation=%s generation=%s expires=%s repo=%s branch=%s worktree=%s\n", goal, l.Owner, l.Invocation, l.Token[:min(12, len(l.Token))], l.ExpiresAt.Format(time.RFC3339), l.Repository, l.Branch, l.Worktree)
 		}
 	}
 	b.WriteString("\n## checkpoints\n")

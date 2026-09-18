@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func requireSandbox(t *testing.T) {
@@ -87,6 +88,26 @@ func TestSandboxMechanicallySeparatesPlannerAndWorker(t *testing.T) {
 	}
 }
 
+func TestSandboxProtectsLinkedWorktreeGitPointer(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	if err := createGoalWorktree(repo, worktree, "goal/protected"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := gitPointer(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runSandbox(context.Background(), worktree, worktree, []string{"sh", "-c", "printf 'gitdir: /tmp/attacker' > .git"}, nil, io.Discard, io.Discard, 512, 30)
+	if err == nil {
+		t.Fatal("worker replaced linked-worktree Git pointer")
+	}
+	if err := verifyGitPointer(worktree, before); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGuardedLoopCompletesInIsolatedWorktreeAndVerifiesRemote(t *testing.T) {
 	requireSandbox(t)
 	repo, remote := testRepository(t)
@@ -151,7 +172,13 @@ func TestGuardedDispatchFailureIsDurableAndNeverFallsBack(t *testing.T) {
 	testGit(t, repo, "branch", "goal/existing")
 	home := t.TempDir()
 	before := testGit(t, repo, "status", "--porcelain=v1", "--untracked-files=all")
-	err := cmdGuardedLoop(home, []string{"--guarded", "--goal", "g", "--repo", repo, "--branch", "goal/existing", "--worktree-root", filepath.Join(t.TempDir(), "worktrees"), "--min-free-mb=1", "--", "sh", "-c", "printf '{}'$'\\n'"}, io.Discard, io.Discard)
+	plan := guardedPlan{
+		Goal: "g", Project: repo, CommitMessage: "test",
+		Actions: []plannedAction{{Kind: "worker", Goal: "g", Project: repo, Command: []string{"true"}, Files: []string{"x"}}, {Kind: "push", Goal: "g", Project: repo}},
+		Checks:  []plannedCheck{{Command: []string{"true"}}},
+	}
+	raw, _ := json.Marshal(plan)
+	err := cmdGuardedLoop(home, []string{"--guarded", "--goal", "g", "--repo", repo, "--branch", "goal/existing", "--worktree-root", filepath.Join(t.TempDir(), "worktrees"), "--min-free-mb=1", "--", "sh", "-c", "printf '%s' " + shellQuote(string(raw))}, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "no direct-edit fallback") {
 		t.Fatalf("error=%v", err)
 	}
@@ -169,6 +196,103 @@ func TestGuardedDispatchFailureIsDurableAndNeverFallsBack(t *testing.T) {
 	}
 }
 
+func TestCheckpointApprovalRerunIsConsumedExactlyOnce(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	home, worktrees := t.TempDir(), filepath.Join(t.TempDir(), "worktrees")
+	plan := guardedPlan{
+		Goal: "g", Project: repo, CommitMessage: "approved work",
+		Actions: []plannedAction{
+			{Kind: "worker", Goal: "adjacent", Project: repo, Command: []string{"sh", "-c", "printf approved > approved.txt"}, Files: []string{"approved.txt"}},
+			{Kind: "push", Goal: "g", Project: repo},
+		},
+		Checks: []plannedCheck{{Command: []string{"test", "-f", "approved.txt"}}},
+	}
+	raw, _ := json.Marshal(plan)
+	args := []string{"--guarded", "--goal", "g", "--repo", repo, "--branch", "goal/approved", "--worktree-root", worktrees, "--min-free-mb=1", "--timeout=10s", "--", "sh", "-c", "printf '%s' " + shellQuote(string(raw))}
+	err := cmdGuardedLoop(home, args, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "requires human approval") {
+		t.Fatalf("first pass error=%v", err)
+	}
+	st, _ := loadState(home)
+	var id string
+	for candidate, c := range st.Checkpoints {
+		if c.pending() {
+			id = candidate
+		}
+	}
+	if id == "" {
+		t.Fatal("no pending checkpoint")
+	}
+	if _, err := checkpointChange(home, "approve", "", id, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdGuardedLoop(home, args, io.Discard, io.Discard); err != nil {
+		t.Fatalf("approved rerun: %v", err)
+	}
+	st, _ = loadState(home)
+	if c := st.Checkpoints[id]; c.Consumed == 0 || c.usable() {
+		t.Fatalf("checkpoint after rerun=%+v", c)
+	}
+}
+
+func TestTimedOutWorkerCanResumeAfterLeaseExpiry(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	home, worktrees := t.TempDir(), filepath.Join(t.TempDir(), "worktrees")
+	makePlan := func(command string) string {
+		plan := guardedPlan{
+			Goal: "g", Project: repo, CommitMessage: "resume work",
+			Actions: []plannedAction{
+				{Kind: "worker", Goal: "g", Project: repo, Command: []string{"sh", "-c", command}, Files: []string{"result.txt"}},
+				{Kind: "push", Goal: "g", Project: repo},
+			},
+			Checks: []plannedCheck{{Command: []string{"test", "-s", "result.txt"}}},
+		}
+		raw, _ := json.Marshal(plan)
+		return "printf '%s' " + shellQuote(string(raw))
+	}
+	base := []string{"--guarded", "--goal", "g", "--repo", repo, "--branch", "goal/resume", "--worktree-root", worktrees, "--min-free-mb=1", "--lease-ttl=400ms", "--timeout=100ms", "--", "sh", "-c"}
+	first := append(append([]string{}, base...), makePlan("printf partial > result.txt; sleep 5"))
+	err := cmdGuardedLoop(home, first, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "worker timed out") {
+		t.Fatalf("timeout error=%v", err)
+	}
+	st, _ := loadState(home)
+	var pass string
+	for id := range st.Passes {
+		pass = id
+	}
+	if pass == "" || st.Passes[pass].Status != "resumable" {
+		t.Fatalf("passes=%+v", st.Passes)
+	}
+	time.Sleep(450 * time.Millisecond)
+	secondBase := []string{"--guarded", "--resume", pass, "--goal", "g", "--repo", repo, "--branch", "goal/resume", "--worktree-root", worktrees, "--min-free-mb=1", "--lease-ttl=2s", "--timeout=1s", "--", "sh", "-c"}
+	second := append(secondBase, makePlan("printf resumed > result.txt"))
+	if err := cmdGuardedLoop(home, second, io.Discard, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	st, _ = loadState(home)
+	if st.Passes[pass].Status != "completed" || !st.Leases["g"].Released {
+		t.Fatalf("pass=%+v lease=%+v", st.Passes[pass], st.Leases["g"])
+	}
+}
+
+func TestPostBoundaryGuardedFlagStaysLegacyMindArgument(t *testing.T) {
+	home := t.TempDir()
+	var out, diag bytes.Buffer
+	if err := cmdLoop(home, []string{"--max-passes=1", "--settle=1", "--", "sh", "-c", "test \"$1\" = --guarded", "mind", "--guarded"}, &out, &diag); err != nil {
+		t.Fatalf("legacy loop reinterpreted mind argument: %v\n%s", err, diag.String())
+	}
+	opts, err := parseGuardedOptions([]string{"--guarded", "--goal", "g", "--repo", ".", "--branch", "b", "--", "mind", "--guarded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opts.Planner[len(opts.Planner)-1]; got != "--guarded" {
+		t.Fatalf("planner tail=%q", got)
+	}
+}
+
 func TestGuardedPolicyForbidsDangerousActionsAndNeedsChecks(t *testing.T) {
 	opts := guardedOptions{Goal: "g", Repo: "/repo", MaxFiles: 20}
 	base := guardedPlan{Goal: "g", Project: "/repo", CommitMessage: "x", Actions: []plannedAction{{Kind: "worker", Goal: "g", Project: "/repo", Command: []string{"true"}, Files: []string{"x"}}}}
@@ -183,5 +307,36 @@ func TestGuardedPolicyForbidsDangerousActionsAndNeedsChecks(t *testing.T) {
 	}
 	if _, err := validatePlan(opts, base); err == nil || !strings.Contains(err.Error(), "verification check") {
 		t.Fatalf("missing checks error=%v", err)
+	}
+}
+
+func TestGuardedBudgetsAreConfigurableAndPlanOutputIsBounded(t *testing.T) {
+	opts, err := parseGuardedOptions([]string{"--guarded", "--goal", "g", "--repo", ".", "--branch", "b", "--max-files=3", "--budgets", `{"changed_files":3,"pushes":0}`, "--", "mind"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Budget.Limits["changed_files"] != 3 || opts.Budget.Limits["pushes"] != 0 {
+		t.Fatalf("budget=%+v", opts.Budget)
+	}
+	b := boundedBuffer{Limit: 3}
+	if _, err := b.Write([]byte("four")); err == nil {
+		t.Fatal("oversized planner output was accepted")
+	}
+}
+
+func TestGuardedRejectsSelfHomeSymlinkIntoCheckout(t *testing.T) {
+	requireSandbox(t)
+	repo, _ := testRepository(t)
+	target := filepath.Join(repo, ".self")
+	if err := os.Mkdir(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(target, home); err != nil {
+		t.Fatal(err)
+	}
+	err := cmdGuardedLoop(home, []string{"--guarded", "--goal", "g", "--repo", repo, "--branch", "b", "--min-free-mb=1", "--", "true"}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "SELF_HOME must be outside") {
+		t.Fatalf("error=%v", err)
 	}
 }

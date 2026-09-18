@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -149,7 +148,7 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 		_, err := fmt.Fprintln(out, loopUsage+"\n\n"+guardedUsage)
 		return err
 	}
-	if slices.Contains(args, "--guarded") {
+	if len(args) > 0 && args[0] == "--guarded" {
 		return cmdGuardedLoop(home, args, out, diag)
 	}
 	opts, err := parseLoopOptions(args)

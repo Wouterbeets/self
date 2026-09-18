@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +28,8 @@ type guardedOptions struct {
 	MinFreeMB    uint64
 	MemoryMB     uint64
 	CPUSeconds   uint64
+	Budget       passBudget
+	Resume       string
 	Planner      []string
 }
 
@@ -56,6 +57,20 @@ type plannedCheck struct {
 	Heavy   bool     `json:"heavy,omitempty"`
 }
 
+const maxPlanBytes = 1024 * 1024
+
+type boundedBuffer struct {
+	bytes.Buffer
+	Limit int
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if b.Len()+len(p) > b.Limit {
+		return 0, fmt.Errorf("planner output exceeds %d bytes", b.Limit)
+	}
+	return b.Buffer.Write(p)
+}
+
 const guardedUsage = `Guarded mode:
   self loop --guarded --goal ID --repo PATH --branch NAME [options] -- <planner> [args...]
 
@@ -67,12 +82,14 @@ push, verifies the remote branch, records a pass summary, and releases the lease
 
 Options:
   --worktree-root PATH  parent for isolated goal worktrees (default: sibling .self-worktrees)
-  --lease-ttl D         expiring ownership period (default 30m)
+  --lease-ttl D         expiring ownership period (default 1h)
   --timeout D           planner, worker, and check timeout (default 30m)
   --max-files N         changed-file budget, at most 20 (default 20)
   --min-free-mb N       required free temporary space (default 512)
   --memory-mb N         process address-space limit (default 2048)
   --cpu-seconds N       process CPU-time limit (default 1800)
+  --budgets JSON        override guarded category limits
+  --resume PASS         explicitly steal an expired pass lease and reuse its worktree
 
 Guarded mode requires git and bubblewrap. It does not fall back to the invocation
 checkout when dispatch fails. Arbitrary legacy loop minds remain unrestricted.`
@@ -85,13 +102,18 @@ func parseGuardedOptions(args []string) (guardedOptions, error) {
 	flags.StringVar(&opts.Repo, "repo", "", "")
 	flags.StringVar(&opts.Branch, "branch", "", "")
 	flags.StringVar(&opts.WorktreeRoot, "worktree-root", "", "")
-	leaseTTL := flags.String("lease-ttl", "30m", "")
+	flags.StringVar(&opts.Resume, "resume", "", "")
+	leaseTTL := flags.String("lease-ttl", "1h", "")
 	timeout := flags.String("timeout", "30m", "")
 	maxFiles := flags.String("max-files", "20", "")
 	minFree := flags.String("min-free-mb", "512", "")
 	memory := flags.String("memory-mb", "2048", "")
 	cpu := flags.String("cpu-seconds", "1800", "")
-	filtered := slices.DeleteFunc(slices.Clone(args), func(s string) bool { return s == "--guarded" })
+	budgets := flags.String("budgets", "", "")
+	filtered := args
+	if len(filtered) > 0 && filtered[0] == "--guarded" {
+		filtered = filtered[1:]
+	}
 	if err := flags.Parse(filtered); err != nil {
 		return opts, fmt.Errorf("guarded loop options: %w — %s", err, guardedUsage)
 	}
@@ -103,11 +125,27 @@ func parseGuardedOptions(args []string) (guardedOptions, error) {
 	if opts.Timeout, err = positiveDuration(*timeout, "--timeout"); err != nil {
 		return opts, err
 	}
+	if opts.LeaseTTL <= opts.Timeout {
+		return opts, fmt.Errorf("--lease-ttl must be longer than --timeout so ownership cannot expire during one bounded action")
+	}
 	if opts.MaxFiles, err = positiveInt(*maxFiles, "--max-files"); err != nil {
 		return opts, err
 	}
-	if opts.MaxFiles > guardedBudget().Limits["changed_files"] {
-		return opts, fmt.Errorf("--max-files cannot exceed guarded limit %d", guardedBudget().Limits["changed_files"])
+	opts.Budget = guardedBudget()
+	if *budgets != "" {
+		var overrides map[string]int
+		if err := json.Unmarshal([]byte(*budgets), &overrides); err != nil {
+			return opts, fmt.Errorf("--budgets needs a JSON object of category limits: %w", err)
+		}
+		for category, limit := range overrides {
+			if _, known := opts.Budget.Limits[category]; !known || limit < 0 {
+				return opts, fmt.Errorf("--budgets has unknown category or negative limit %q", category)
+			}
+			opts.Budget.Limits[category] = limit
+		}
+	}
+	if opts.MaxFiles > opts.Budget.Limits["changed_files"] {
+		return opts, fmt.Errorf("--max-files cannot exceed guarded changed_files limit %d", opts.Budget.Limits["changed_files"])
 	}
 	parsedFree, err := strconv.ParseUint(*minFree, 10, 64)
 	if err != nil || parsedFree < 1 {
@@ -161,6 +199,10 @@ func runSandbox(ctx context.Context, writable, dir string, argv []string, stdin 
 	}
 	if writable != "" {
 		args = append(args, "--bind", writable, writable)
+		gitFile := filepath.Join(writable, ".git")
+		if _, err := os.Stat(gitFile); err == nil {
+			args = append(args, "--ro-bind", gitFile, gitFile)
+		}
 	}
 	args = append(args, "--chdir", dir, "--")
 	args = append(args, argv...)
@@ -184,7 +226,8 @@ func runSandbox(ctx context.Context, writable, dir string, argv []string, stdin 
 }
 
 func repoOutput(repo string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	safe := []string{"-C", repo, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}
+	cmd := exec.Command("git", append(safe, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.Output()
 	if err != nil {
@@ -197,7 +240,12 @@ func repoOutput(repo string, args ...string) ([]byte, error) {
 }
 
 func repoRun(repo string, args ...string) error {
-	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	return repoRunContext(context.Background(), repo, args...)
+}
+
+func repoRunContext(ctx context.Context, repo string, args ...string) error {
+	safe := []string{"-C", repo, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}
+	cmd := exec.CommandContext(ctx, "git", append(safe, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -209,6 +257,21 @@ func repoRun(repo string, args ...string) error {
 func repoStatus(repo string) (string, error) {
 	out, err := repoOutput(repo, "status", "--porcelain=v1", "--untracked-files=all")
 	return string(out), err
+}
+
+func gitPointer(worktree string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(worktree, ".git"))
+}
+
+func verifyGitPointer(worktree string, expected []byte) error {
+	actual, err := gitPointer(worktree)
+	if err != nil {
+		return fmt.Errorf("worktree Git pointer is unreadable: %w", err)
+	}
+	if !bytes.Equal(actual, expected) {
+		return fmt.Errorf("worker changed the protected worktree Git pointer")
+	}
+	return nil
 }
 
 func verifyRepository(repo string) error {
@@ -230,9 +293,70 @@ func verifyRepository(repo string) error {
 	return nil
 }
 
+func verifyRecoveredWorktree(worktree, repository, branch string) error {
+	common, err := repoOutput(worktree, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("cannot recover worktree: %w", err)
+	}
+	wantCommon, err := repoOutput(repository, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	resolve := func(base string, raw []byte) (string, error) {
+		path := strings.TrimSpace(string(raw))
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(base, path)
+		}
+		return filepath.EvalSymlinks(path)
+	}
+	actualCommon, err := resolve(worktree, common)
+	if err != nil {
+		return err
+	}
+	expectedCommon, err := resolve(repository, wantCommon)
+	if err != nil {
+		return err
+	}
+	if actualCommon != expectedCommon {
+		return fmt.Errorf("recovery worktree belongs to another repository")
+	}
+	actualBranch, err := repoOutput(worktree, "branch", "--show-current")
+	if err != nil || strings.TrimSpace(string(actualBranch)) != branch {
+		return fmt.Errorf("recovery worktree branch is %q, expected %q: %w", strings.TrimSpace(string(actualBranch)), branch, err)
+	}
+	return nil
+}
+
 func pathWithin(parent, child string) bool {
 	rel, err := filepath.Rel(parent, child)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func canonicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	probe := abs
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return resolved, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(probe))
+		probe = parent
+	}
 }
 
 func freeMegabytes(path string) (uint64, error) {
@@ -300,12 +424,26 @@ var forbiddenActions = map[string]bool{
 }
 
 func validatePlan(opts guardedOptions, plan guardedPlan) (planDecision, error) {
-	d := planDecision{Budget: guardedBudget()}
+	budget := opts.Budget
+	if budget.Limits == nil {
+		budget = guardedBudget()
+	}
+	budget.Used = map[string]int{}
+	d := planDecision{Budget: budget}
 	if plan.Goal != opts.Goal || plan.Project != opts.Repo {
 		return d, fmt.Errorf("plan goal/project must exactly match the guarded lease")
 	}
 	if len(plan.Actions) == 0 {
 		return d, fmt.Errorf("plan has no actions")
+	}
+	if len(plan.Actions) > 4 {
+		return d, fmt.Errorf("guarded pass action limit is 4")
+	}
+	if len(plan.Checks) > 8 {
+		return d, fmt.Errorf("guarded pass check limit is 8")
+	}
+	if err := d.Budget.consume("repositories", 1); err != nil {
+		return d, err
 	}
 	var gated []plannedAction
 	for i := range plan.Actions {
@@ -337,12 +475,15 @@ func validatePlan(opts guardedOptions, plan guardedPlan) (planDecision, error) {
 			}
 			d.Worker, d.Files = a, files
 		case "push":
+			if d.Push {
+				return d, fmt.Errorf("guarded pass permits exactly one push action")
+			}
 			if err := d.Budget.consume("pushes", 1); err != nil {
 				return d, err
 			}
 			d.Push = true
 		case "open-pr", "infrastructure":
-			if err := d.Budget.consume("pr_mutations", 1); err != nil && a.Kind == "open-pr" {
+			if err := d.Budget.consume("pr_mutations", 1); err != nil {
 				return d, err
 			}
 			d.Unsupported = append(d.Unsupported, a.Kind)
@@ -371,6 +512,9 @@ func validatePlan(opts guardedOptions, plan guardedPlan) (planDecision, error) {
 	}
 	if len(plan.Checks) == 0 {
 		return d, fmt.Errorf("guarded completion requires at least one declared verification check")
+	}
+	if len(d.Unsupported) > 0 {
+		return d, fmt.Errorf("this controller has no executor for %s", strings.Join(d.Unsupported, ", "))
 	}
 	if len(gated) > 0 {
 		d.Checkpoint, _ = json.Marshal(gated)
@@ -412,23 +556,38 @@ func sameFiles(actual, declared []string) error {
 	return nil
 }
 
-func withHeavyLock(home string, fn func() error) error {
+func withHeavyLock(ctx context.Context, home string, fn func() error) error {
 	f, err := os.OpenFile(filepath.Join(home, ".loop-heavy.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return err
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("heavyweight verification lock: %w", ctx.Err())
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return fn()
 }
 
 func consumeMatchingCheckpoint(home string, actions json.RawMessage) (string, bool, error) {
+	canonical, err := canonicalActions(string(actions))
+	if err != nil {
+		return "", false, err
+	}
 	events, err := withRailLock(home, func(st *state) ([]Event, error) {
 		for id, c := range st.Checkpoints {
-			if c.usable() && bytes.Equal(c.Actions, actions) {
+			if c.usable() && bytes.Equal(c.Actions, canonical) {
 				return []Event{railEvent(checkpointUsed, map[string]string{"id": id})}, nil
 			}
 		}
@@ -458,6 +617,31 @@ func verifyRemote(worktree, branch, commit string) error {
 	return nil
 }
 
+func assertLease(home string, expected goalLease, now time.Time) error {
+	_, err := withRailLock(home, func(st *state) ([]Event, error) {
+		current := st.Leases[expected.Goal]
+		if current == nil || !current.active(now) || current.Owner != expected.Owner || current.Invocation != expected.Invocation || current.Token != expected.Token || current.Repository != expected.Repository || current.Branch != expected.Branch || current.Worktree != expected.Worktree {
+			return nil, fmt.Errorf("guarded ownership was lost for goal %q", expected.Goal)
+		}
+		return nil, nil
+	})
+	return err
+}
+
+func finishGuardedPass(home string, lease goalLease, evidence map[string]any, now time.Time) error {
+	_, err := withRailLock(home, func(st *state) ([]Event, error) {
+		current := st.Leases[lease.Goal]
+		if current == nil || !current.active(now) || current.Owner != lease.Owner || current.Invocation != lease.Invocation || current.Token != lease.Token || current.Repository != lease.Repository || current.Branch != lease.Branch || current.Worktree != lease.Worktree {
+			return nil, fmt.Errorf("guarded ownership was lost before completion")
+		}
+		return []Event{
+			railEvent("loop.pass.completed", evidence),
+			railEvent(leaseReleased, map[string]string{"goal": lease.Goal, "owner": lease.Owner, "invocation": lease.Invocation, "token": lease.Token}),
+		}, nil
+	})
+	return err
+}
+
 func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr error) {
 	opts, err := parseGuardedOptions(args)
 	if err != nil {
@@ -470,7 +654,7 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 	if err != nil {
 		return err
 	}
-	canonicalHome, err := filepath.Abs(home)
+	canonicalHome, err := canonicalPath(home)
 	if err != nil {
 		return err
 	}
@@ -500,11 +684,43 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 		owner = "guarded:" + pass
 	}
 	worktree := filepath.Join(opts.WorktreeRoot, pass)
+	resuming := opts.Resume != ""
+	if resuming {
+		pass = opts.Resume
+		st, err := loadState(home)
+		if err != nil {
+			return err
+		}
+		prior := st.Leases[opts.Goal]
+		if prior == nil || prior.Invocation != pass || prior.Repository != opts.Repo || prior.Branch != opts.Branch {
+			return fmt.Errorf("pass %q has no matching lease to recover", pass)
+		}
+		worktree = prior.Worktree
+		if _, err := os.Stat(worktree); err == nil {
+			if err := verifyRecoveredWorktree(worktree, opts.Repo, opts.Branch); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
 	lease := goalLease{Goal: opts.Goal, Owner: owner, Invocation: pass, Repository: opts.Repo, Branch: opts.Branch, Worktree: worktree}
-	if _, err := leaseChange(home, "acquire", lease, opts.LeaseTTL, time.Now().UTC()); err != nil {
+	leaseOp := "acquire"
+	if resuming {
+		leaseOp = "steal"
+	}
+	leaseEvents, err := leaseChange(home, leaseOp, lease, opts.LeaseTTL, time.Now().UTC())
+	if err != nil {
 		return err
 	}
-	started := railEvent("loop.pass.started", map[string]any{"pass": pass, "goal": opts.Goal, "repository": opts.Repo, "branch": opts.Branch, "worktree": worktree})
+	if len(leaseEvents) != 1 || json.Unmarshal(leaseEvents[0].Payload, &lease) != nil || lease.Token == "" {
+		return fmt.Errorf("lease operation returned no fencing generation")
+	}
+	passEvent := "loop.pass.started"
+	if resuming {
+		passEvent = "loop.pass.resumed"
+	}
+	started := railEvent(passEvent, map[string]any{"pass": pass, "goal": opts.Goal, "repository": opts.Repo, "branch": opts.Branch, "worktree": worktree})
 	if err := appendRailEvents(home, started); err != nil {
 		return err
 	}
@@ -520,12 +736,11 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 		_ = appendRailEvents(home, railEvent("loop.pass."+status, map[string]any{"pass": pass, "goal": opts.Goal, "reason": reason, "worktree": worktree}))
 		return errors.New(reason)
 	}
-	if err := createGoalWorktree(opts.Repo, worktree, opts.Branch); err != nil {
-		return fail("failed", err.Error())
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-	var plannerOut bytes.Buffer
+	if _, err := leaseChange(home, "renew", lease, opts.LeaseTTL, time.Now().UTC()); err != nil {
+		return fail("resumable", err.Error())
+	}
+	plannerOut := boundedBuffer{Limit: maxPlanBytes}
 	plannerCommand := append([]string{"env", "SELF_HOME=" + home}, opts.Planner...)
 	err = runSandbox(ctx, "", opts.Repo, plannerCommand, nil, &plannerOut, diag, opts.MemoryMB, opts.CPUSeconds)
 	timedOut := ctx.Err() == context.DeadlineExceeded
@@ -542,8 +757,12 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 	}
 	decision, err := validatePlan(opts, plan)
 	if err != nil {
-		if strings.Contains(err.Error(), "budget exhausted") {
-			_ = appendRailEvents(home, railEvent("loop.budget.exhausted", map[string]any{"pass": pass, "goal": opts.Goal, "reason": err.Error()}))
+		var exhausted *budgetExhausted
+		if errors.As(err, &exhausted) {
+			_ = appendRailEvents(home, railEvent("loop.budget.exhausted", map[string]any{
+				"pass": pass, "goal": opts.Goal, "reason": err.Error(), "category": exhausted.Category,
+				"used": exhausted.Used, "requested": exhausted.Requested, "limit": exhausted.Limit, "budget": decision.Budget,
+			}))
 		}
 		return fail("failed", err.Error())
 	}
@@ -572,17 +791,28 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 			if requestErr != nil {
 				return fail("failed", requestErr.Error())
 			}
-			if err := repoRun(opts.Repo, "worktree", "remove", worktree); err != nil {
-				return fail("resumable", fmt.Sprintf("checkpoint %s pending and clean worktree cleanup failed: %v", id, err))
-			}
-			if _, err := leaseChange(home, "release", goalLease{Goal: opts.Goal, Owner: owner, Invocation: pass}, 0, time.Now().UTC()); err != nil {
+			if _, err := leaseChange(home, "release", lease, 0, time.Now().UTC()); err != nil {
 				return fail("resumable", fmt.Sprintf("checkpoint %s pending and lease release failed: %v", id, err))
 			}
 			settled = true
 			return fail("resumable", fmt.Sprintf("checkpoint %s requires human approval; rerun after approval", id))
 		}
 	}
+	if _, err := os.Stat(worktree); os.IsNotExist(err) {
+		if err := createGoalWorktree(opts.Repo, worktree, opts.Branch); err != nil {
+			return fail("failed", err.Error())
+		}
+	} else if err != nil {
+		return fail("failed", err.Error())
+	}
+	pointer, err := gitPointer(worktree)
+	if err != nil {
+		return fail("failed", err.Error())
+	}
 
+	if _, err := leaseChange(home, "renew", lease, opts.LeaseTTL, time.Now().UTC()); err != nil {
+		return fail("resumable", err.Error())
+	}
 	ctx, cancel = context.WithTimeout(context.Background(), opts.Timeout)
 	err = runSandbox(ctx, worktree, worktree, decision.Worker.Command, nil, out, diag, opts.MemoryMB, opts.CPUSeconds)
 	timedOut = ctx.Err() == context.DeadlineExceeded
@@ -593,6 +823,9 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 	if err != nil {
 		return fail("resumable", fmt.Sprintf("worker failed: %v", err))
 	}
+	if err := verifyGitPointer(worktree, pointer); err != nil {
+		return fail("failed", err.Error())
+	}
 	actual, err := changedFiles(worktree)
 	if err != nil {
 		return fail("failed", err.Error())
@@ -602,28 +835,55 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 	}
 	for i, check := range plan.Checks {
 		run := func() error {
+			if _, err := leaseChange(home, "renew", lease, opts.LeaseTTL, time.Now().UTC()); err != nil {
+				return err
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 			defer cancel()
 			return runSandbox(ctx, worktree, worktree, check.Command, nil, out, diag, opts.MemoryMB, opts.CPUSeconds)
 		}
 		if check.Heavy {
-			err = withHeavyLock(home, run)
+			lockCtx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+			err = withHeavyLock(lockCtx, home, run)
+			cancel()
 		} else {
 			err = run()
 		}
 		if err != nil {
 			return fail("resumable", fmt.Sprintf("check %d failed: %v", i+1, err))
 		}
+		if err := verifyGitPointer(worktree, pointer); err != nil {
+			return fail("failed", err.Error())
+		}
 		_ = appendRailEvents(home, railEvent("loop.pass.check.passed", map[string]any{"pass": pass, "goal": opts.Goal, "command": check.Command, "heavy": check.Heavy}))
+	}
+	actual, err = changedFiles(worktree)
+	if err != nil {
+		return fail("failed", err.Error())
+	}
+	if err := sameFiles(actual, decision.Files); err != nil {
+		return fail("failed", err.Error())
 	}
 	if strings.TrimSpace(plan.CommitMessage) == "" {
 		return fail("failed", "plan needs a nonempty commit_message")
 	}
+	if _, err := leaseChange(home, "renew", lease, opts.LeaseTTL, time.Now().UTC()); err != nil {
+		return fail("resumable", err.Error())
+	}
 	addArgs := append([]string{"add", "--"}, decision.Files...)
-	if err := repoRun(worktree, addArgs...); err != nil {
+	gitCtx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	err = repoRunContext(gitCtx, worktree, addArgs...)
+	cancel()
+	if err != nil {
 		return fail("failed", err.Error())
 	}
-	if err := repoRun(worktree, "-c", "user.name=self guarded loop", "-c", "user.email=self@localhost", "commit", "-m", plan.CommitMessage); err != nil {
+	if _, err := leaseChange(home, "renew", lease, opts.LeaseTTL, time.Now().UTC()); err != nil {
+		return fail("resumable", err.Error())
+	}
+	gitCtx, cancel = context.WithTimeout(context.Background(), opts.Timeout)
+	err = repoRunContext(gitCtx, worktree, "-c", "user.name=self guarded loop", "-c", "user.email=self@localhost", "commit", "-m", plan.CommitMessage)
+	cancel()
+	if err != nil {
 		return fail("failed", err.Error())
 	}
 	commitRaw, err := repoOutput(worktree, "rev-parse", "HEAD")
@@ -632,7 +892,13 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 	}
 	commit := strings.TrimSpace(string(commitRaw))
 	if decision.Push {
-		if err := repoRun(worktree, "push", "origin", "HEAD:refs/heads/"+opts.Branch); err != nil {
+		if _, err := leaseChange(home, "renew", lease, opts.LeaseTTL, time.Now().UTC()); err != nil {
+			return fail("resumable", err.Error())
+		}
+		pushCtx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+		err := repoRunContext(pushCtx, worktree, "push", "origin", "HEAD:refs/heads/"+opts.Branch)
+		cancel()
+		if err != nil {
 			return fail("resumable", err.Error())
 		}
 		_ = appendRailEvents(home, railEvent("loop.pass.push.completed", map[string]any{"pass": pass, "goal": opts.Goal, "branch": opts.Branch, "commit": commit, "force": false}))
@@ -657,10 +923,7 @@ func cmdGuardedLoop(home string, args []string, out, diag io.Writer) (retErr err
 		"declared_files": decision.Files, "checks": len(plan.Checks), "force_push": false,
 		"budget": budgetRaw,
 	}
-	if err := appendRailEvents(home, railEvent("loop.pass.completed", evidence)); err != nil {
-		return err
-	}
-	if _, err := leaseChange(home, "release", goalLease{Goal: opts.Goal, Owner: owner, Invocation: pass}, 0, time.Now().UTC()); err != nil {
+	if err := finishGuardedPass(home, lease, evidence, time.Now().UTC()); err != nil {
 		return err
 	}
 	settled = true
