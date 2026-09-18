@@ -452,7 +452,10 @@ func validatePlan(opts guardedOptions, plan guardedPlan) (planDecision, error) {
 		if forbiddenActions[a.Kind] {
 			return d, fmt.Errorf("action %q is forbidden in guarded mode", a.Kind)
 		}
-		if scope == scopeAdjacent || scope == scopeExpanding || a.Kind == "open-pr" || a.Kind == "infrastructure" {
+		if scope == scopeExpanding {
+			return d, fmt.Errorf("scope-expanding action %q has no guarded executor", a.Kind)
+		}
+		if scope == scopeAdjacent || a.Kind == "open-pr" || a.Kind == "infrastructure" {
 			gated = append(gated, *a)
 		}
 		switch a.Kind {

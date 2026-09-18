@@ -308,6 +308,11 @@ func TestGuardedPolicyForbidsDangerousActionsAndNeedsChecks(t *testing.T) {
 	if _, err := validatePlan(opts, base); err == nil || !strings.Contains(err.Error(), "verification check") {
 		t.Fatalf("missing checks error=%v", err)
 	}
+	expanding := base
+	expanding.Actions = []plannedAction{{Kind: "worker", Goal: "other", Project: "/elsewhere", Command: []string{"true"}, Files: []string{"x"}}}
+	if _, err := validatePlan(opts, expanding); err == nil || !strings.Contains(err.Error(), "scope-expanding") {
+		t.Fatalf("scope expansion error=%v", err)
+	}
 }
 
 func TestGuardedBudgetsAreConfigurableAndPlanOutputIsBounded(t *testing.T) {
