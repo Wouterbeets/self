@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -145,8 +146,11 @@ func loopAsk(pass, maxPasses, quiet, settle int, timeout time.Duration, nudge st
 
 func cmdLoop(home string, args []string, out, diag io.Writer) error {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		_, err := fmt.Fprintln(out, loopUsage)
+		_, err := fmt.Fprintln(out, loopUsage+"\n\n"+guardedUsage)
 		return err
+	}
+	if slices.Contains(args, "--guarded") {
+		return cmdGuardedLoop(home, args, out, diag)
 	}
 	opts, err := parseLoopOptions(args)
 	if err != nil {

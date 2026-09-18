@@ -77,6 +77,28 @@ self loop -- claude -p            # run a mind until the log stops changing
 self learn lessons/chat | claude -p | self hear   # learn from another instance
 ```
 
+For repository-writing automation on Linux, guarded mode separates a read-only
+planner from one constrained worker:
+
+```sh
+self loop --guarded --goal issue-123 --repo "$PWD" --branch goal/issue-123 -- ./planner
+self view loop
+```
+
+The controller atomically leases the goal, creates a separate Git worktree
+outside the invocation checkout, runs planner and worker processes in Bubblewrap
+namespaces, permits writes only in that worktree, applies pass budgets, runs
+declared checks, performs a fixed additive push, and verifies the clean worktree
+and expected remote ref before recording completion. Failed dispatch never
+falls back to direct edits. Checkpoints and leases are durable append-only state.
+
+Guarded mode requires Linux, `bwrap`, `prlimit`, and Git. It is process
+containment against repository writes and ordinary network access, not a VM or
+an OS-account boundary. It does not claim to block every local IPC side channel,
+kernel exploit, or action performed by the trusted controller. Legacy `self
+loop` behavior remains backward compatible and unrestricted unless `--guarded`
+is selected; installed command capabilities also still run as the user.
+
 The whole contract is [`PROTOCOL.md`](PROTOCOL.md), which is also what
 `self help` prints. Nothing else restates it. `./demo.sh` drives all of it
 offline through `examples/mind-stub`, in about fifteen seconds.
@@ -107,10 +129,11 @@ POST; simply following a link cannot run one.
 ## Limits
 
 There is no human review step between authoring and signing: piping a mind's
-output into `self hear` signs whatever it authored. Nothing is sandboxed. The
-log is unbounded. Read a generated script before you trust it. What you inspect
-is readable intent and readable output rather than an opaque binary; that is
-the advantage, not safety.
+output into `self hear` signs whatever it authored. Legacy loops and capability
+scripts are not sandboxed; the opt-in guarded loop has only the narrower
+Bubblewrap boundary described above. The log is unbounded. Read a generated
+script before you trust it. What you inspect is readable intent and readable
+output rather than an opaque binary; that is the advantage, not safety.
 
 ## Experiments
 

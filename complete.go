@@ -19,6 +19,8 @@ var verbCandidates = []struct{ name, desc string }{
 	{"run", "execute a command capability and append its events"},
 	{"view", "replay a pure view; built-in log is always available"},
 	{"loop", "run a mind until the log stops changing"},
+	{"lease", "atomically manage a goal writer lease"},
+	{"checkpoint", "manage durable one-shot action approval"},
 	{"learn", "deposit an account and print its learning prompt"},
 	{"give", "write an event or capability account"},
 	{"rehydrate", "rebuild derived capability files from the log"},
@@ -109,6 +111,10 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 			return nil
 		}
 		for _, f := range []struct{ name, desc string }{
+			{"--guarded", "use isolated planner and worker rails"},
+			{"--goal", "goal ID for guarded ownership"},
+			{"--repo", "repository for guarded work"},
+			{"--branch", "owned goal branch"},
 			{"--ask", "the ask; every pass sees it"},
 			{"--max-passes", "at most N passes"},
 			{"--settle", "quiet passes in a row before the loop stops"},
@@ -136,6 +142,9 @@ func completeCapNames(st *state, typ, cur string, out io.Writer) {
 	}
 	if typ == kindView && st.cap(kindView, "log") == nil && strings.HasPrefix("log", cur) {
 		fmt.Fprintf(out, "log\tthe last %d events; --all for the whole log (built in)\n", builtinLogTail)
+	}
+	if typ == kindView && st.cap(kindView, "loop") == nil && strings.HasPrefix("loop", cur) {
+		fmt.Fprintln(out, "loop\tguarded pass audit, leases, and checkpoints (built in)")
 	}
 }
 
