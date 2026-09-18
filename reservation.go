@@ -59,17 +59,41 @@ func repositoryIdentity(repo string) (string, string, error) {
 func reservationRootCandidate() (string, error) {
 	root := os.Getenv("SELF_RESERVATION_DIR")
 	if root == "" {
-		if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
-			root = filepath.Join(runtimeDir, "self", "reservations")
-		} else {
-			root = filepath.Join(os.TempDir(), "self-"+strconv.Itoa(os.Getuid()), "reservations")
-		}
+		root = filepath.Join("/tmp", "self-"+strconv.Itoa(os.Getuid()), "reservations")
 	}
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
 	}
+	for current := root; ; current = filepath.Dir(current) {
+		if info, err := os.Lstat(current); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("reservation directory component %s is a symlink", current)
+		} else if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+		if parent := filepath.Dir(current); parent == current {
+			break
+		}
+	}
 	return canonicalPath(root)
+}
+
+func verifyPrivateDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("reservation path %s is not a real directory", path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Getuid() {
+		return fmt.Errorf("reservation directory %s is not owned by uid %d", path, os.Getuid())
+	}
+	if info.Mode().Perm() != 0700 {
+		return fmt.Errorf("reservation directory %s mode is %04o, want 0700", path, info.Mode().Perm())
+	}
+	return nil
 }
 
 func ensureReservationRoot(root string) (string, error) {
@@ -81,7 +105,19 @@ func ensureReservationRoot(root string) (string, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return "", err
 	}
+	defaultParent := filepath.Join("/tmp", "self-"+strconv.Itoa(os.Getuid()))
+	if pathWithin(defaultParent, root) {
+		if err := os.Chmod(defaultParent, 0700); err != nil {
+			return "", err
+		}
+		if err := verifyPrivateDirectory(defaultParent); err != nil {
+			return "", err
+		}
+	}
 	if err := os.Chmod(root, 0700); err != nil {
+		return "", err
+	}
+	if err := verifyPrivateDirectory(root); err != nil {
 		return "", err
 	}
 	return filepath.EvalSymlinks(root)

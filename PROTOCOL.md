@@ -491,10 +491,13 @@ There is never a direct-edit fallback.
 Guarded mode also holds a repository reservation for its complete
 worker/check/commit/push/cleanup lifecycle. The reservation identity is the
 SHA-256 of the symlink-resolved Git common directory, so every worktree and path
-alias of one repository converges on one private lock below
-`SELF_RESERVATION_DIR`, `XDG_RUNTIME_DIR`, or a mode-0700 per-user temporary
-directory outside the repository. Acquisition is nonblocking and fails closed
-with holder evidence.
+alias of one repository converges on one private lock below explicit
+`SELF_RESERVATION_DIR` or the deterministic `/tmp/self-<uid>/reservations`
+default. The default depends only on the numeric UID, so direct guarded and
+scrubbed capability processes cannot diverge through `XDG_RUNTIME_DIR`,
+`TMPDIR`, or `HOME`. The per-user parent and reservation root are real,
+UID-owned mode-0700 directories outside every repository worktree; symlink
+components fail closed. Acquisition is nonblocking and reports holder evidence.
 
 `self reserve dispatch <repository> -- <dispatch-helper> ...` is the integration
 surface for dispatch capabilities. It holds the same reservation while the
@@ -655,7 +658,7 @@ SELF_LOOP_MAX_PASSES   pass cap (12)
 SELF_LOOP_SETTLE       quiet passes before the loop stops (2)
 SELF_LOOP_TIMEOUT      per-mind timeout (30m)
 SELF_BINARY            current self executable, supplied to command capabilities
-SELF_RESERVATION_DIR   optional private root for repository reservation locks
+SELF_RESERVATION_DIR   optional private lock root (default /tmp/self-<uid>/reservations)
 SELF_*                 anything else passes through to capability scripts
 ```
 

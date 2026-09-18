@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -184,6 +185,67 @@ func TestDispatchFixturesAuditReservationAndHerdrDiscovery(t *testing.T) {
 				t.Errorf("%s contains hardcoded Herdr path %q", filename, forbidden)
 			}
 		}
+	}
+}
+
+func TestProductionDefaultReservationMatchesScrubbedCapabilityEnvironment(t *testing.T) {
+	repo, _ := testRepository(t)
+	binary := buildSelfForReservationTest(t)
+	home := t.TempDir()
+	t.Setenv("SELF_RESERVATION_DIR", "")
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "xdg-outside"))
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "tmp-outside"))
+	directPath, _, directIdentity, err := reservationPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := filepath.Join("/tmp", "self-"+strconv.Itoa(os.Getuid()), "reservations")
+	if filepath.Dir(directPath) != wantRoot {
+		t.Fatalf("direct default root=%s, want %s", filepath.Dir(directPath), wantRoot)
+	}
+	if info, err := os.Stat(wantRoot); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm() != 0700 {
+		t.Fatalf("default root mode=%v", info.Mode().Perm())
+	}
+	installReservationFixture(t, home, "reservation.probe", "reservation-probe.py")
+	held, err := acquireRepositoryReservation(repo, "direct-production-default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	cmd := exec.Command(binary, "run", "reservation.probe", repo)
+	cmd.Env = append(os.Environ(), "SELF_HOME="+home, "SELF_CALLER=reservation-default-test")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("reservation probe capability: %v\n%s", err, out)
+	}
+	st, err := loadState(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Identity         string `json:"identity"`
+		Path             string `json:"path"`
+		Available        bool   `json:"available"`
+		SawXDGRuntimeDir bool   `json:"saw_xdg_runtime_dir"`
+		SawTMPDIR        bool   `json:"saw_tmpdir"`
+	}
+	for _, event := range st.Events {
+		if event.Name == "reservation.probed" {
+			_ = json.Unmarshal(event.Payload, &probe)
+		}
+	}
+	if probe.Path != directPath || probe.Identity != directIdentity {
+		t.Fatalf("capability lock=%s/%s, direct=%s/%s", probe.Identity, probe.Path, directIdentity, directPath)
+	}
+	if probe.Available {
+		t.Fatal("scrubbed capability acquired a different reservation while direct lock was held")
+	}
+	if probe.SawXDGRuntimeDir {
+		t.Fatal("capability unexpectedly inherited XDG_RUNTIME_DIR")
+	}
+	if probe.SawTMPDIR {
+		t.Fatal("capability unexpectedly inherited TMPDIR")
 	}
 }
 
