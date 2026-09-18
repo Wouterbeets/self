@@ -501,7 +501,9 @@ surface for dispatch capabilities. It holds the same reservation while the
 helper creates the worktree and starts the agent, then ingests the helper's
 event wire before unlocking. This ordering means guarded mode either loses the
 reservation immediately or acquires after `agent.started` is authoritative and
-refuses the active writer. `self reserve exec` holds the lock around any native
+refuses the active writer. Successful native publication records
+`loop.reservation.dispatch.published` for the reservation generation.
+`self reserve exec` holds the lock around any native
 helper, while `path` and `check` expose canonical identity and availability.
 Direct raw Herdr invocations cannot be forced to honor self policy; when Herdr
 is configured or discoverable, guarded mode observes its live agents and fails
@@ -512,7 +514,16 @@ An installed Python dispatch capability integrates after parsing its repository
 argument and before any Herdr worktree/start call:
 
 ```python
-if not os.environ.get("SELF_REPOSITORY_RESERVATION"):
+fd_text = os.environ.get("SELF_REPOSITORY_RESERVATION_FD", "")
+held = False
+if fd_text.isdigit():
+    fd = int(fd_text)
+    held = subprocess.run(
+        [os.environ["SELF_BINARY"], "reserve", "held", repo],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        pass_fds=(fd,),
+    ).returncode == 0
+if not held:
     result = subprocess.run([
         os.environ["SELF_BINARY"], "reserve", "dispatch", repo, "--",
         sys.executable, os.path.realpath(__file__), *sys.argv[1:],
@@ -520,13 +531,92 @@ if not os.environ.get("SELF_REPOSITORY_RESERVATION"):
     raise SystemExit(result.returncode)
 ```
 
-The re-executed helper sees `SELF_REPOSITORY_RESERVATION` and proceeds once. It
-must discover Herdr from `SELF_HERDR_BIN` or `PATH`, not a platform-specific
-literal. Its stdout remains event JSONL; the native wrapper commits that wire
-under the reservation and emits no wire to the outer `self run dispatch`.
-Apply this to both `command/dispatch` and `command/dispatch.pane`; an
-`agent.failed` terminal event is authoritative only after any partially started
-writer has been stopped or otherwise proved non-live.
+`reserve held` rejects a forged environment claim: it recomputes canonical
+repository identity, compares the lock inode, and proves the inherited file
+descriptor owns that lock. The re-executed helper proceeds only after this
+native check succeeds. It must discover Herdr from `SELF_HERDR_BIN` or `PATH`,
+not a platform-specific literal. Its stdout remains event JSONL; the native
+wrapper commits that wire under the reservation and emits no wire to the outer
+`self run dispatch`.
+
+Apply this wrapper to the complete sources of both `command/dispatch` and
+`command/dispatch.pane`, after parsing `repo` and before any worktree, pane, or
+agent-start effect. On re-entry, publish the final event batch natively instead
+of printing it for the outer command:
+
+```python
+wire = "".join(json.dumps(event) + "\n" for event in events).encode()
+result = subprocess.run(
+    [os.environ["SELF_BINARY"], "reserve", "publish", repo],
+    input=wire, stdout=subprocess.DEVNULL, pass_fds=(fd,),
+)
+raise SystemExit(result.returncode)
+```
+
+`reserve publish` repeats inherited-FD validation, validates writer liveness,
+ingests the batch, and appends the generation-specific publication receipt. The
+outer wrapper refuses to unlock normally without that receipt. On failure, the
+batch needs structured writer evidence:
+
+```json
+{"name":"agent.failed","payload":{"agent":"NAME","repo":"/repo","writer":{"state":"stopped","cleanup_confirmed":true,"evidence":"agent absent; workspace and worktree removed"}}}
+```
+
+`writer.state` is `not_started` only when no child effect began. Once any child,
+workspace, pane, or worktree may have started, only `stopped` with
+`cleanup_confirmed: true` and concrete nonempty evidence permits reservation
+release. Missing, `live`, or unknown liveness is treated as active: the wrapper
+quarantines the repository reservation until explicit termination. Both scripts
+must stop the partial agent and remove or otherwise reconcile its workspace and
+worktree before claiming `stopped`.
+
+The audited live-script update is the same in both complete sources:
+
+1. Resolve `HERDR` as `os.environ.get("SELF_HERDR_BIN") or shutil.which("herdr")`;
+   fail with `writer.state: not_started` if neither exists. Remove
+   `/opt/homebrew/bin/herdr`, `/usr/local/bin/herdr`, and every other literal.
+2. Enter the validated reservation wrapper above immediately after parsing
+   `repo`; no `herdr worktree create`, pane, workspace, or agent command may
+   precede it.
+3. Track `worktree`, `workspace`, `pane`, and whether an agent or pane child may
+   have launched. Publish `agent.started` through `reserve publish` only after
+   the child is observed live.
+4. In every exception path after a possible child launch, run
+   `herdr pane close <pane_id>` when a pane exists, then
+   `herdr workspace close <workspace_id>` and
+   `herdr worktree remove --workspace <workspace_id>` as applicable. Re-query
+   `herdr agent list` and `herdr worktree list`; only absence of the agent and
+   checkout permits `writer.state: stopped`, `cleanup_confirmed: true`, with
+   evidence naming the IDs and successful probes. Cleanup failure or uncertain
+   probes must publish no terminal claim, causing reservation quarantine.
+5. Replace every direct terminal `print(json.dumps(...))` batch with one
+   `reserve publish` call. `dispatch.pane` applies the same rules to the child
+   started by `herdr pane run`; merely timing out before `report-agent` does not
+   prove that child dead.
+6. Author and inspect the full revised bytes for both `command/dispatch` and
+   `command/dispatch.pane`, then install only through signed `script.authored`
+   events. Never edit derived files under `cap/`.
+
+For `command/dispatch` specifically: keep its existing
+`goal, name, kind, repo = args[:4]` interface; insert reservation entry before
+the `SELF_HERDR_ENV` test and before `herdr worktree create`; set
+`worktree_created` immediately after create and `agent_started` immediately
+after successful `herdr agent start`; publish success only after the live start
+response. Its exception path closes the returned root pane, closes the returned
+workspace, removes that workspace's worktree, then verifies both agent and
+worktree absence before publishing `stopped`. A failure before
+`worktree_created` publishes `not_started`.
+
+For `command/dispatch.pane` specifically: keep its existing
+`goal, name, kind, repo = args[:4]` interface; enter the reservation before the
+environment check and before `herdr worktree create`; set child-started before
+`herdr pane run` because a timeout waiting for `report-agent` is still a possible
+live child; close that pane, workspace, and worktree and verify all three absent
+before publishing `stopped`. Success publication occurs only after
+`reported_agent(pane)` returns a live agent. The executable fixtures
+`testdata/dispatch-reserved.py` and `testdata/dispatch-pane-reserved.py` exercise
+the recursive entry, native publication, child reaping, and resource-removal
+contracts through installed signed command capabilities.
 
 This is a strong, narrow contract, not security theater. Bubblewrap mechanically
 denies ordinary filesystem writes outside mounted writable paths and removes the
@@ -544,7 +634,8 @@ Kernel-acted guarded events are `loop.lease.acquired`, `loop.lease.renewed`,
 `loop.pass.commit.started`, `loop.pass.commit.completed`, `loop.pass.push.started`, `loop.pass.push.completed`,
 `loop.pass.push.reconciling`, `loop.pass.push.reconciled`, `loop.pass.worktree.cleaned`,
 `loop.pass.checkpoint.consumed`, `loop.pass.completed`, `loop.pass.failed`,
-`loop.pass.resumable`, `loop.pass.resumed`, and `loop.budget.exhausted`. Foreign accounts cannot
+`loop.pass.resumable`, `loop.pass.resumed`, `loop.budget.exhausted`, and
+`loop.reservation.dispatch.published`. Foreign accounts cannot
 inject them as live local policy; they must travel under `lineage.`.
 
 ## Exit codes

@@ -620,6 +620,7 @@ func reconcileExternalWriters(home string, opts guardedOptions, worktree string,
 	for _, event := range st.Events {
 		var payload struct {
 			Agent, Goal, Repo, Repository, Branch, Worktree string
+			Writer                                          dispatchWriterEvidence `json:"writer"`
 		}
 		if json.Unmarshal(event.Payload, &payload) != nil || payload.Agent == "" {
 			continue
@@ -631,7 +632,11 @@ func reconcileExternalWriters(home string, opts guardedOptions, worktree string,
 				repo = payload.Repo
 			}
 			dispatches[payload.Agent] = dispatch{payload.Agent, payload.Goal, repo, payload.Branch, payload.Worktree}
-		case "agent.failed", "agent.reclaimed":
+		case "agent.failed":
+			if payload.Writer.State == "stopped" && payload.Writer.CleanupConfirmed && strings.TrimSpace(payload.Writer.Evidence) != "" {
+				delete(dispatches, payload.Agent)
+			}
+		case "agent.reclaimed":
 			delete(dispatches, payload.Agent)
 		}
 	}
