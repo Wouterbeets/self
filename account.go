@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 )
 
 var refused = map[string]bool{
+	"loop.settled":                  true,
 	"work.declared":                 true, // historical kernel vocabulary remains reserved
 	"work.closed":                   true,
 	"intent.declared":               true,
@@ -73,6 +75,8 @@ func readAccount(ref string) (*account, error) {
 			}
 			var e struct {
 				Name       string          `json:"name"`
+				Origin     string          `json:"origin"`
+				ID         json.RawMessage `json:"id"`
 				OccurredAt time.Time       `json:"occurred_at"`
 				By         string          `json:"by"`
 				Payload    json.RawMessage `json:"payload"`
@@ -86,8 +90,11 @@ func readAccount(ref string) (*account, error) {
 			if !validEventName(e.Name) {
 				return nil, fmt.Errorf("record.jsonl line %d: %q is not a lowercase dotted event name (nothing was deposited)", i+1, e.Name)
 			}
+			if e.Origin == "" {
+				_ = json.Unmarshal(e.ID, &e.Origin)
+			}
 			a.Deposit = append(a.Deposit, Event{
-				Name: e.Name, OccurredAt: e.OccurredAt, By: e.By, Payload: e.Payload,
+				Name: e.Name, Origin: e.Origin, OccurredAt: e.OccurredAt, By: e.By, Payload: e.Payload,
 			})
 		}
 		sum := sha256.Sum256(raw)
@@ -109,58 +116,103 @@ func accountName(ref string) string {
 	return name
 }
 
-func cmdLearn(home, ref string, out io.Writer) error {
+func cmdLearn(home, ref string, out io.Writer, into ...string) error {
 	a, err := readAccount(ref)
 	if err != nil {
 		return err
 	}
-	batch := make([]Event, 0, len(a.Deposit)+2)
-
-	ie := newEvent("intent.declared", nil)
-	a.IntentName = "learn/" + ie.ID
+	// The delivery key includes the interpretation brief; revised instructions are new work.
+	identity, _ := json.Marshal([]string{a.Name, a.Intent, a.RecordHash, strings.Join(into, "")})
+	delivery := fmt.Sprintf("%x", sha256.Sum256(identity))
+	a.IntentName = "learn/" + delivery[:32]
+	if len(into) > 0 {
+		a.IntentName = into[0]
+	}
 	description := learnAsk(ref, a)
-	ie.Payload, _ = json.Marshal(map[string]any{
-		"name":        a.IntentName,
-		"summary":     "Learn account " + a.Name,
-		"description": description,
-		"account":     a.Name,
-		"intent":      a.Intent,
-	})
-	ie.Via, ie.By = doorCLI, callerClaim()
-	batch = append(batch, ie)
-
-	for _, e := range a.Deposit {
-		fresh := newEvent(e.Name, e.Payload)
-		if !e.OccurredAt.IsZero() {
-			fresh.OccurredAt = e.OccurredAt
-		}
-		fresh.Via, fresh.By = doorLearn+a.Name, e.By
-		batch = append(batch, fresh)
-	}
-
-	att := map[string]any{"account": a.Name, "events": len(a.Deposit)}
-	if a.RecordHash != "" {
-		att["record_sha256"] = a.RecordHash
-	}
-	if a.Manifest.RecordSha256 != "" {
-		att["manifest_sha256"] = a.Manifest.RecordSha256
-	}
-	ap, _ := json.Marshal(att)
-	ae := newEvent("lesson.learned", ap)
-	ae.Via = doorKernel
-	batch = append(batch, ae)
-
-	if err := ingest(home, batch, nil, nil, callerClaim(), io.Discard); err != nil {
+	key, err := ensureSecret(home)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "self: learned %q — %d event(s) deposited; pipe this prompt to a mind:  self learn %s | claude -p | self hear\n", a.Name, len(a.Deposit), ref)
-
+	err = func() error {
+		unlock, err := lockLog(home)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		events, err := readEvents(home)
+		if err != nil {
+			return err
+		}
+		known := map[string]Event{}
+		for _, e := range events {
+			if e.Name == "lesson.learned" && e.Via == doorKernel {
+				var p struct{ Delivery string }
+				json.Unmarshal(e.Payload, &p)
+				if p.Delivery == delivery {
+					return nil
+				}
+			}
+			id := e.Origin
+			if id == "" {
+				id = e.ID
+			}
+			name := e.Name
+			if refused[name] {
+				name = lineagePrefix + name
+			}
+			known[name+"\x00"+id] = e
+		}
+		ie := newEvent("intent.declared", nil)
+		ie.Payload, _ = json.Marshal(map[string]any{
+			"name": a.IntentName, "summary": "Learn account " + a.Name,
+			"description": description, "account": a.Name, "intent": a.Intent,
+		})
+		ie.Via, ie.By = doorCLI, callerClaim()
+		batch := []Event{ie}
+		for _, e := range a.Deposit {
+			k := e.Name + "\x00" + e.Origin
+			if old, ok := known[k]; e.Origin != "" && ok {
+				if (!e.OccurredAt.IsZero() && !old.OccurredAt.Equal(e.OccurredAt)) || old.By != e.By || !bytes.Equal(canonicalPayload(old.Payload), canonicalPayload(e.Payload)) {
+					return fmt.Errorf("conflicting imported origin %q for %s (nothing deposited)", e.Origin, e.Name)
+				}
+				continue
+			}
+			fresh := newEvent(e.Name, e.Payload)
+			if !e.OccurredAt.IsZero() {
+				fresh.OccurredAt = e.OccurredAt
+			}
+			fresh.Via, fresh.By, fresh.Origin = doorLearn+a.Name, e.By, e.Origin
+			batch = append(batch, fresh)
+			known[k] = e
+		}
+		att := map[string]any{"account": a.Name, "events": len(batch) - 1, "delivery": delivery,
+			"record_sha256": a.RecordHash, "manifest_sha256": a.Manifest.RecordSha256}
+		ap, _ := json.Marshal(att)
+		ae := newEvent("lesson.learned", ap)
+		ae.Via = doorKernel
+		return ingestLocked(home, key, append(batch, ae), nil, nil, callerClaim(), io.Discard)
+	}()
+	if err != nil {
+		return err
+	}
 	st, err := loadState(home)
 	if err != nil {
 		return err
 	}
 	_, err = io.WriteString(out, situate(home, st, description))
 	return err
+}
+
+func canonicalPayload(raw json.RawMessage) []byte {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return []byte("{}") // newEvent normalizes empty payloads the same way
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	_ = decoder.Decode(&value)
+	data, _ := json.Marshal(value)
+	return data
 }
 
 func learnAsk(ref string, a *account) string {
@@ -173,7 +225,7 @@ func learnAsk(ref string, a *account) string {
 		if p, err := filepath.Abs(ref); err == nil {
 			abs = p
 		}
-		ask += fmt.Sprintf("\n\nIts record — %d event(s) — is already in this log, verbatim, through the channel learn:%s. Read %s or events.jsonl to ground your declarations in the evidence. lineage.* events are another instance's history: reference material, never yours to re-emit.", len(a.Deposit), a.Name, filepath.Join(abs, "record.jsonl"))
+		ask += fmt.Sprintf("\n\nIts offered record contains %d event(s). New observations enter through learn:%s; matching origins already held are not deposited again. Read %s or events.jsonl to ground your declarations in the evidence. lineage.* events are another instance's history: reference material, never yours to re-emit.", len(a.Deposit), a.Name, filepath.Join(abs, "record.jsonl"))
 	}
 	var quoted strings.Builder
 	for _, l := range strings.Split(a.Intent, "\n") {

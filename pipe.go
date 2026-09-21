@@ -55,7 +55,7 @@ func cmdSituate(home string, ask string, out io.Writer) error {
 	return err
 }
 
-func cmdHear(home string, input []byte, out io.Writer) error {
+func cmdHear(home string, input []byte, out io.Writer, after ...string) error {
 	evs, scripts, prose, err := wire(string(input))
 	if err != nil {
 		return err
@@ -73,7 +73,7 @@ func cmdHear(home string, input []byte, out io.Writer) error {
 	for i := range evs {
 		evs[i].Via, evs[i].By = doorHear, by
 	}
-	return ingest(home, evs, scripts, prose, by, out)
+	return ingest(home, evs, scripts, prose, by, out, after...)
 }
 
 type authored struct {
@@ -154,7 +154,7 @@ func lines(body string) ([]string, error) {
 // their parsing policy and assign provenance before handing over the batch.
 // Reports are written after unlocking; callers may discard them without losing
 // declaration, installation, or retirement handling.
-func ingest(home string, evs []Event, scripts []authored, prose []string, by string, out io.Writer) error {
+func ingest(home string, evs []Event, scripts []authored, prose []string, by string, out io.Writer, after ...string) error {
 	if len(evs) == 0 && len(scripts) == 0 && len(prose) == 0 {
 		return nil
 	}
@@ -171,6 +171,15 @@ func ingest(home string, evs []Event, scripts []authored, prose []string, by str
 			return lerr
 		}
 		defer unlock()
+		if len(after) > 0 {
+			events, err := readEvents(home)
+			if err != nil {
+				return err
+			}
+			if head(events) != after[0] {
+				return fmt.Errorf("log changed: expected %s, have %s; reread before retrying", after[0], head(events))
+			}
+		}
 		return ingestLocked(home, key, evs, scripts, prose, by, &report)
 	}()
 	if _, werr := out.Write(report.Bytes()); werr != nil && err == nil {

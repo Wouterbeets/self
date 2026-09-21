@@ -15,6 +15,7 @@ const completerMaxLines = 512
 var verbCandidates = []struct{ name, desc string }{
 	{"prompt", "print a prompt for an event-producing mind"},
 	{"hear", "ingest event JSONL or authored scripts from stdin"},
+	{"watch", "wait for events without appending"},
 	{"brief", "show capabilities, pending work, and refusals"},
 	{"run", "execute a command capability and append its events"},
 	{"view", "replay a pure view; built-in log is always available"},

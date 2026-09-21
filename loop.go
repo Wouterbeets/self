@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -187,6 +188,14 @@ func cmdLoop(home string, args []string, out, diag io.Writer) error {
 				return fmt.Errorf("hearing pass %d: %w", pass, err)
 			}
 			fmt.Fprintf(diag, "self loop: pass %d: %v — the reason rides the next pass\n", pass, err)
+		} else if evs, _, _, _ := wire(string(stdout)); len(evs) > 0 {
+			// Only this successful mind's stdout may settle its loop, never a peer's event.
+			last := evs[len(evs)-1]
+			var result struct{ Reason string }
+			if last.Name == "loop.settled" && json.Unmarshal(last.Payload, &result) == nil && strings.TrimSpace(result.Reason) != "" {
+				fmt.Fprintf(diag, "self loop: settled on pass %d: %s\n", pass, result.Reason)
+				return nil
+			}
 		}
 
 		after, err := loadState(home)

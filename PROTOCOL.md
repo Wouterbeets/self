@@ -72,7 +72,24 @@ event some view renders, never kernel vocabulary. Empty stdout is a valid turn.
 ```
 
 You set `name` and `payload` only. The kernel assigns `id`, `seq`,
-`occurred_at`, `via`, `by`. Name: `^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`.
+`occurred_at`, `via`, `by`. Imported records may also carry `origin`, a foreign
+identity claim preserved across hops; it grants no authority. Name: `^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`.
+
+### Conditional ingestion and waiting
+
+The brief prints `head: <event-id>` (`empty` for a new log).
+`self hear --after <head>` commits only if that head still matches under the
+append lock. A mismatch commits nothing: reread and reconsider before retrying.
+This protects a decision and its event batch, not external side effects. It is
+not a lease, sandbox, or permission to retry a command that already acted.
+
+`self watch [--after <id|empty>] [--timeout 10m] [event-prefix]` waits for and
+prints the first matching batch as full event JSONL, then exits. Without
+`--after`, it starts at the current head; `empty` includes existing events.
+Use the last returned event ID to resume. A missing cursor or timeout is an
+error. Reads append nothing, including on timeout. Filters match name prefixes;
+domain filtering belongs in consumers. An ID cursor detects a lost anchor,
+not edits to arbitrary earlier records.
 
 ## Desired outcomes
 
@@ -113,7 +130,16 @@ measurements, calendar entries, and goal hierarchies remain domain records.
 External artifacts need durable references; they are not rebuilt by `rehydrate`.
 
 `self give intent. <dir>` exports the intent lifecycle as inert `lineage.*` evidence.
-`learn` declares a local intent to interpret the account. The account's own
+`learn` declares a local intent to interpret the account.
+`self learn --into <intent-name> <dir>` groups deliveries under one named intent;
+a new delivery revises/reopens that intent. Earlier descriptions and receipts
+remain in the log. Repeating an identical delivery (account name, intent text,
+record bytes, and grouping name) appends nothing and prints the prompt again.
+Imports preserve `origin`, falling back to a string source `id`. Identified
+observations already held under that name and origin are not deposited twice;
+conflicting content refuses the whole delivery. Older records without identity
+retain the delivery-level guarantee only. These identities are foreign claims;
+imported kernel vocabulary still must be renamed to inert lineage. The account's own
 intentions remain lineage; a receiving mind may adopt a relevant outcome with
 local criteria, or close the learning intent after declining it.
 
@@ -230,10 +256,11 @@ Other names are domain events, appended verbatim and interpreted by minds and vi
 | `capability.retired` | anyone | tombstone: out of the brief, still in the log |
 | `lesson.learned` | kernel | receipt: what an account actually deposited |
 | `account.given` | `self give` | this instance gave an account away |
+| `loop.settled` | mind stdout | this pass cannot usefully continue; reason required |
 
 `script.authored` is the wire schema above; never appended.
 
-An event is `{id, seq, name, occurred_at, via, by, payload}`. Never changed or
+An event is `{id, seq, name, occurred_at, via, by, payload}`, with optional `origin`. Never changed or
 deleted; a deletion is a later event.
 
 ## Provenance
@@ -283,10 +310,11 @@ account/
 declarations and receipts, renamed to `lineage.*`.
 
 `self learn <dir>` deposits an account and declares a local intent to learn it:
-`intent.declared` first, the record verbatim, `lesson.learned` last. The receipt
-hashes what landed; it does not claim that a mind understood it.
+`intent.declared` first, new observations next, `lesson.learned` last. The receipt
+hashes the offered record and counts new observations; it does not claim that a
+mind understood them. Repeated deliveries append nothing.
 
-The declaration has a unique `learn/<event-id>` name, a summary, and a description
+The declaration has a stable `learn/<delivery-hash>` name (or `--into` name), a summary, and a description
 carrying the learning instructions and quoted `intent.md`. The original `account`
 and `intent` fields remain available to existing views. Even if no mind reads the
 printed prompt now, the learning intent remains discoverable by a later loop.
@@ -308,8 +336,7 @@ Four mechanical rules:
 1. **Kernel vocabulary never travels raw.** `give` renames it `lineage.<name>`;
    `learn` refuses a record containing it and appends nothing. Otherwise a
    deposited `command.declared` becomes pending work and the next pass signs an
-   attacker's script under your key. The refused set is **cumulative**: the nine
-   names above plus every name any earlier kernel acted on —
+   attacker's script under your key. The refused set is **cumulative**: the names above plus every name any earlier kernel acted on —
    `kernel.initialized`, `projector.declared`, `script.compiled`, `self.asked`,
    `self.replied`, `self.reflected`, `learn.orchestrated`,
    `capability.revision.requested`, `work.declared`, `work.closed`. A name may leave the vocabulary; it never
@@ -336,13 +363,14 @@ travel on the wire. An unrecognized multi-word ask is shorthand for
 self                        session guidance + capability index (READ)
 self prompt [ask…]          execution prompt: default or explicit ask (READ)
 self <ask…>                 shorthand for self prompt <ask…> (READ)
-… | self hear               events land, scripts install (WRITE)
+… | self hear [--after ID]  conditional or unconditional ingestion (WRITE)
 self brief [name]           the state card; with a name or intent/<name>, full detail
 self run <cmd> [args…]      execute a command
 self view <name> [args…]    replay a view ("log" is built in, shadowable)
 self view log [--all]       last 10 events, or every one
 self loop [opts] -- <mind>  run a mind until the log stops changing
-self learn <dir>            deposit an account, print its learning prompt
+self learn [--into ID] <dir> deposit an account, print its learning prompt
+self watch [opts] [prefix]  wait for matching events; no append (READ)
 self give <sel> <dir>       write an account from the log
 self rehydrate              make cap/ match the log
 self completion <shell>     completion shim (zsh|bash|fish)
@@ -388,8 +416,8 @@ self loop --max-passes 12 --settle 2 --timeout 30m --ask 'advance X' -- <mind> [
 
 Each pass, the mind is told which pass this is, how many remain, how long it
 has, and the ask (the `--ask`, on every pass). Its stdout goes through `hear`;
-the kernel then checks the log. Any append (on stdout, or by a tool-capable mind
-calling `self run`) means another pass; the loop stops after `--settle`
+the kernel honors explicit settlement, otherwise checks the log. Any append
+(on stdout, or by a tool-capable mind calling `self run`) means another pass; the loop stops after `--settle`
 consecutive unchanged passes (default 2), the last of which is asked plainly
 whether there is anything else. The loop knows nothing about goals, tasks, or
 declarations.
@@ -398,10 +426,17 @@ declarations.
 Consider the ask and open outcomes. Advance what you can support with evidence,
 record the result, and leave enough context for another mind to continue.
 Use what already exists; build capabilities when they help. If nothing useful
-can advance now, append nothing. The loop may settle while outcomes await input.
+can advance now, append nothing. If you recorded a result but cannot usefully
+continue, finish stdout with `{"name":"loop.settled","payload":{"reason":"What is waiting or finished"}}`.
+The loop may settle while outcomes await input.
 <!-- prompt:loop:end -->
 
 A refused script does not end the loop: `script.rejected` rides the next pass.
+A successful pass may stop explicitly with a final `loop.settled` event and a
+nonempty reason. Only its own stdout can stop it; another writer's event cannot.
+Settlement records a mind's judgment, not completion proof. Without this signal,
+quiet-log settlement remains unchanged. Waiting does not schedule another mind;
+an external controller may use `watch` before starting another loop.
 
 The mind command is required unless `SELF_LOOP_MIND` is set. Options stop at
 `--` or the first positional; the rest is the mind's argv, executed directly

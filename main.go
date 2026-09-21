@@ -16,12 +16,13 @@ Usage:
   self                        reconnect with your persistent self for the current task
   self prompt [ask...]         print a prompt for an event-producing mind
   self <ask...>                shorthand for self prompt <ask...>
-  self hear                     ingest event JSONL or authored scripts from stdin
+  self hear [--after <head>]     ingest event JSONL or authored scripts from stdin
   self brief [name]             the state; with a name or intent/<name>, full detail
   self run <command> [args...]  execute a command capability and append its events
   self view <name> [args...]    replay a pure view; built-in log is always available
   self loop [opts] [-- mind...] run a mind until the log stops changing (quiet passes in a row)
-  self learn <account-dir>      deposit an account and print its learning prompt
+  self learn [--into <intent>] <account-dir>  deposit and interpret an account
+  self watch [opts] [prefix]   wait for events without appending
   self give <selector> <dir>    write an event or capability account
   self rehydrate                rebuild derived capability files from the log
   self completion <shell>       print a completion script (zsh|bash|fish)
@@ -50,7 +51,7 @@ func main() {
 }
 
 func dispatch(home, verb string, args []string, out io.Writer) error {
-	limits := map[string]int{"": 0, "hear": 0, "brief": 1, "rehydrate": 0, "help": 0, "-h": 0, "--help": 0}
+	limits := map[string]int{"": 0, "brief": 1, "rehydrate": 0, "help": 0, "-h": 0, "--help": 0}
 	if max, fixed := limits[verb]; fixed && len(args) > max {
 		return fmt.Errorf("self %s accepts at most %d argument(s); see self --help", verb, max)
 	}
@@ -62,11 +63,20 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return cmdSituate(home, strings.Join(args, " "), out)
 
 	case "hear":
+		if len(args) != 0 && (len(args) != 2 || args[0] != "--after") {
+			return fmt.Errorf("usage: self hear [--after <head-id|empty>]")
+		}
+		if len(args) > 0 {
+			args = args[1:]
+		}
 		input, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return err
 		}
-		return cmdHear(home, input, out)
+		return cmdHear(home, input, out, args...)
+
+	case "watch":
+		return cmdWatch(home, args, out)
 
 	case "brief":
 		st, err := loadState(home)
@@ -128,8 +138,11 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return cmdLoop(home, args, out, os.Stderr)
 
 	case "learn":
+		if len(args) == 3 && args[0] == "--into" && validIntentName(args[1]) {
+			return cmdLearn(home, args[2], out, args[1])
+		}
 		if len(args) != 1 {
-			return fmt.Errorf("usage: self learn <account-dir>")
+			return fmt.Errorf("usage: self learn [--into <intent-name>] <account-dir>")
 		}
 		return cmdLearn(home, args[0], out)
 
@@ -183,6 +196,7 @@ func brief(home string, st *state) string {
 		caller = `unset — export SELF_CALLER="<who you are>" so your writes are attributable`
 	}
 	fmt.Fprintf(&b, "log: %d events    caller: %s\n", len(st.Events), caller)
+	fmt.Fprintf(&b, "head: %s\n", head(st.Events))
 	if anyClipped(st) {
 		b.WriteString("lines below are clipped; `self brief <name>` prints one declaration in full\n")
 	}
