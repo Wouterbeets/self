@@ -104,6 +104,13 @@ Optional `self-serve` exposes read-only GET `/` and `/view/<name>`, and POST
 `/run/<command>`. `self-browse [view]` opens the local adapter. Commands require
 POST; simply following a link cannot run one.
 
+## Task-conditioned context
+
+The optional [ask adapter](examples/ask/README.md) uses a local Laya model and
+text matching to rank capabilities and recursively read relevant views for an ask.
+It runs outside the kernel, never invokes commands, and falls back to an unscored
+index when unavailable.
+
 ## Limits
 
 There is no human review step between authoring and signing: piping a mind's
