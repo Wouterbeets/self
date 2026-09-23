@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Optional local adapter. The kernel has no model dependency or scoring policy."""
 import argparse
+import http.client
+from functools import lru_cache
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -12,7 +14,6 @@ import resource
 import shlex
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 
@@ -84,6 +85,30 @@ class Scorer:
         if len(self.cache) > 2048:
             self.cache.popitem(last=False)
         return value
+
+
+class Jev:
+    def __init__(self, model):
+        self.model, self.key = model, os.environ["TYPESAFE_API_KEY"]
+
+    def predict(self, state, questions):
+        conn = http.client.HTTPSConnection("api.typesafe.ai", timeout=5)
+        try:
+            conn.request("POST", "/v1/systemone", json.dumps(dict(model=self.model, state=state, questions=questions)),
+                         {"Authorization": "Bearer " + self.key, "Content-Type": "application/json"})
+            response = conn.getresponse()
+            if response.status != 200:
+                raise OSError(f"Jev HTTP {response.status}")
+            return json.loads(response.read(1048576))
+        finally:
+            conn.close()
+
+    @lru_cache(maxsize=2048)
+    def __call__(self, ask, text):
+        estimate = float(self.predict({"ask": ask, "candidate": text}, QUESTION)["answers"]["relevance"]["noul"])
+        if not math.isfinite(estimate) or not 0 <= estimate <= 1:
+            raise ValueError("invalid relevance estimate")
+        return {"score": estimate, "truncated": False}
 
 
 class Ranker:
@@ -181,14 +206,14 @@ class Ranker:
                   "capabilities": scored[:8], "evidence": evidence[:8], "errors": errors,
                   "budget": {"scored": count, "max_nodes": self.max_nodes, "views": reads,
                              "max_views": self.max_views, "max_depth": self.max_depth}}
-        lines = [f"# For this ask\n\n{ask}", "Ranking combines local Laya estimates and text matching equally. Scores are uncalibrated; relevance is not permission or proof of capability health."]
+        lines = [f"# For this ask\n\n{ask}", "Ranking combines model estimates and text matching equally. Scores are uncalibrated; relevance is not permission or proof of capability health."]
         for title, items in [("Capabilities", result["capabilities"]), ("Selected evidence", result["evidence"])]:
             lines.append("\n" + title)
             for index, n in enumerate(items):
                 label = "top match" if index < 3 else "possible match"
                 excerpt = " ".join(n["content"].split())[:280]
                 command = "self brief " + n["source"] if n["depth"] == 0 else "self view " + shlex.join([n["read"][0], *n["read"][1]])
-                lines.append(f"- **{label}** · `{command}` · Laya {n['score']:.2f}, text {n['match']:.2f}\n  {excerpt}" + (" [pending]" if n.get("availability") == "pending" else "") + (" [input clipped]" if n["truncated"] else ""))
+                lines.append(f"- **{label}** · `{command}` · model {n['score']:.2f}, text {n['match']:.2f}\n  {excerpt}" + (" [pending]" if n.get("availability") == "pending" else "") + (" [input clipped]" if n["truncated"] else ""))
         lines.append(f"\nScored {count}/{self.max_nodes} nodes; read {reads}/{self.max_views} views; depth ≤{self.max_depth}. Unscored material remains available via self brief/view.")
         if errors:
             lines.append("\nUnavailable expansions: " + "; ".join(errors)[:500])
@@ -215,7 +240,7 @@ def run_read(binary, args, home, timeout):
 
 
 def serve(home, binary, checkpoint, device, port):
-    score = Scorer(checkpoint, device)
+    score = Jev(checkpoint) if checkpoint.startswith("jev-") else Scorer(checkpoint, device)
 
     def snapshot():
         data = (Path(home) / "events.jsonl").read_bytes()
@@ -283,7 +308,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", default=os.environ.get("SELF_HOME", "."))
     parser.add_argument("--self", dest="binary", required=True)
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--checkpoint", required=True, help="local Laya checkpoint or pinned Jev model ID")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--port", type=int, default=8766)
     args = parser.parse_args()

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from server import Ranker, catalog, run_read
+from server import Jev, Ranker, catalog, run_read
 import view
 
 
@@ -108,6 +108,17 @@ class RankingTests(unittest.TestCase):
         events = installed([declaration("view", "notes")])
         result = Ranker(self.score, lambda *a: "# relevant title\n---\nrelevant evidence").rank("relevant", events)
         self.assertEqual([n["content"] for n in result["evidence"]], ["relevant evidence"])
+
+    def test_jev_response_cache_and_http_failure(self):
+        with patch.dict("os.environ", TYPESAFE_API_KEY="test"), patch("server.http.client.HTTPSConnection") as connect:
+            response = connect.return_value.getresponse.return_value
+            response.status, response.read.return_value = 200, b'{"answers":{"relevance":{"noul":0.75}}}'
+            scorer = Jev("jev-1.13.0")
+            self.assertEqual(scorer("ask", "item")["score"], .75)
+            scorer("ask", "item")
+            connect.assert_called_once_with("api.typesafe.ai", timeout=5)
+            response.status = 401
+            with self.assertRaisesRegex(OSError, "401"): scorer("ask", "other")
 
     def test_capture_is_bounded_before_buffering(self):
         with tempfile.TemporaryDirectory() as home:

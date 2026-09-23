@@ -21,6 +21,10 @@ Pass the actual self executable, rather than a version-manager shim. The server
 loads once, runs offline, and binds to `127.0.0.1:8766`. Use `--device cpu` if
 needed. GET `/health` reports readiness. Stop with Ctrl-C; restart the same command.
 
+For hosted Jev, use system Python with `--checkpoint jev-1.13.0` and set
+`TYPESAFE_API_KEY` in the server environment. Asks and candidate text are sent to
+[TypeSafe's HTTPS API](https://docs.typesafe.ai/api); no Laya model or GPU is loaded.
+
 Install the client through the normal signed authoring path:
 
 ```sh
