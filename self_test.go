@@ -2169,7 +2169,6 @@ func TestBriefPreservesNestedNamesAndDescriptionLayout(t *testing.T) {
 	}
 }
 
-
 // dropFragment repairs a partially written trailing line. It is the only code
 // path that shortens the log, so its arithmetic is load-bearing: a wrong `keep`
 // discards committed events. These lock in the three shapes it can meet.
