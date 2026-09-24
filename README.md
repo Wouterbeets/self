@@ -1,128 +1,151 @@
 # self
 
-`self` carries knowledge, desired outcomes, and capabilities between minds.
-Add "use self" to your agent instructions and your agents grow long-term memory
-and capabilities over time, without exploding your context window.
+**Put `use self` in your `AGENTS.md`. That's it.**
 
-## Use it
+Every agent on your machine (Claude Code, opencode, pi, Codex, a local model,
+a shell script) now shares one persistent self: memory that survives the
+session, crosses harnesses and model providers, and grows its own capabilities.
+Insight compounds instead of evaporating when the context window closes.
 
-**1. Install.** One static Go binary.
+## Quick start
 
 ```sh
-go install github.com/wouterbeets/self@latest
+go install github.com/wouterbeets/self@latest   # one static binary
+export SELF_HOME=~/.self                         # one self for every project
 ```
 
-Make sure `$(go env GOPATH)/bin` is on your `PATH`; `self --help` should answer.
-
-**2. Tell your agent to use it.** One line in `CLAUDE.md`, `AGENTS.md` or the
-system prompt:
+Then add one line to `AGENTS.md`, `CLAUDE.md`, or your system prompt:
 
 ```md
 Before starting anything, run `self`.
 ```
 
-Or a session hook, so the agent is oriented before it reads your first message.
-For Claude Code, in `.claude/settings.json`:
+Work as usual. The agent reads a short brief, does your task, and records what
+the next mind should know. The first time it needs a new way to remember or do
+something, it writes one, and every later session, in any agent, finds it in
+the brief.
+
+Want it before the first message? A Claude Code session hook in
+`.claude/settings.json`:
 
 ```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "self" }] }
-    ]
-  }
-}
+{ "hooks": { "SessionStart": [{ "hooks": [{ "type": "command", "command": "self" }] }] } }
 ```
 
-**3. Work as usual.** `self` reconnects the agent with its persistent knowledge
-and capabilities while it continues your task. It keeps replying to you normally;
-useful findings go through commands or into `self hear`. Declared outcomes and
-pending capabilities stay visible for later minds to consider.
+## What you get
 
-The agent reads the brief, acts, and writes what should
-outlive the session. The first time it needs a way to remember something, it
-grows one, and the next session finds it in the brief. Nothing in your workflow
-changes.
+- **Cross-session memory.** Knowledge, goals and verified how-tos outlive the
+  conversation that found them.
+- **Cross-agent, cross-provider.** One log, read by any harness and any model.
+  Claude can pick up where opencode left off.
+- **Capabilities that grow.** Agents author small scripts (views to read,
+  commands to act). The kernel signs and installs them; they're live next turn.
+- **Bounded context.** The brief grows with what the instance can do, not
+  with how long the log is. Views compress history instead of paging it back in.
+- **Many agents at once.** Every write is one locked batch, so parallel agents
+  can share a log; `self hear --after <head>` commits only if nothing changed.
+- **Rebuildable.** `events.jsonl` plus `.secret` is the whole self. Hand-edited
+  scripts are ignored; the signed bytes from the log run instead.
 
-The working directory is the instance: `events.jsonl`, `.secret` and `cap/`
-appear beside your code. Add `.secret` to `.gitignore`. Or keep the instance
-out of the repo with `export SELF_HOME=~/.self`.
+## Profiles
 
-## How it works
+**Solo developer, several harnesses.** Same `SELF_HOME`, same line in every
+`AGENTS.md`. Claude Code finds a flaky test's root cause and records it;
+tomorrow opencode reads it in the brief before touching the same file.
 
-Everything is one append-only log. `self` prints a brief: what this
-instance can do, what is pending, what broke. It stays a few kilobytes however
-long the log grows, because views replay the log into compressed reads
-rather than paging it back into context. Reads never change anything; only
-`self hear` appends.
+**One human, many parallel agents.** Agents share one log and grow the
+coordination they need: a `recent` view of who touched what, a `howto` store of
+verified procedures, a command that pings you when one is blocked. None of it
+is built in; every later agent finds it in the brief.
 
-A capability is an ordinary executable in any language. The agent declares it
-and authors its script in the same breath, the kernel signs and installs it,
-and it is live on the next turn. `self run <cmd>` appends what a command
-prints; `self view <name>` prints a view and appends nothing. `self rehydrate`
-rebuilds installed capabilities from `events.jsonl` and `.secret`, with no model
-and no network. Other artifacts need their own storage and recorded references.
-
-`self prompt` explicitly prepares a pass whose stdout goes to `self hear`;
-`self "<ask>"` remains shorthand. `self loop` runs repeated passes with that same
-execution contract. Both share the persistent identity shown by bare `self`.
-
-The kernel holds no model. A mind is any process that reads a prompt on stdin
-and prints events on stdout, so the same instance is grown by a frontier model,
-a local one, a shell script, or a person at a keyboard:
+**Hobbyist or household.** Declare what you want to become possible and let a
+mind work on it:
 
 ```sh
-self prompt "I want to track long-running goals here" | claude -p | self hear
-self loop -- claude -p            # run a mind until the log stops changing
-self learn lessons/chat | claude -p | self hear   # learn from another instance
-```
-
-The whole contract is [`PROTOCOL.md`](PROTOCOL.md), which is also what
-`self help` prints. Nothing else restates it. `./demo.sh` drives all of it
-offline through `examples/mind-stub`, in about fifteen seconds.
-
-## Declare an intent
-
-```sh
-printf '%s\n' '{"name":"intent.declared","payload":{"name":"spool-fit","summary":"Can the blue spool finish the enclosure?","description":"Compare witnessed remaining filament with the sliced model requirement, including a stated margin. Record the evidence; if measurements are missing, leave what is needed."}}' | self hear
-self brief intent/spool-fit
+echo '{"name":"intent.declared","payload":{"name":"spool-fit","summary":"Can the blue spool finish the enclosure?","description":"Compare remaining filament with the sliced model, with a margin. If measurements are missing, record what is needed."}}' | self hear
 self loop -- claude -p
 ```
 
-The same declaration can ask for a meal plan that respects witnessed calendar
-constraints, a deduplicated shopping list, an investigation, or a reusable script.
-A mind records its result and closes the intent with evidence, or leaves it open
-when inputs are missing. The loop can settle while an intent waits. Domain records
-remain domain records; no shopping-list or goal schema is built into the kernel.
-`self give intent. account/` shares intent and history; the receiving mind decides
-what it becomes through `self learn account/`. Learning itself leaves a named
-intent, so another mind can finish interpreting the account later.
+The mind closes the intent with evidence, or leaves it open with what it needs.
 
-## Browser adapter
+**Unattended.** Any process that reads a prompt and prints events is a mind,
+so a cron job with a local model grows the same instance:
 
-Optional `self-serve` exposes read-only GET `/` and `/view/<name>`, and POST
-`/run/<command>`. `self-browse [view]` opens the local adapter. Commands require
-POST; simply following a link cannot run one.
+```sh
+self prompt "summarize today's notes into memories" | ollama run qwen3 | self hear
+```
 
-## Task-conditioned context
+## How it works
 
-The optional [ask adapter](examples/ask/README.md) uses a local Laya model and
-text matching to rank capabilities and recursively read relevant views for an ask.
-It runs outside the kernel, never invokes commands, and falls back to an unscored
-index when unavailable.
+Everything is one append-only log, `events.jsonl`. Reads (`self`, `view`,
+`brief`, `prompt`) never change it; `hear`, `run` and `learn` append.
+
+```sh
+self                      # reconnect: identity, capabilities, open intents
+self view <name>          # a compressed read; appends nothing
+self run <command>        # act; what it prints is appended
+self brief <name>         # one capability or intent in full
+self hear < batch.jsonl   # append events or authored scripts
+```
+
+A capability is an ordinary executable in any language. `self rehydrate`
+rebuilds all of them from `events.jsonl` and `.secret`, with no model and no
+network: the log is the whole self.
+
+The kernel holds no model. A mind is anything that reads a prompt on stdin and
+prints events on stdout:
+
+```sh
+self prompt "track my long-running goals" | claude -p | self hear
+self loop -- claude -p                           # run until the log settles
+self learn lessons/memory | claude -p | self hear # grow a lesson's capabilities
+```
+
+## Lessons
+
+A lesson is an intent a mind turns into capabilities. Two ship here:
+
+- [`lessons/journal`](lessons/journal/intent.md): the smallest possible set,
+  one command and one view. `./demo.sh` grows it offline.
+- [`lessons/memory`](lessons/memory/intent.md): durable memory for a stateless
+  mind: `self run remember …`, `self view memory`.
+
+`self give <selector> <dir>` writes your own instance's knowledge or
+capabilities as an account another instance can `self learn`.
+
+The full contract is [PROTOCOL.md](PROTOCOL.md), which `self help` prints.
+`./demo.sh` runs everything offline in about fifteen seconds.
+
+## Setup notes
+
+- Without `SELF_HOME`, the working directory is the instance: `events.jsonl`,
+  `.secret` and `cap/` appear beside your code.
+- **Never commit `.secret`**; it signs your capabilities.
+- `self completion zsh|bash|fish` prints shell completion.
+
+## Optional adapters
+
+- `self-serve` / `self-browse`: a local browser view. GET reads views;
+  commands require POST.
+- [`examples/mind-claude`](examples/mind-claude),
+  [`examples/mind-opencode`](examples/mind-opencode): wrap a harness as a mind
+  with a live trace on stderr: `self loop -- examples/mind-claude`.
+- [ask](examples/ask/README.md): ranks capabilities and views for a task with a
+  local model; falls back to an unscored index.
 
 ## Limits
 
-There is no human review step between authoring and signing: piping a mind's
-output into `self hear` signs whatever it authored. Nothing is sandboxed. The
-log is unbounded. Read a generated script before you trust it. What you inspect
-is readable intent and readable output rather than an opaque binary; that is
-the advantage, not safety.
+- Piping a mind's output into `self hear` signs whatever it authored. There is
+  no review step; hold the output in a file first if you want a pause.
+- Anyone who can run `self` against your `SELF_HOME` can install capabilities.
+- Nothing is sandboxed and capability scripts are not timed out. They run as you.
+- The log is unbounded; the kernel does not compact it.
+- Batches are locked, but a command is not a transaction: external effects are
+  not rolled back.
 
-## Experiments
-
-[Drive rotation](experiments/drives/README.md) compares repeated and alternating
-perspectives over identical starting instances, using a fixed pass budget.
+Read a generated script before you trust it. What you inspect is readable
+intent and readable output, not an opaque binary. That is the advantage, not
+safety. Full list: [PROTOCOL.md § Limits](PROTOCOL.md#limits).
 
 ## Status
 

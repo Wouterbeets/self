@@ -160,12 +160,12 @@ func TestIntentFixturesRunAcrossPersonas(t *testing.T) {
 	} {
 		t.Run(tc.fixture, func(t *testing.T) {
 			h := home(t)
-			fixture, err := os.ReadFile(filepath.Join("examples", "intent", tc.fixture+".jsonl"))
+			fixture, err := os.ReadFile(filepath.Join("testdata", "intent", tc.fixture+".jsonl"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			heard(t, h, string(fixture))
-			mind, err := filepath.Abs(filepath.Join("examples", "intent", "mind.py"))
+			mind, err := filepath.Abs(filepath.Join("testdata", "intent", "mind.py"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -199,7 +199,7 @@ func TestIntentFixturesRunAcrossPersonas(t *testing.T) {
 
 func TestPrinterMindWaitsForMissingMeasurement(t *testing.T) {
 	h := home(t)
-	fixture, err := os.ReadFile(filepath.Join("examples", "intent", "printer.jsonl"))
+	fixture, err := os.ReadFile(filepath.Join("testdata", "intent", "printer.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestPrinterMindWaitsForMissingMeasurement(t *testing.T) {
 		t.Fatal("missing fixture lines")
 	}
 	heard(t, h, withoutMeasurement)
-	mind, err := filepath.Abs(filepath.Join("examples", "intent", "mind.py"))
+	mind, err := filepath.Abs(filepath.Join("testdata", "intent", "mind.py"))
 	if err != nil {
 		t.Fatal(err)
 	}

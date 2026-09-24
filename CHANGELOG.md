@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## v1.1.0 — intents, coordination, a clean tree
+
+The README now leads with the one line that matters: put `use self` in
+`AGENTS.md`. The tree is trimmed to the kernel, two lessons (`journal`,
+`memory`), the claude and opencode mind wrappers, the offline stub, and the
+optional ask adapter. `experiments/`, `results.md`, `lessons/chat` and
+`examples/mind-grok` are removed; they remain in git history.
+
+`self hear --after <head>` commits only if the log head still matches, and
+`self watch` waits for matching events without appending. Learning an account
+twice appends nothing new. The log refuses to truncate `events.jsonl` while it
+still holds complete lines.
+
+The optional ask adapter (`examples/ask`) ranks capabilities and recursively
+reads relevant views for a task, locally or through an opt-in hosted backend.
+It runs outside the kernel and never invokes commands.
 
 A Unix and simplicity pass removes automatic script examples from pending
 prompts, shares event validation and completion loading, and shortens loop
@@ -31,7 +46,7 @@ Prompts now lead with desired outcomes, keep capability construction conditional
 and leave detailed design guidance in `self help`.
 
 Runnable examples for a printer hobbyist, household, and standalone script
-author live in `examples/intent/`.
+author live in `testdata/intent/`.
 
 Bare `self` reconnects an agent with its persistent identity and capability
 index while it continues the user's task. Pass instructions and pending
