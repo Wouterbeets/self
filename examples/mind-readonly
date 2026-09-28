@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""mind-readonly — run any mind so that its only effect is the events it prints.
+
+A planner mind should read everything and change nothing: no patch, commit,
+push, PR edit, Slack post or log append of its own. Asking it nicely is a
+prompt; this wrapper makes the denial mechanical, for any mind command:
+
+    self loop --ask "…" -- examples/mind-readonly -- examples/mind-claude
+
+What the inner mind gets (bubblewrap):
+  - the whole filesystem read-only; /tmp is a private tmpfs; SELF_HOME, the
+    repositories and the log can be read but not written.
+  - harness state dirs (default ~/.claude, ~/.claude.json) as throwaway
+    overlays, so the harness runs but nothing it writes survives the pass.
+  - credential dirs hidden (default ~/.config/gh ~/.ssh ~/.aws ~/.kube ~/.docker
+    ~/.config/Slack), a cleared environment with only an allowlist passed
+    through, and no Herdr socket: git push, gh, AWS, kubectl and pane prompts
+    fail for lack of credentials rather than by policy.
+
+What reaches stdout: only event lines whose name matches --emit (default
+checkpoint.proposed and loop.settled), so the plan is a set of proposed actions
+a human or controller approves, and a mind cannot record goal progress or
+author scripts from a planning pass. Everything else is dropped with a note on
+stderr. The loop hears stdout as usual; the wrapper exits with the mind's code.
+
+Options (before --):
+  --emit GLOB     event names allowed onto stdout, repeatable (fnmatch)
+  --state PATH    extra harness path given a throwaway overlay, repeatable
+  --hide PATH     extra path hidden behind an empty tmpfs, repeatable
+  --env NAME      extra environment variable passed through, repeatable
+  --net-off       also unshare the network (only for minds that need none)
+
+Limits: the network stays open by default because hosted minds need it, so a
+mind that finds a credential readable on disk (SELF_HOME/.secret must stay
+readable, views verify receipts with it) could still send it somewhere. This
+bounds a cooperating-but-fallible mind; it is not a hostile-code jail.
+"""
+
+import fnmatch
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HOME = os.path.expanduser("~")
+DEFAULT_EMIT = ["checkpoint.proposed", "loop.settled"]
+DEFAULT_STATE = ["~/.claude", "~/.claude.json", "~/.config/opencode", "~/.local/share/opencode", "~/.pi"]
+DEFAULT_HIDE = ["~/.config/gh", "~/.ssh", "~/.aws", "~/.kube", "~/.docker", "~/.config/Slack", "~/.gnupg"]
+DEFAULT_ENV = [
+    "HOME", "USER", "LOGNAME", "PATH", "SHELL", "TERM", "LANG", "LC_ALL", "TZ",
+    "SELF_HOME", "SELF_CALLER", "MISE_SHELL", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
+    "OPENCODE_API_KEY", "MIND_CLAUDE_RESULT_CAP",
+]
+
+
+def usage(code):
+    sys.stderr.write(__doc__)
+    sys.exit(code)
+
+
+def parse(argv):
+    opts = {"emit": [], "state": [], "hide": [], "env": [], "net_off": False}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--":
+            return opts, argv[i + 1:]
+        if a in ("-h", "--help"):
+            usage(0)
+        if a == "--net-off":
+            opts["net_off"] = True
+            i += 1
+            continue
+        key = {"--emit": "emit", "--state": "state", "--hide": "hide", "--env": "env"}.get(a)
+        if key is None or i + 1 >= len(argv):
+            return opts, argv[i:]
+        opts[key].append(argv[i + 1])
+        i += 2
+    return opts, []
+
+
+def sandbox(opts, mind, scratch):
+    argv = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+            "--tmpfs", "/tmp", "--die-with-parent", "--new-session"]
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime and os.path.isdir(runtime):
+        argv += ["--tmpfs", runtime]
+    for raw in DEFAULT_STATE + opts["state"]:
+        path = os.path.expanduser(raw)
+        if os.path.isdir(path):
+            argv += ["--overlay-src", path, "--tmp-overlay", path]
+        elif os.path.isfile(path):
+            # A single file cannot be overlaid; give the mind a private copy.
+            copy = os.path.join(scratch, str(len(argv)) + "-" + os.path.basename(path))
+            shutil.copy2(path, copy)
+            argv += ["--bind", copy, path]
+    for raw in DEFAULT_HIDE + opts["hide"]:
+        path = os.path.expanduser(raw)
+        if os.path.isdir(path):
+            argv += ["--tmpfs", path]
+        elif os.path.exists(path):
+            argv += ["--ro-bind", "/dev/null", path]
+    if opts["net_off"]:
+        argv += ["--unshare-net"]
+    argv += ["--clearenv"]
+    for name in DEFAULT_ENV + opts["env"]:
+        if name in os.environ:
+            argv += ["--setenv", name, os.environ[name]]
+    argv += ["--setenv", "SELF_READONLY_MIND", "1", "--"]
+    return argv + mind
+
+
+def allowed(line, emit):
+    try:
+        obj = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict) or not isinstance(obj.get("name"), str) or "payload" not in obj:
+        return None
+    return any(fnmatch.fnmatchcase(obj["name"], g) for g in emit), obj["name"]
+
+
+def main():
+    opts, mind = parse(sys.argv[1:])
+    if not mind:
+        usage(2)
+    if shutil.which("bwrap") is None:
+        sys.stderr.write("mind-readonly: bwrap (bubblewrap) is required; refusing to run the mind unsandboxed\n")
+        sys.exit(2)
+    emit = opts["emit"] or DEFAULT_EMIT
+    with tempfile.TemporaryDirectory(prefix="mind-readonly-") as scratch:
+        proc = subprocess.run(sandbox(opts, mind, scratch), stdin=sys.stdin, stdout=subprocess.PIPE, text=True)
+    dropped = 0
+    for line in proc.stdout.splitlines():
+        verdict = allowed(line.strip(), emit)
+        if verdict is None:
+            continue
+        ok, name = verdict
+        if ok:
+            sys.stdout.write(line.strip() + "\n")
+        else:
+            dropped += 1
+            sys.stderr.write(f"mind-readonly: dropped {name}: planning passes may only emit {', '.join(emit)}\n")
+    sys.stdout.flush()
+    if dropped:
+        sys.stderr.write(f"mind-readonly: {dropped} event(s) dropped\n")
+    sys.exit(proc.returncode)
+
+
+if __name__ == "__main__":
+    main()
