@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+'''self-check - run one check command under limits and record its result as evidence.
+
+usage: self-check <subject> <check> [--dir DIR] [--timeout 10m] [--exclusive NAME]
+                  [--mem 4G] [--cpu 200%] [--tail] [--ref URL] -- <command>...
+
+Runs <command> in DIR (default: here) with the caller's own environment, shows
+its output as it goes, then records `self run evidence record` with the exit
+status, duration, a sha256 of the output and, on failure (or with --tail), its
+last lines. Exits with the command's status, or 124 on timeout.
+
+--timeout kills the command's whole process group, so no child outlives it.
+--exclusive NAME waits for an flock shared by every self-check using NAME
+(e.g. heavy-build), so one heavyweight build runs at a time. --mem and --cpu
+run the command in a transient systemd user scope with MemoryMax and CPUQuota.
+The kernel runs commands with a clean HOME and PATH, which is why checks run
+here, in the caller, and only their result goes through self.
+'''
+import fcntl, hashlib, os, re, shlex, signal, subprocess, sys, time
+
+UNITS = {'s': 1, 'm': 60, 'h': 3600}
+
+
+def fail(msg, code=2):
+    print('self-check: ' + msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def main(argv):
+    if '--' not in argv:
+        fail(__doc__.split('\n\n')[1])
+    cut = argv.index('--')
+    head, cmd = argv[:cut], argv[cut + 1:]
+    o, pos, i = {}, [], 0
+    while i < len(head):
+        a = head[i]
+        if a == '--tail':
+            o[a] = True
+            i += 1
+        elif a in ('--dir', '--timeout', '--exclusive', '--mem', '--cpu', '--ref'):
+            if i + 1 >= len(head):
+                fail('%s wants a value' % a)
+            o[a] = head[i + 1]
+            i += 2
+        elif a.startswith('--'):
+            fail('unknown option %r' % a)
+        else:
+            pos.append(a)
+            i += 1
+    if len(pos) != 2 or not cmd:
+        fail('usage: self-check <subject> <check> [options] -- <command>...')
+    subject, check = pos
+    wd = os.path.abspath(o.get('--dir', '.'))
+    if not os.path.isdir(wd):
+        fail('no directory %s' % wd)
+    timeout = None
+    if '--timeout' in o:
+        m = re.fullmatch(r'(\d+)([smh])', o['--timeout'])
+        if not m or int(m.group(1)) <= 0:
+            fail('--timeout wants a positive <n>s|m|h')
+        timeout = int(m.group(1)) * UNITS[m.group(2)]
+    limits, run = [], list(cmd)
+    if '--mem' in o or '--cpu' in o:
+        scope = ['systemd-run', '--user', '--scope', '--quiet', '--collect']
+        if '--mem' in o:
+            scope += ['-p', 'MemoryMax=' + o['--mem']]
+            limits.append('mem ' + o['--mem'])
+        if '--cpu' in o:
+            scope += ['-p', 'CPUQuota=' + o['--cpu']]
+            limits.append('cpu ' + o['--cpu'])
+        run = scope + ['--'] + run
+    if timeout:
+        limits.append('timeout ' + o['--timeout'])
+    lock = None
+    if o.get('--exclusive'):
+        if not re.fullmatch(r'[A-Za-z0-9._-]+', o['--exclusive']):
+            fail('--exclusive wants a plain name')
+        d = os.path.join(os.environ.get('XDG_RUNTIME_DIR') or '/tmp', 'self-check')
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        lock = open(os.path.join(d, o['--exclusive'] + '.lock'), 'w')
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print('self-check: waiting for %s' % o['--exclusive'], file=sys.stderr)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        limits.append('exclusive ' + o['--exclusive'])
+
+    start, out, timed_out = time.monotonic(), bytearray(), False
+    try:
+        p = subprocess.Popen(run, cwd=wd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError as e:
+        out, code = bytearray(str(e).encode()), 127
+    else:
+        def kill(*_):
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        deadline = start + timeout if timeout else None
+        signal.signal(signal.SIGALRM, lambda *_: (kill(),))
+        if timeout:
+            signal.setitimer(signal.ITIMER_REAL, timeout)
+        signal.signal(signal.SIGTERM, lambda *_: (kill(), sys.exit(143)))
+        signal.signal(signal.SIGINT, lambda *_: (kill(), sys.exit(130)))
+        for chunk in iter(lambda: p.stdout.read1(65536), b''):
+            out += chunk
+            sys.stderr.buffer.write(chunk)
+            sys.stderr.flush()
+        code = p.wait()
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        kill()  # a background child that kept running is not left behind
+        if deadline and time.monotonic() >= deadline:
+            timed_out, code = True, 124
+    secs = time.monotonic() - start
+    rec = ['self', 'run', 'evidence', 'record', subject, check, '--exit', str(code), '--secs', '%.2f' % secs,
+           '--cmd', shlex.join(cmd), '--dir', wd, '--digest', hashlib.sha256(out).hexdigest()]
+    if code != 0 or o.get('--tail'):
+        text = out.decode('utf-8', 'replace').rstrip()
+        rec += ['--tail', '\n'.join(text.splitlines()[-15:])[-1500:]]
+    if limits:
+        rec += ['--limits', ', '.join(limits)]
+    if o.get('--ref'):
+        rec += ['--ref', o['--ref']]
+    if timed_out:
+        rec.append('--timed-out')
+    r = subprocess.run([os.environ.get('SELF_BIN', 'self')] + rec[1:], stdout=subprocess.DEVNULL)
+    if r.returncode != 0:
+        fail('could not record the result (self exit %d)' % r.returncode, 70)
+    print('self-check: %s %s %s in %.1fs' % (subject, check, 'passed' if code == 0 else 'FAILED exit %d' % code, secs),
+          file=sys.stderr)
+    sys.exit(code)
+
+
+main(sys.argv[1:])
