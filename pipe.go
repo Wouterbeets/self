@@ -135,6 +135,9 @@ func eventLine(line string) (wireLine, bool) {
 
 const lineLimit = 64 * 1024 * 1024
 
+// errLogChanged reports a conditional batch whose expected head moved.
+var errLogChanged = errors.New("log changed")
+
 func lines(body string) ([]string, error) {
 	var out []string
 	sc := bufio.NewScanner(strings.NewReader(body))
@@ -154,9 +157,6 @@ func lines(body string) ([]string, error) {
 // their parsing policy and assign provenance before handing over the batch.
 // Reports are written after unlocking; callers may discard them without losing
 // declaration, installation, or retirement handling.
-// errLogChanged reports a conditional batch whose expected head moved.
-var errLogChanged = errors.New("log changed")
-
 func ingest(home string, evs []Event, scripts []authored, prose []string, by string, out io.Writer, after ...string) error {
 	if len(evs) == 0 && len(scripts) == 0 && len(prose) == 0 {
 		return nil
