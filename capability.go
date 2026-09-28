@@ -29,7 +29,13 @@ type decl struct {
 	Summary     string   `json:"summary,omitempty"`
 	Description string   `json:"description"`
 	Consumes    []string `json:"consumes,omitempty"`
+	// Atomic marks a command that only decides from the log it reads: its
+	// batch commits only if the log is unchanged, and it reruns otherwise.
+	Atomic bool `json:"atomic,omitempty"`
 }
+
+// atomicAttempts bounds reruns of an atomic command under contention.
+const atomicAttempts = 8
 
 const summaryBudget = 110
 
@@ -396,6 +402,23 @@ func feed(w io.WriteCloser, events []Event) {
 }
 
 func runCommand(home string, st *state, name string, args []string, via, by string, diag ...io.Writer) ([]Event, error) {
+	c := st.cap(kindCommand, name)
+	if c == nil || !c.Decl.Atomic {
+		return runCommandOnce(home, st, name, args, via, by, nil, diag...)
+	}
+	for attempt := 1; ; attempt++ {
+		after := []string{head(st.Events)}
+		out, err := runCommandOnce(home, st, name, args, via, by, after, diag...)
+		if !errors.Is(err, errLogChanged) || attempt == atomicAttempts {
+			return out, err
+		}
+		if st, err = loadState(home); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func runCommandOnce(home string, st *state, name string, args []string, via, by string, after []string, diag ...io.Writer) ([]Event, error) {
 	bin, err := materialize(home, st, kindCommand, name)
 	if err != nil {
 		return nil, err
@@ -450,7 +473,7 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 	if parseErr != nil {
 		return nil, fmt.Errorf("%w (nothing appended)", parseErr)
 	}
-	if err := ingest(home, out, nil, nil, by, io.Discard); err != nil {
+	if err := ingest(home, out, nil, nil, by, io.Discard, after...); err != nil {
 		return nil, err
 	}
 	return out, nil

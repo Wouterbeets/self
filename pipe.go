@@ -154,6 +154,9 @@ func lines(body string) ([]string, error) {
 // their parsing policy and assign provenance before handing over the batch.
 // Reports are written after unlocking; callers may discard them without losing
 // declaration, installation, or retirement handling.
+// errLogChanged reports a conditional batch whose expected head moved.
+var errLogChanged = errors.New("log changed")
+
 func ingest(home string, evs []Event, scripts []authored, prose []string, by string, out io.Writer, after ...string) error {
 	if len(evs) == 0 && len(scripts) == 0 && len(prose) == 0 {
 		return nil
@@ -177,7 +180,7 @@ func ingest(home string, evs []Event, scripts []authored, prose []string, by str
 				return err
 			}
 			if head(events) != after[0] {
-				return fmt.Errorf("log changed: expected %s, have %s; reread before retrying", after[0], head(events))
+				return fmt.Errorf("%w: expected %s, have %s; reread before retrying", errLogChanged, after[0], head(events))
 			}
 		}
 		return ingestLocked(home, key, evs, scripts, prose, by, &report)

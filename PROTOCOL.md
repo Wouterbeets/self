@@ -165,6 +165,12 @@ Rationale in the summary costs every pass for the benefit of one. A declaration
 without `summary` shows the opening sentence of its `description`, clipped: a
 fallback, not the contract.
 
+A command declaration may add `"atomic": true` when the command only decides
+from the log it reads (a claim, a counter, a one-use approval). Its batch then
+commits only if the log head is still the one it was fed; otherwise the kernel
+reruns it on the fresh log, up to eight times, then fails. Reruns repeat any
+external effect, so never mark a command atomic that acts outside the log.
+
 A declaration stays pending until a script is installed. A refused attempt
 records `script.rejected`; its reason remains in the brief until superseded.
 

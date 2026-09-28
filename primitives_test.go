@@ -145,3 +145,47 @@ func TestLoopExplicitSettlementIsScopedToSuccessfulStdout(t *testing.T) {
 		}
 	}
 }
+
+func TestAtomicCommandDecidesFromTheLogItCommits(t *testing.T) {
+	// claim: succeeds only while no claim is in the log; count: numbers ticks.
+	claim := "#!/bin/sh\nif grep -q '\"name\":\"slot.claimed\"'; then echo held >&2; exit 3; fi\n" +
+		"echo '{\"name\":\"slot.claimed\",\"payload\":{}}'\n"
+	count := "#!/bin/sh\nn=$(grep -c '\"name\":\"tick.counted\"')\n" +
+		"echo \"{\\\"name\\\":\\\"tick.counted\\\",\\\"payload\\\":{\\\"n\\\":$((n+1))}}\"\n"
+	for _, atomic := range []bool{true, false} {
+		h := home(t)
+		heard(t, h, line(t, "command.declared", decl{Name: "claim", Atomic: atomic})+
+			line(t, "script.authored", authored{Type: kindCommand, Name: "claim", Script: claim})+
+			line(t, "command.declared", decl{Name: "count", Atomic: atomic})+
+			line(t, "script.authored", authored{Type: kindCommand, Name: "count", Script: count}))
+		const n = 6
+		var wg sync.WaitGroup
+		claims := make(chan error, n)
+		for range n {
+			wg.Go(func() {
+				_, err := runCommand(h, replayed(t, h), "claim", nil, doorCLI, "")
+				claims <- err
+			})
+			wg.Go(func() { runCommand(h, replayed(t, h), "count", nil, doorCLI, "") })
+		}
+		wg.Wait()
+		close(claims)
+		winners, ticks := 0, map[string]bool{}
+		for err := range claims {
+			if err == nil {
+				winners++
+			}
+		}
+		for _, e := range replayed(t, h).Events {
+			if e.Name == "tick.counted" {
+				ticks[string(e.Payload)] = true
+			}
+		}
+		if atomic && (winners != 1 || len(ticks) != n) {
+			t.Fatalf("atomic: %d claims won, %d distinct ticks of %d", winners, len(ticks), n)
+		}
+		if !atomic {
+			t.Logf("unconditional: %d claims won, %d distinct ticks of %d", winners, len(ticks), n)
+		}
+	}
+}
