@@ -195,6 +195,7 @@ func cmdLearn(home, ref string, out io.Writer, into ...string) error {
 	if err != nil {
 		return err
 	}
+	project(home, false)
 	st, err := loadState(home)
 	if err != nil {
 		return err

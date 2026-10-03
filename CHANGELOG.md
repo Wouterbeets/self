@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Unix integration
+## Unreleased — Unix integration, everything is a file
 
 `self run` and `self view` exit with a capability's own non-zero status, so a
 lease refusal's `3` reaches `||` and shell scripts; other failures stay `1`.
@@ -15,6 +15,16 @@ the command is fed only those events. An atomic command's batch now commits
 unless one of its consumed events was appended meanwhile, so unrelated appends
 no longer force reruns. Receipts without `consumes` sign as before. The lease,
 budget and checkpoint examples declare it.
+
+Everything is a file on the read side, opt in by directory. If
+`$SELF_HOME/view/` exists, `view/<name>` holds what `self view <name>` prints
+(including the built-in `log`); if `$SELF_HOME/bin/` exists, `bin/<name>` is a
+two-line shim for `self run <name>`. Both are refreshed after every commit
+(`hear`, commands, `learn`) outside the log lock, rerunning only views whose
+`consumes` match the new events or whose script changed, and rewriting a file
+only when its bytes change. Retired capabilities lose their files;
+`self rehydrate` rebuilds both trees. Like `cap/`, they are caches: failures
+are reported on stderr and never fail a commit.
 
 ## v1.1.0 — intents, coordination, a clean tree
 
