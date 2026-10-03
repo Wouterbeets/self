@@ -83,15 +83,13 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		page := brief(home, st)
 		if len(args) > 0 {
-			page, err := briefOne(st, args[0])
-			if err != nil {
+			if page, err = briefOne(st, args[0]); err != nil {
 				return err
 			}
-			_, err = io.WriteString(out, page)
-			return err
 		}
-		_, err = io.WriteString(out, brief(home, st))
+		_, err = io.WriteString(out, page)
 		return err
 
 	case "run", "view":
@@ -109,30 +107,24 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			return err
 		}
 		name, rest := args[0], args[1:]
-		if unknown := unfoldMissing(st, typ, name); unknown != "" {
-			io.WriteString(os.Stderr, unknown)
-		}
+		io.WriteString(os.Stderr, unfoldMissing(st, typ, name))
 		said := &tally{w: os.Stderr}
+		var page []byte
 		if verb == "view" {
-			page, err := runViewDiag(home, st, name, said, rest...)
-			if err != nil {
-				io.WriteString(os.Stderr, unfoldFailed(st, typ, name, said.n == 0))
-				return err
+			page, err = runViewDiag(home, st, name, said, rest...)
+		} else {
+			var evs []Event
+			evs, err = runCommand(home, st, name, rest, doorCLI, callerClaim(), said)
+			for _, e := range evs {
+				page = fmt.Appendf(page, "%d\t%s\t%s\n", e.Seq, e.Name, trunc(compact(e.Payload), 160))
 			}
-			_, err = out.Write(page)
-			return err
 		}
-		evs, err := runCommand(home, st, name, rest, doorCLI, callerClaim(), said)
 		if err != nil {
 			io.WriteString(os.Stderr, unfoldFailed(st, typ, name, said.n == 0))
 			return err
 		}
-		for _, e := range evs {
-			if _, err := fmt.Fprintf(out, "%d\t%s\t%s\n", e.Seq, e.Name, trunc(compact(e.Payload), 160)); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err = out.Write(page)
+		return err
 
 	case "loop":
 		return cmdLoop(home, args, out, os.Stderr)
@@ -238,10 +230,7 @@ func brief(home string, st *state) string {
 }
 
 func unfoldMissing(st *state, typ, name string) string {
-	if st.cap(typ, name) != nil || st.cap(otherKind(typ), name) != nil {
-		return ""
-	}
-	if typ == kindView && name == "log" {
+	if st.cap(typ, name) != nil || st.cap(otherKind(typ), name) != nil || (typ == kindView && name == "log") {
 		return ""
 	}
 	return fmt.Sprintf("self: no %s %q in this log. What there is:\n\n%s\n", typ, name, capabilityList(st, typ))
