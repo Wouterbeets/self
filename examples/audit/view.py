@@ -105,8 +105,13 @@ for e in events:
                 owner[e['seq']] = p[k]
 
 
+by_owner = {}
+for e in events:
+    by_owner.setdefault(owner.get(e['seq']), []).append(e)
+
+
 def runs_of(who):
-    mine = [e for e in events if owner.get(e['seq']) == who]
+    mine = by_owner.get(who, [])
     runs, cur, prev = [], [], None
     for e in mine:
         t = when(e)
