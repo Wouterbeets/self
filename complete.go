@@ -27,6 +27,17 @@ var verbCandidates = []struct{ name, desc string }{
 	{"help", "print the complete protocol"},
 }
 
+var completionShims = map[string]string{"zsh": zshShim, "bash": bashShim, "fish": fishShim}
+
+// offer prints each candidate ("name" or "name\tdescription") whose name extends cur.
+func offer(out io.Writer, cur string, candidates ...string) {
+	for _, c := range candidates {
+		if name, _, _ := strings.Cut(c, "\t"); strings.HasPrefix(name, cur) {
+			fmt.Fprintln(out, c)
+		}
+	}
+}
+
 func cmdComplete(home string, words []string, out io.Writer) error {
 	if len(words) == 0 {
 		words = []string{""}
@@ -36,9 +47,7 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 
 	if len(prev) == 0 {
 		for _, v := range verbCandidates {
-			if strings.HasPrefix(v.name, cur) {
-				fmt.Fprintf(out, "%s\t%s\n", v.name, v.desc)
-			}
+			offer(out, cur, v.name+"\t"+v.desc)
 		}
 		return nil
 	}
@@ -63,7 +72,7 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 			completeCapNames(st, typ, cur, out)
 			return nil
 		}
-		emitLines(out, runCompleter(home, st, "complete."+prev[1], words))
+		runCompleter(home, st, "complete."+prev[1], words, out)
 
 	case "brief":
 		if len(prev) != 1 {
@@ -99,27 +108,18 @@ func cmdComplete(home string, words []string, out io.Writer) error {
 		if len(prev) != 1 {
 			return nil
 		}
-		for _, sh := range []string{"zsh", "bash", "fish"} {
-			if strings.HasPrefix(sh, cur) {
-				fmt.Fprintln(out, sh)
-			}
-		}
+		offer(out, cur, "zsh", "bash", "fish")
 
 	case "loop":
 		if !strings.HasPrefix(cur, "-") {
 			return nil
 		}
-		for _, f := range []struct{ name, desc string }{
-			{"--ask", "the ask; every pass sees it"},
-			{"--max-passes", "at most N passes"},
-			{"--settle", "quiet passes in a row before the loop stops"},
-			{"--timeout", "fail when one mind process exceeds this duration"},
-			{"--help", "print the complete loop invocation"},
-		} {
-			if strings.HasPrefix(f.name, cur) {
-				fmt.Fprintf(out, "%s\t%s\n", f.name, f.desc)
-			}
-		}
+		offer(out, cur,
+			"--ask\tthe ask; every pass sees it",
+			"--max-passes\tat most N passes",
+			"--settle\tquiet passes in a row before the loop stops",
+			"--timeout\tfail when one mind process exceeds this duration",
+			"--help\tprint the complete loop invocation")
 	}
 	return nil
 }
@@ -160,39 +160,22 @@ func completeDeclNames(st *state, cur string, out io.Writer) {
 	}
 }
 
-func runCompleter(home string, st *state, name string, args []string) []string {
+func runCompleter(home string, st *state, name string, args []string, out io.Writer) {
 	c := st.cap(kindView, name)
 	if c == nil || c.Receipt == nil {
-		return nil
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), completerTimeout)
 	defer cancel()
-	out, err := executeView(ctx, home, st, name, args, io.Discard, completerTimeout)
+	page, err := executeView(ctx, home, st, name, args, io.Discard, completerTimeout)
 	if err != nil {
-		return nil
+		return
 	}
-	lines := strings.Split(strings.ReplaceAll(string(out), "\r", ""), "\n")
-	return lines[:min(len(lines), completerMaxLines)]
-}
-
-func emitLines(out io.Writer, lines []string) {
-	for _, l := range lines {
+	lines := strings.Split(strings.ReplaceAll(string(page), "\r", ""), "\n")
+	for _, l := range lines[:min(len(lines), completerMaxLines)] {
 		if l != "" {
 			fmt.Fprintln(out, l)
 		}
-	}
-}
-
-func completionScript(shell string) (string, error) {
-	switch shell {
-	case "zsh":
-		return zshShim, nil
-	case "bash":
-		return bashShim, nil
-	case "fish":
-		return fishShim, nil
-	default:
-		return "", fmt.Errorf("no completion for %q — shells: zsh bash fish", shell)
 	}
 }
 

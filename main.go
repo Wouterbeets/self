@@ -159,11 +159,11 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if len(args) != 1 {
 			return fmt.Errorf("usage: self completion <zsh|bash|fish>")
 		}
-		script, err := completionScript(args[0])
-		if err != nil {
-			return err
+		script, ok := completionShims[args[0]]
+		if !ok {
+			return fmt.Errorf("no completion for %q — shells: zsh bash fish", args[0])
 		}
-		_, err = io.WriteString(out, script)
+		_, err := io.WriteString(out, script)
 		return err
 
 	case "__complete":
