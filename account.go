@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -92,12 +91,9 @@ func readAccount(ref string) (*account, error) {
 			if e.Origin == "" {
 				_ = json.Unmarshal(e.ID, &e.Origin)
 			}
-			a.Deposit = append(a.Deposit, Event{
-				Name: e.Name, Origin: e.Origin, OccurredAt: e.OccurredAt, By: e.By, Payload: e.Payload,
-			})
+			a.Deposit = append(a.Deposit, Event{Name: e.Name, Origin: e.Origin, OccurredAt: e.OccurredAt, By: e.By, Payload: e.Payload})
 		}
-		sum := sha256.Sum256(raw)
-		a.RecordHash = hex.EncodeToString(sum[:])
+		a.RecordHash = fmt.Sprintf("%x", sha256.Sum256(raw))
 	}
 	if mraw, err := os.ReadFile(filepath.Join(ref, "manifest.json")); err == nil {
 		if err := json.Unmarshal(mraw, &a.Manifest); err != nil {
@@ -276,8 +272,7 @@ func cmdGive(home, selector, dir string) error {
 	if err := writeFileAtomic(filepath.Join(dir, "record.jsonl"), recordBytes, 0644, os.Link); err != nil {
 		return fmt.Errorf("give into a fresh directory; record.jsonl must not be overwritten: %w", err)
 	}
-	sum := sha256.Sum256(recordBytes)
-	m.Events, m.RecordSha256 = len(selected), hex.EncodeToString(sum[:])
+	m.Events, m.RecordSha256 = len(selected), fmt.Sprintf("%x", sha256.Sum256(recordBytes))
 	mb, _ := json.MarshalIndent(m, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(mb, '\n'), 0644); err != nil {
 		return err

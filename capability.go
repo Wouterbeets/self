@@ -44,10 +44,7 @@ func (d decl) summary() string {
 	if s := oneLineOrEmpty(d.Summary); s != "" {
 		return clip(s, summaryBudget)
 	}
-	if s := oneLineOrEmpty(d.Description); s != "" {
-		return clip(firstSentence(s), summaryBudget)
-	}
-	return "(no description)"
+	return clip(firstSentence(oneLine(d.Description)), summaryBudget)
 }
 
 type capability struct {
@@ -236,8 +233,7 @@ func materialize(home string, st *state, typ, name string) (string, error) {
 	}
 
 	script := c.Receipt.Script
-	sum := sha256.Sum256([]byte(script))
-	hexsum := hex.EncodeToString(sum[:])
+	hexsum := fmt.Sprintf("%x", sha256.Sum256([]byte(script)))
 	blob := blobPath(home, hexsum)
 
 	if have, err := os.ReadFile(blob); err != nil || string(have) != script {

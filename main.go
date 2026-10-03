@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -183,10 +184,7 @@ func brief(home string, st *state) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# self — %s\n\n", home)
 
-	caller := callerClaim()
-	if caller == "" {
-		caller = `unset — export SELF_CALLER="<who you are>" so your writes are attributable`
-	}
+	caller := cmp.Or(callerClaim(), `unset — export SELF_CALLER="<who you are>" so your writes are attributable`)
 	fmt.Fprintf(&b, "log: %d events    caller: %s\n", len(st.Events), caller)
 	fmt.Fprintf(&b, "head: %s\n", head(st.Events))
 	if anyClipped(st) {
@@ -196,10 +194,8 @@ func brief(home string, st *state) string {
 		b.WriteString("\n**no .secret beside this log** — no receipt can verify, so this instance has no capabilities.\n")
 	}
 
-	b.WriteString("\n## commands — `self run <name> [args…]`\n\n")
-	b.WriteString(capabilityList(st, kindCommand))
-	b.WriteString("\n## views — `self view <name> [args…]`\n\n")
-	b.WriteString(capabilityList(st, kindView))
+	fmt.Fprintf(&b, "\n## commands — `self run <name> [args…]`\n\n%s\n## views — `self view <name> [args…]`\n\n%s",
+		capabilityList(st, kindCommand), capabilityList(st, kindView))
 
 	if p := st.pending(); len(p) > 0 {
 		b.WriteString("\n## pending — declared, no script yet\n\n")
@@ -210,10 +206,7 @@ func brief(home string, st *state) string {
 	if len(st.Reject) > 0 {
 		b.WriteString("\n## refused — standing, until authored or retired\n\n")
 		for _, r := range st.Reject {
-			where := strings.Trim(r.Type+"/"+r.Name, "/")
-			if where == "" {
-				where = "(unnamed)"
-			}
+			where := cmp.Or(strings.Trim(r.Type+"/"+r.Name, "/"), "(unnamed)")
 			fmt.Fprintf(&b, "- %s (seq %d): %s\n", where, r.Seq, oneLine(r.Reason))
 		}
 	}
@@ -223,9 +216,9 @@ func brief(home string, st *state) string {
 		b.WriteString("\nnothing pending, nothing refused.\n")
 	}
 
-	b.WriteString("\n## where\n\n")
-	b.WriteString("`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n")
-	b.WriteString("`self help` the protocol · `self view log` what happened lately · `self brief <name>` one capability in full\n")
+	b.WriteString("\n## where\n\n" +
+		"`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n" +
+		"`self help` the protocol · `self view log` what happened lately · `self brief <name>` one capability in full\n")
 	return b.String()
 }
 
@@ -354,12 +347,7 @@ func pendingMark(c *capability) string {
 	return "  *(pending — no script yet)*"
 }
 
-func oneLine(s string) string {
-	if s := oneLineOrEmpty(s); s != "" {
-		return s
-	}
-	return "(no description)"
-}
+func oneLine(s string) string { return cmp.Or(oneLineOrEmpty(s), "(no description)") }
 
 func oneLineOrEmpty(s string) string { return strings.Join(strings.Fields(s), " ") }
 

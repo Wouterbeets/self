@@ -329,9 +329,7 @@ func pendingSection(st *state) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n## Pending — declared, awaiting a script\n\n")
-	b.WriteString(protocolLayer("growth"))
-	b.WriteString("\n")
+	fmt.Fprintf(&b, "\n## Pending — declared, awaiting a script\n\n%s\n", protocolLayer("growth"))
 	for _, c := range pending {
 		d, _ := json.Marshal(c.Decl)
 		fmt.Fprintf(&b, "\n%s %q declared at seq %d:\n%s\n", c.Type, c.Name, c.DeclSeq, d)
