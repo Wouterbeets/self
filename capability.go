@@ -207,14 +207,10 @@ func validCapability(typ, name string) bool {
 	return true
 }
 
-func capDir(home string) string  { return filepath.Join(home, "cap") }
-func blobDir(home string) string { return filepath.Join(home, "cap", "blob") }
-
-func blobPath(home, sum string) string { return filepath.Join(blobDir(home), sum) }
-
-func linkPath(home, typ, name string) string {
-	return filepath.Join(capDir(home), typ, name, "run")
-}
+func capDir(home string) string              { return filepath.Join(home, "cap") }
+func blobDir(home string) string             { return filepath.Join(home, "cap", "blob") }
+func blobPath(home, sum string) string       { return filepath.Join(blobDir(home), sum) }
+func linkPath(home, typ, name string) string { return filepath.Join(capDir(home), typ, name, "run") }
 
 func materialize(home string, st *state, typ, name string) (string, error) {
 	c := st.cap(typ, name)
