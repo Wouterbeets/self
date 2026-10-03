@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -26,10 +27,7 @@ const defaultPort = "8377"
 var nameOK = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
-	}
+	port := cmp.Or(os.Getenv("PORT"), defaultPort)
 	fmt.Fprintf(os.Stderr, "self-serve: http://127.0.0.1:%s\n", port)
 	log.Fatal(http.ListenAndServe("127.0.0.1:"+port, handler()))
 }
@@ -43,17 +41,9 @@ func handler() http.Handler {
 }
 
 func index(w http.ResponseWriter, r *http.Request) {
-	out, errOut, code, err := selfOutput("brief")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if out, ok := kernel(w, http.StatusBadGateway, "brief"); ok {
+		reply(w, r, out, []byte(page("self", linkifyBrief(string(out)))))
 	}
-	if code != 0 {
-		http.Error(w, strings.TrimSpace(errOut+"\n"+string(out)), http.StatusBadGateway)
-		return
-	}
-	inner := linkifyBrief(string(out))
-	reply(w, r, out, []byte(page("self", inner)))
 }
 
 func view(w http.ResponseWriter, r *http.Request) {
@@ -63,17 +53,9 @@ func view(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(segs) == 0 {
-		out, errOut, code, err := selfOutput("view")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if out, ok := kernel(w, http.StatusBadGateway, "view"); ok {
+			reply(w, r, out, []byte(page("views", linkifyViewIndex(string(out)))))
 		}
-		if code != 0 {
-			http.Error(w, strings.TrimSpace(errOut+"\n"+string(out)), http.StatusBadGateway)
-			return
-		}
-		inner := linkifyViewIndex(string(out))
-		reply(w, r, out, []byte(page("views", inner)))
 		return
 	}
 
@@ -83,18 +65,10 @@ func view(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	argv := append([]string{"view", name}, args...)
-	out, errOut, code, err := selfOutput(argv...)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	out, ok := kernel(w, http.StatusBadRequest, append([]string{"view", name}, args...)...)
+	if !ok {
 		return
 	}
-	if code != 0 {
-		msg := strings.TrimSpace(errOut + "\n" + string(out))
-		http.Error(w, msg, http.StatusBadRequest)
-		return
-	}
-
 	var body []byte
 	switch {
 	case len(strings.TrimSpace(string(out))) == 0:
@@ -122,24 +96,35 @@ func run(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad command name", http.StatusBadRequest)
 		return
 	}
-	argv := append([]string{"run", name}, args...)
-	out, errOut, code, err := selfOutput(argv...)
+	out, errOut, code, err := selfOutput(append([]string{"run", name}, args...)...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	body := strings.TrimRight(string(out), "\n")
 	if errOut != "" {
-		body = body + "\n" + strings.TrimRight(errOut, "\n")
-	}
-	if code != 0 {
-		body = "self: exit " + strconv.Itoa(code) + "\n" + body
+		body += "\n" + errOut // already trimmed
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if code != 0 {
+		body = fmt.Sprintf("self: exit %d\n%s", code, body)
 		w.WriteHeader(http.StatusBadRequest)
 	}
 	fmt.Fprintln(w, body)
+}
+
+// kernel runs self and answers a failure itself: ok is false once it has.
+func kernel(w http.ResponseWriter, failure int, argv ...string) (out []byte, ok bool) {
+	out, errOut, code, err := selfOutput(argv...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, false
+	}
+	if code != 0 {
+		http.Error(w, strings.TrimSpace(errOut+"\n"+string(out)), failure)
+		return nil, false
+	}
+	return out, true
 }
 
 func reply(w http.ResponseWriter, r *http.Request, kernel, body []byte) {
@@ -163,13 +148,9 @@ func withRefresh(body []byte, etag string) []byte {
 	script := `<script>setInterval(function(){fetch(location.pathname,{headers:{"If-None-Match":` +
 		strconv.Quote(etag) + `}}).then(function(r){if(r.status===200)location.reload()})},2000)</script>`
 	if i := bytes.LastIndex(body, []byte("</body>")); i >= 0 {
-		out := make([]byte, 0, len(body)+len(script))
-		out = append(out, body[:i]...)
-		out = append(out, script...)
-		out = append(out, body[i:]...)
-		return out
+		return slices.Concat(body[:i], []byte(script), body[i:])
 	}
-	return append(body, []byte(script)...)
+	return append(body, script...)
 }
 
 func isHTML(b []byte) bool {
@@ -209,21 +190,15 @@ func resolveName(segs, names []string) (name string, args []string) {
 	if len(segs) == 0 {
 		return "", nil
 	}
-	bestN := 0
-	best := ""
+	name, args = segs[0], segs[1:]
+	longest := 0
 	for _, n := range names {
 		nsegs := strings.Split(n, "/")
-		if len(nsegs) == 0 || len(nsegs) > len(segs) {
-			continue
-		}
-		if len(nsegs) > bestN && slices.Equal(segs[:len(nsegs)], nsegs) {
-			bestN, best = len(nsegs), n
+		if len(nsegs) > longest && len(nsegs) <= len(segs) && slices.Equal(segs[:len(nsegs)], nsegs) {
+			name, args, longest = n, segs[len(nsegs):], len(nsegs)
 		}
 	}
-	if bestN == 0 {
-		return segs[0], segs[1:]
-	}
-	return best, segs[bestN:]
+	return name, args
 }
 
 var briefItem = regexp.MustCompile(`(?m)^- (?:\*\*)?([A-Za-z0-9_][A-Za-z0-9_./-]*)(?:\*\*)?`)
@@ -245,53 +220,31 @@ func knownNames(verb string) []string {
 	return names
 }
 
+// Names matched by briefItem and viewIndexItem hold only characters that
+// need no path escaping, so they go into hrefs verbatim.
 func linkifyBrief(raw string) string {
-	esc := html.EscapeString(raw)
-	start := strings.Index(esc, "## views")
-	if start < 0 {
-		return "<pre>" + boldBriefItems(esc) + "</pre>"
+	head, views, after := html.EscapeString(raw), "", ""
+	if start := strings.Index(head, "## views"); start >= 0 {
+		head, views = head[:start], head[start:]
+		if i := strings.Index(views[2:], "\n## "); i >= 0 {
+			views, after = views[:i+2], views[i+2:]
+		}
 	}
-	head, rest := esc[:start], esc[start:]
-	views, after := rest, ""
-	if i := strings.Index(rest[2:], "\n## "); i >= 0 {
-		i += 2
-		views, after = rest[:i], rest[i:]
-	}
-	views = briefItem.ReplaceAllStringFunc(views, func(m string) string {
-		sub := briefItem.FindStringSubmatch(m)
-		name := sub[1]
-		return `- <a href="/view/` + pathEscapeName(name) + `"><strong>` + name + `</strong></a>`
-	})
 	// Commands stay names, not GET links: a click would append.
-	return "<pre>" + boldBriefItems(head) + views + boldBriefItems(after) + "</pre>"
-}
-
-func boldBriefItems(s string) string {
-	return briefItem.ReplaceAllString(s, `- <strong>$1</strong>`)
+	bold := `- <strong>${1}</strong>`
+	return "<pre>" + briefItem.ReplaceAllString(head, bold) +
+		briefItem.ReplaceAllString(views, `- <a href="/view/${1}"><strong>${1}</strong></a>`) +
+		briefItem.ReplaceAllString(after, bold) + "</pre>"
 }
 
 func linkifyViewIndex(raw string) string {
-	esc := html.EscapeString(raw)
-	esc = viewIndexItem.ReplaceAllStringFunc(esc, func(m string) string {
-		sub := viewIndexItem.FindStringSubmatch(m)
-		name := sub[1]
-		return `- <a href="/view/` + pathEscapeName(name) + `">` + name + `</a> —`
-	})
-	return "<pre>" + esc + "</pre>"
+	return "<pre>" + viewIndexItem.ReplaceAllString(html.EscapeString(raw), `- <a href="/view/${1}">${1}</a> —`) + "</pre>"
 }
 
 func linkifyTextView(raw string) string {
 	esc := html.EscapeString(raw)
 	esc = markdownLink.ReplaceAllString(esc, `<a href="$2">$1</a>`)
 	return "<pre>" + esc + "</pre>"
-}
-
-func pathEscapeName(name string) string {
-	parts := strings.Split(name, "/")
-	for i, p := range parts {
-		parts[i] = url.PathEscape(p)
-	}
-	return strings.Join(parts, "/")
 }
 
 func selfOutput(argv ...string) (out []byte, errOut string, code int, err error) {
