@@ -16,13 +16,8 @@ import (
 var protocolDoc string
 
 func protocolLayer(name string) string {
-	begin := "<!-- prompt:" + name + ":begin -->"
-	end := "<!-- prompt:" + name + ":end -->"
-	_, rest, ok := strings.Cut(protocolDoc, begin)
-	if !ok {
-		return ""
-	}
-	body, _, ok := strings.Cut(rest, end)
+	_, rest, _ := strings.Cut(protocolDoc, "<!-- prompt:"+name+":begin -->")
+	body, _, ok := strings.Cut(rest, "<!-- prompt:"+name+":end -->") // a missing begin leaves rest empty
 	if !ok {
 		return ""
 	}
@@ -83,11 +78,13 @@ type authored struct {
 }
 
 func wire(body string) (evs []Event, scripts []authored, prose []string, err error) {
-	all, err := lines(body)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	for _, line := range all {
+	sc := bufio.NewScanner(strings.NewReader(body))
+	sc.Buffer(make([]byte, 1024*1024), lineLimit)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
 		probe, ok := eventLine(strings.TrimSpace(strings.Trim(line, "`")))
 		if !ok {
 			prose = append(prose, line)
@@ -100,6 +97,9 @@ func wire(body string) (evs []Event, scripts []authored, prose []string, err err
 			continue
 		}
 		evs = append(evs, newEvent(probe.Name, probe.Payload))
+	}
+	if err := sc.Err(); err != nil {
+		return nil, nil, nil, fmt.Errorf("reading the wire: %w (nothing was heard — a line longer than %dMB cannot be one)", err, lineLimit/(1024*1024))
 	}
 	return evs, scripts, prose, nil
 }
@@ -137,21 +137,6 @@ const lineLimit = 64 * 1024 * 1024
 
 // errLogChanged reports a conditional batch whose expected head moved.
 var errLogChanged = errors.New("log changed")
-
-func lines(body string) ([]string, error) {
-	var out []string
-	sc := bufio.NewScanner(strings.NewReader(body))
-	sc.Buffer(make([]byte, 1024*1024), lineLimit)
-	for sc.Scan() {
-		if line := strings.TrimSpace(sc.Text()); line != "" {
-			out = append(out, line)
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("reading the wire: %w (nothing was heard — a line longer than %dMB cannot be one)", err, lineLimit/(1024*1024))
-	}
-	return out, nil
-}
 
 // ingest is the shared commit path for validated input. Entry points retain
 // their parsing policy and assign provenance before handing over the batch.
