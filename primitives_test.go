@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestConditionalHearConcurrentWriters(t *testing.T) {
@@ -187,5 +191,87 @@ func TestAtomicCommandDecidesFromTheLogItCommits(t *testing.T) {
 		if !atomic {
 			t.Logf("unconditional: %d claims won, %d distinct ticks of %d", winners, len(ticks), n)
 		}
+	}
+}
+
+// A capability's own exit status is the caller's answer, not just "failed".
+func TestCapabilityExitStatusPassesThrough(t *testing.T) {
+	h := home(t)
+	refuse := "#!/bin/sh\ncat >/dev/null\necho held >&2\nexit 3\n"
+	heard(t, h, line(t, "command.declared", decl{Name: "claim"})+
+		line(t, "script.authored", authored{Type: kindCommand, Name: "claim", Script: refuse})+
+		line(t, "view.declared", decl{Name: "gate"})+
+		line(t, "script.authored", authored{Type: kindView, Name: "gate", Script: refuse}))
+	for verb, name := range map[string]string{"run": "claim", "view": "gate"} {
+		var exit *exec.ExitError
+		if err := dispatch(h, verb, []string{name}, io.Discard); !errors.As(err, &exit) || exit.ExitCode() != 3 {
+			t.Fatalf("self %s lost the exit status: %v", verb, err)
+		}
+	}
+}
+
+// A stdin command reads the caller's bytes on stdin and its consumed log on fd 3;
+// only a consumed append reruns it, and the rerun gets the same bytes.
+func TestStdinCommandWithConsumesRerunsOnlyOnItsOwnEvents(t *testing.T) {
+	script := "#!/bin/sh\nn=$(cat attempts 2>/dev/null || echo 0)\necho $((n+1)) >attempts\n" +
+		"[ \"$n\" = 0 ] && echo \"$SELF_INJECT\" >>\"$SELF_HOME/events.jsonl\"\n" +
+		"printf '{\"name\":\"slot.claimed\",\"payload\":{\"stdin\":\"%s\",\"fed\":%s}}\\n' \"$(cat)\" \"$(grep -c . <&3)\"\n"
+	for inject, want := range map[string]string{"noise.made": `{"stdin":"piped","fed":0}`, "slot.claimed": `{"stdin":"piped","fed":1}`} {
+		h := home(t)
+		heard(t, h, line(t, "command.declared", decl{Name: "claim", Atomic: true, Stdin: true, Consumes: []string{"slot.claimed"}})+
+			line(t, "script.authored", authored{Type: kindCommand, Name: "claim", Script: script}))
+		raw, _ := json.Marshal(newEvent(inject, nil))
+		t.Setenv("SELF_INJECT", string(raw))
+		in := filepath.Join(t.TempDir(), "in")
+		os.WriteFile(in, []byte("piped"), 0600)
+		f, _ := os.Open(in)
+		old := os.Stdin
+		os.Stdin = f
+		evs, err := runCommand(h, replayed(t, h), "claim", nil, doorCLI, "")
+		os.Stdin = old
+		f.Close()
+		attempts, _ := os.ReadFile(filepath.Join(h, "attempts"))
+		if err != nil || len(evs) != 1 || string(evs[0].Payload) != want {
+			t.Fatalf("%s: %v %v", inject, err, evs)
+		}
+		if reran := strings.TrimSpace(string(attempts)) == "2"; reran != (inject == "slot.claimed") {
+			t.Fatalf("%s: %s attempt(s)", inject, attempts)
+		}
+	}
+}
+
+func TestWatchFollowStreamsUntilTheTimeout(t *testing.T) {
+	h := home(t)
+	cursor := head(replayed(t, h).Events)
+	var out bytes.Buffer
+	done := make(chan error)
+	go func() {
+		done <- cmdWatch(h, []string{"--after", cursor, "--timeout", "1s", "--follow", "sample."}, &out)
+	}()
+	heard(t, h, `{"name":"sample.one","payload":{}}`)
+	time.Sleep(500 * time.Millisecond)
+	heard(t, h, `{"name":"noise.one","payload":{}}
+{"name":"sample.two","payload":{}}`)
+	if err := <-done; err != nil || strings.Count(out.String(), "\n") != 2 || !strings.Contains(out.String(), "sample.two") {
+		t.Fatalf("follow: %v\n%s", err, out.String())
+	}
+}
+
+// Commands now sign consumes too; a receipt without it signs exactly as before.
+func TestCommandConsumesIsSignedAndOldReceiptsVerify(t *testing.T) {
+	h := home(t)
+	os.WriteFile(secretPath(h), []byte(hex.EncodeToString([]byte("an old key"))), 0600)
+	heard(t, h, line(t, "command.declared", decl{Name: "lease"})+
+		line(t, "script.authored", authored{Type: kindCommand, Name: "lease", Script: "#!/bin/sh\ntrue\n"})+
+		line(t, "command.declared", decl{Name: "count", Consumes: []string{"tick.counted"}})+
+		line(t, "script.authored", authored{Type: kindCommand, Name: "count", Script: "#!/bin/sh\ntrue\n"}))
+	st := replayed(t, h)
+	// Signed by the kernel before commands could consume.
+	if sig := st.cap(kindCommand, "lease").Receipt.Sig; sig != "34b42417db5e42ab8dd7d03c15dc4dc07371f00ee5e209bf5b36aae6fbbe33e8" {
+		t.Fatalf("a receipt without consumes changed signature: %s", sig)
+	}
+	page, _ := briefOne(st, "count")
+	if r := st.cap(kindCommand, "count").Receipt; len(r.Consumes) != 1 || !strings.Contains(page, "consumes: tick.counted") {
+		t.Fatalf("command consumes not signed or shown: %+v\n%s", r, page)
 	}
 }

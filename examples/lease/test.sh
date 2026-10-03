@@ -14,7 +14,7 @@ export SELF_HOME=$tmp/home
 s() { "$bin" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-jq -nc '{name:"command.declared",payload:{name:"lease",summary:"Hold exclusive expiring ownership of a named resource",description:"see script",atomic:true}}
+jq -nc '{name:"command.declared",payload:{name:"lease",summary:"Hold exclusive expiring ownership of a named resource",description:"see script",atomic:true,consumes:["lease.acquired","lease.renewed","lease.released"]}}
         ,{name:"view.declared",payload:{name:"leases",summary:"Live leases or one resource history",description:"see script",consumes:["lease.acquired","lease.renewed","lease.released"]}}' | s hear >/dev/null 2>&1
 jq -nc --rawfile c "$here/command.py" --rawfile v "$here/view.py" \
 	'{name:"script.authored",payload:{type:"command",name:"lease",script:$c}},{name:"script.authored",payload:{type:"view",name:"leases",script:$v}}' | s hear >/dev/null 2>&1
@@ -31,7 +31,9 @@ acq=$(s view leases goal/x | grep -c ' acquired ' || true)
 [ "$acq" = 1 ] || fail "expected one lease.acquired, got $acq"
 
 # Others are refused with the holder named; the holder renews and releases.
-SELF_CALLER=other s run lease acquire goal/x 2>"$tmp/err" && fail "second holder acquired"
+code=0
+SELF_CALLER=other s run lease acquire goal/x 2>"$tmp/err" || code=$?
+[ "$code" = 3 ] || fail "second holder: exit $code, want 3"
 grep -q "held by $winner" "$tmp/err" || fail "refusal does not name holder: $(cat "$tmp/err")"
 SELF_CALLER=other s run lease renew goal/x 2>/dev/null && fail "non-holder renewed"
 SELF_CALLER=$winner s run lease renew goal/x --ttl 1h | grep -q lease.renewed || fail "renew"

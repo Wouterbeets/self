@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -30,8 +31,10 @@ type decl struct {
 	Description string   `json:"description"`
 	Consumes    []string `json:"consumes,omitempty"`
 	// Atomic marks a command that only decides from the log it reads: its
-	// batch commits only if the log is unchanged, and it reruns otherwise.
+	// batch commits only if what it consumes is unchanged, else it reruns.
 	Atomic bool `json:"atomic,omitempty"`
+	// Stdin hands a command the caller's stdin, and its log on fd 3.
+	Stdin bool `json:"stdin,omitempty"`
 }
 
 // atomicAttempts bounds reruns of an atomic command under contention.
@@ -379,10 +382,11 @@ func scriptEnv(selfHome, work string) []string {
 		"PYTHONHASHSEED=0", // otherwise set iteration is per-process random
 	}
 	if selfHome != "" {
-		env = append(env, "SELF_HOME="+selfHome)
+		cwd, _ := os.Getwd()
+		env = append(env, "SELF_HOME="+selfHome, "SELF_CWD="+cwd)
 	}
 	for _, kv := range os.Environ() {
-		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SELF_") && k != "SELF_HOME" {
+		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SELF_") && k != "SELF_HOME" && k != "SELF_CWD" {
 			env = append(env, kv)
 		}
 	}
@@ -402,13 +406,15 @@ func feed(w io.WriteCloser, events []Event) {
 }
 
 func runCommand(home string, st *state, name string, args []string, via, by string, diag ...io.Writer) ([]Event, error) {
-	c := st.cap(kindCommand, name)
-	if c == nil || !c.Decl.Atomic {
-		return runCommandOnce(home, st, name, args, via, by, nil, diag...)
+	var input []byte
+	if c := st.cap(kindCommand, name); c != nil && c.Decl.Stdin {
+		var err error
+		if input, err = io.ReadAll(os.Stdin); err != nil {
+			return nil, err
+		}
 	}
 	for attempt := 1; ; attempt++ {
-		after := []string{head(st.Events)}
-		out, err := runCommandOnce(home, st, name, args, via, by, after, diag...)
+		out, err := runCommandOnce(home, st, name, args, via, by, input, diag...)
 		if !errors.Is(err, errLogChanged) || attempt == atomicAttempts {
 			return out, err
 		}
@@ -418,19 +424,28 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 	}
 }
 
-func runCommandOnce(home string, st *state, name string, args []string, via, by string, after []string, diag ...io.Writer) ([]Event, error) {
+func runCommandOnce(home string, st *state, name string, args []string, via, by string, input []byte, diag ...io.Writer) ([]Event, error) {
 	bin, err := materialize(home, st, kindCommand, name)
 	if err != nil {
 		return nil, err
 	}
+	c := st.cap(kindCommand, name)
+	events := consumed(st.Events, c.Receipt.Consumes)
 	stderr := io.Writer(os.Stderr)
 	if len(diag) > 0 && diag[0] != nil {
 		stderr = diag[0]
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home, home), home, stderr
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
+	var log io.WriteCloser
+	if c.Decl.Stdin {
+		r, w, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+		cmd.Stdin, cmd.ExtraFiles, log = bytes.NewReader(input), []*os.File{r}, w
+	} else if log, err = cmd.StdinPipe(); err != nil {
 		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
@@ -440,7 +455,7 @@ func runCommandOnce(home string, st *state, name string, args []string, via, by 
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	feed(stdin, st.Events)
+	feed(log, events)
 
 	var out []Event
 	var parseErr error
@@ -472,6 +487,10 @@ func runCommandOnce(home string, st *state, name string, args []string, via, by 
 	}
 	if parseErr != nil {
 		return nil, fmt.Errorf("%w (nothing appended)", parseErr)
+	}
+	var after []string
+	if c.Decl.Atomic {
+		after = append([]string{head(events)}, c.Receipt.Consumes...)
 	}
 	if err := ingest(home, out, nil, nil, by, io.Discard, after...); err != nil {
 		return nil, err

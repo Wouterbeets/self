@@ -17,15 +17,17 @@ func head(events []Event) string {
 	return events[len(events)-1].ID
 }
 
-// Watch returns the first matching batch. Its cursor is an event ID, not a
-// sequence number that can be silently reused after a replaced or damaged log.
+// Watch returns the first matching batch, or each one with --follow. Its cursor
+// is an event ID, not a sequence number that can be silently reused after a
+// replaced or damaged log.
 func cmdWatch(home string, args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("watch", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	after := flags.String("after", "", "event ID; empty for all, omitted for current head")
 	timeout := flags.Duration("timeout", 10*time.Minute, "maximum wait")
+	follow := flags.Bool("follow", false, "keep printing batches until the timeout")
 	if err := flags.Parse(args); err != nil || flags.NArg() > 1 || *timeout <= 0 {
-		return fmt.Errorf("usage: self watch [--after <id|empty>] [--timeout 10m] [event-prefix]")
+		return fmt.Errorf("usage: self watch [--after <id|empty>] [--timeout 10m] [--follow] [event-prefix]")
 	}
 	deadline := time.Now().Add(*timeout)
 	var previous os.FileInfo
@@ -64,14 +66,16 @@ func cmdWatch(home string, args []string, out io.Writer) error {
 				found = true
 			}
 		}
-		if found {
+		if found && !*follow {
 			return nil
 		}
 		*after = head(events)
-		if remaining := time.Until(deadline); remaining <= 0 {
-			return fmt.Errorf("watch timed out without matching events")
-		} else {
+		if remaining := time.Until(deadline); remaining > 0 {
 			time.Sleep(min(remaining, 250*time.Millisecond))
+		} else if *follow {
+			return nil
+		} else {
+			return fmt.Errorf("watch timed out without matching events")
 		}
 	}
 }

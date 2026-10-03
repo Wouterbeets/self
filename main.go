@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"unicode/utf8"
 )
@@ -46,6 +48,10 @@ func main() {
 	err := dispatch(home, verb, args, os.Stdout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "self: %s\n", err)
+		var exit *exec.ExitError
+		if (verb == "run" || verb == "view") && errors.As(err, &exit) && exit.ExitCode() > 0 {
+			os.Exit(exit.ExitCode())
+		}
 		os.Exit(1)
 	}
 }
@@ -306,7 +312,7 @@ func briefOne(st *state, selector string) (string, error) {
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "# %s\n\n%s\n", c.key(), strings.TrimSpace(c.Decl.Description))
-		if c.Type == kindView {
+		if c.Type == kindView || len(c.Decl.Consumes) > 0 {
 			consumes := strings.Join(c.Decl.Consumes, ", ")
 			if consumes == "" {
 				consumes = "the whole log"

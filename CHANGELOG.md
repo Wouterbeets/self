@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — Unix integration
+
+`self run` and `self view` exit with a capability's own non-zero status, so a
+lease refusal's `3` reaches `||` and shell scripts; other failures stay `1`.
+Commands receive the caller's working directory as `SELF_CWD` (views do not);
+their cwd is still the instance. A command declared with `"stdin": true` reads
+the caller's stdin, so `cat notes.md | self run remember` works; its log then
+arrives on fd 3, and atomic reruns replay the same bytes. `self watch --follow`
+keeps printing matching batches until its timeout, which then exits 0.
+
+Commands may declare `consumes` like views: it is signed into the receipt and
+the command is fed only those events. An atomic command's batch now commits
+unless one of its consumed events was appended meanwhile, so unrelated appends
+no longer force reruns. Receipts without `consumes` sign as before. The lease,
+budget and checkpoint examples declare it.
+
 ## v1.1.0 — intents, coordination, a clean tree
 
 The README now leads with the one line that matters: put `use self` in

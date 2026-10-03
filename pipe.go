@@ -179,8 +179,9 @@ func ingest(home string, evs []Event, scripts []authored, prose []string, by str
 			if err != nil {
 				return err
 			}
-			if head(events) != after[0] {
-				return fmt.Errorf("%w: expected %s, have %s; reread before retrying", errLogChanged, after[0], head(events))
+			// after[0] is the expected head of the log, or of the events named next.
+			if have := head(consumed(events, after[1:])); have != after[0] {
+				return fmt.Errorf("%w: expected %s, have %s; reread before retrying", errLogChanged, after[0], have)
 			}
 		}
 		return ingestLocked(home, key, evs, scripts, prose, by, &report)
@@ -297,10 +298,7 @@ func install(st *state, a authored, by string) (receipt, error) {
 	if c == nil {
 		return receipt{}, fmt.Errorf("%s/%s is not declared in this log — declare it in the same body, before the script", typ, name)
 	}
-	r := receipt{Type: typ, Name: name, Script: a.Script, By: by}
-	if typ == kindView {
-		r.Consumes = c.Decl.Consumes
-	}
+	r := receipt{Type: typ, Name: name, Script: a.Script, Consumes: c.Decl.Consumes, By: by}
 	r.Sig = sign(st.Key, r)
 	return r, nil
 }

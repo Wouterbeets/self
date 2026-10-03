@@ -16,7 +16,7 @@ wouter() { SELF_CALLER=wouter "$bin" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 events() { loop view log --all | wc -l; }
 
-jq -nc '{name:"command.declared",payload:{name:"checkpoint",summary:"Propose exact actions for a human decision; use each approved action once",description:"see script",atomic:true}}
+jq -nc '{name:"command.declared",payload:{name:"checkpoint",summary:"Propose exact actions for a human decision; use each approved action once",description:"see script",atomic:true,consumes:["checkpoint.proposed","checkpoint.approved","checkpoint.rejected","checkpoint.withdrawn","checkpoint.used"]}}
         ,{name:"view.declared",payload:{name:"checkpoint",summary:"Actions awaiting a human decision, and what approvals still cover",description:"see script",consumes:["checkpoint.proposed","checkpoint.approved","checkpoint.rejected","checkpoint.withdrawn","checkpoint.used"]}}' | loop hear >/dev/null 2>&1
 jq -nc --rawfile c "$here/command.py" --rawfile v "$here/view.py" \
 	'{name:"script.authored",payload:{type:"command",name:"checkpoint",script:$c}},{name:"script.authored",payload:{type:"view",name:"checkpoint",script:$v}}' | loop hear >/dev/null 2>&1
