@@ -243,8 +243,8 @@ caller's `SELF_*` variables, which is how you hand a capability configuration.
   exactly its receipt's `consumes` events in log order (`[]` or `["*"]` means
   all); no `SELF_HOME`; cwd an empty scratch directory; stdout opaque bytes for
   the reader, never the log. Same events in, same bytes out: no clock, no
-  network. Never materialized; replayed on demand. Not a sandbox — the kernel
-  simply hands a view no path.
+  network. Never stored in the log; replayed on demand. Not a sandbox — the
+  kernel simply hands a view no path.
 
 ## Events
 
@@ -292,6 +292,13 @@ Bytes live at `cap/blob/<sha256>`; `cap/<type>/<name>/run` symlinks to the blob.
 Execution resolves the latest live verified receipt, checks the blob's hash,
 rewrites it if it differs, runs it. Hand-edits under `cap/` are overwritten by
 the log.
+
+Two opt-in trees follow the same rule, each kept only if its directory exists.
+`view/<name>` holds what `self view <name>` prints, rewritten after a commit
+only when that output changes. `bin/<name>` is a shim for `self run <name>`,
+so `PATH=$SELF_HOME/bin:$PATH` makes capabilities commands. Anything else in
+them is removed; a projection failure is reported on stderr and never fails a
+commit.
 
 `self rehydrate` makes disk match the log exactly from `events.jsonl` and
 `.secret` alone: no model, no network.
@@ -378,7 +385,7 @@ self loop [opts] -- <mind>  run a mind until the log stops changing
 self learn [--into ID] <dir> deposit an account, print its learning prompt
 self watch [opts] [prefix]  wait for matching events; no append (READ)
 self give <sel> <dir>       write an account from the log
-self rehydrate              make cap/ match the log
+self rehydrate              make cap/, view/, bin/ match the log
 self completion <shell>     completion shim (zsh|bash|fish)
 self help                   this file
 ```
@@ -510,6 +517,7 @@ kernel, `self learn` under this one: the protocol is its own migration path.
   critical section. Concurrent commands may read the same earlier state; their
   committed batches cannot interleave. External effects are not rolled back.
 - **Capability scripts are not timed out.** Only the loop's mind process is.
+  With `view/`, a write waits for the views it reruns.
 - **The last log line is judged by whether it is a whole event.** Terminated: a
   record. Unterminated but parsing: a record, given its newline by the next
   append. Unterminated and unparseable: a torn write, skipped and dropped by the

@@ -322,6 +322,7 @@ func rehydrate(home string) error {
 	if err != nil {
 		return err
 	}
+	defer project(home, true) // deferred first, so it runs after unlock
 	defer unlock()
 	st, err := loadState(home)
 	if err != nil {
@@ -348,26 +349,33 @@ func rehydrate(home string) error {
 		installed++
 	}
 	for _, kind := range []string{kindCommand, kindView, "blob"} {
-		err := filepath.WalkDir(filepath.Join(capDir(home), kind), func(path string, entry fs.DirEntry, err error) error {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			if err != nil || keep[path] {
-				return err
-			}
-			if err := os.RemoveAll(path); err != nil {
-				return err
-			}
-			removed++
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		})
+		n, err := prune(filepath.Join(capDir(home), kind), keep)
+		removed += n
 		failures = errors.Join(failures, err)
 	}
 	fmt.Fprintf(os.Stderr, "self: %d capabilit(ies) materialized from the log, %d stale path(s) removed\n", installed, removed)
 	return failures
+}
+
+// prune removes everything under root that keep does not name.
+func prune(root string, keep map[string]bool) (removed int, err error) {
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil || keep[path] {
+			return err
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		removed++
+		if entry.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	return removed, err
 }
 
 func scriptEnv(selfHome, work string) []string {

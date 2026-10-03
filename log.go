@@ -268,8 +268,10 @@ func lastSeq(home string) (int, error) {
 	}
 }
 
-func lockLog(home string) (func(), error) {
-	lf, err := os.OpenFile(logPath(home), os.O_CREATE|os.O_RDWR, 0644)
+func lockLog(home string) (func(), error) { return lock(logPath(home)) }
+
+func lock(path string) (func(), error) {
+	lf, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
