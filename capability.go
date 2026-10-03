@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,11 +11,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
@@ -103,11 +104,6 @@ func (st *state) apply(events []Event) {
 		rejects[r.Type+"/"+r.Name] = r
 	}
 
-	forget := func(k string) {
-		delete(st.byKey, k)
-		delete(rejects, k)
-		st.Caps = slices.DeleteFunc(st.Caps, func(c *capability) bool { return c.key() == k })
-	}
 	live := func(typ, name string) *capability {
 		k := typ + "/" + name
 		if c, ok := st.byKey[k]; ok {
@@ -164,18 +160,17 @@ func (st *state) apply(events []Event) {
 			if json.Unmarshal(e.Payload, &t) != nil || !validCapability(t.Type, t.Name) {
 				continue
 			}
-			forget(t.Type + "/" + t.Name)
+			k := t.Type + "/" + t.Name
+			delete(st.byKey, k)
+			delete(rejects, k)
+			st.Caps = slices.DeleteFunc(st.Caps, func(c *capability) bool { return c.key() == k })
 		}
 	}
 
 	for _, c := range st.Caps {
 		c.Reject = rejects[c.key()]
 	}
-	st.Reject = st.Reject[:0]
-	for _, r := range rejects {
-		st.Reject = append(st.Reject, r)
-	}
-	sort.Slice(st.Reject, func(i, j int) bool { return st.Reject[i].Seq < st.Reject[j].Seq })
+	st.Reject = slices.SortedFunc(maps.Values(rejects), func(a, b *rejection) int { return a.Seq - b.Seq })
 }
 
 func (st *state) cap(typ, name string) *capability { return st.byKey[typ+"/"+name] }
@@ -203,23 +198,12 @@ func (st *state) pending() []*capability {
 func (st *state) capabilitiesReady() bool { return len(st.pending()) == 0 && len(st.Reject) == 0 }
 
 func validCapability(typ, name string) bool {
-	if typ != kindCommand && typ != kindView {
-		return false
-	}
-	if name == "" || strings.Contains(name, `\`) {
-		return false
-	}
-	if len(name) > 200 {
+	if (typ != kindCommand && typ != kindView) || name == "" || len(name) > 200 || strings.Contains(name, `\`) {
 		return false
 	}
 	for _, seg := range strings.Split(name, "/") {
-		if len(seg) > 64 {
-			return false
-		}
-		if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, ".") {
-			return false
-		}
-		if seg == "run" {
+		// A leading dot also rules out "." and "..".
+		if seg == "" || seg == "run" || strings.HasPrefix(seg, ".") || len(seg) > 64 {
 			return false
 		}
 	}
@@ -279,15 +263,8 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode, publish func(st
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
+	_, err = tmp.Write(data)
+	if err := errors.Join(err, tmp.Chmod(mode), tmp.Close()); err != nil {
 		return err
 	}
 	return publish(tmp.Name(), path)
@@ -552,12 +529,8 @@ func builtinLogView(st *state, all bool) []byte {
 		events = events[len(events)-builtinLogTail:]
 	}
 	for _, e := range events {
-		by := e.By
-		if by == "" {
-			by = "-"
-		}
 		fmt.Fprintf(&b, "%d\t%s\t%s\tvia=%s\tby=%s\t%s\n",
-			e.Seq, e.OccurredAt.Format(time.RFC3339), e.Name, e.Via, by,
+			e.Seq, e.OccurredAt.Format(time.RFC3339), e.Name, e.Via, cmp.Or(e.By, "-"),
 			trunc(compact(e.Payload), 200))
 	}
 	return []byte(b.String())
