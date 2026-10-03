@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -329,12 +330,7 @@ func capabilityList(st *state, typ string) string {
 }
 
 func anyClipped(st *state) bool {
-	for _, c := range st.Caps {
-		if strings.HasSuffix(c.Decl.summary(), "…") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(st.Caps, func(c *capability) bool { return strings.HasSuffix(c.Decl.summary(), "…") })
 }
 
 func pendingMark(c *capability) string {
