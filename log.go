@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -52,16 +53,11 @@ func newEvent(name string, payload json.RawMessage) Event {
 }
 
 func homeDir() string {
-	if v := os.Getenv("SELF_HOME"); v != "" {
-		if abs, err := filepath.Abs(v); err == nil {
-			return abs
-		}
-		return v
+	home := cmp.Or(os.Getenv("SELF_HOME"), ".")
+	if abs, err := filepath.Abs(home); err == nil {
+		return abs
 	}
-	if wd, err := os.Getwd(); err == nil {
-		return wd
-	}
-	return "."
+	return home
 }
 
 func logPath(home string) string { return filepath.Join(home, "events.jsonl") }
@@ -229,14 +225,10 @@ func lastSeq(home string) (int, error) {
 	}
 
 	for window := int64(64 * 1024); ; window *= 4 {
-		if window > st.Size() {
-			window = st.Size()
-		}
+		window = min(window, st.Size())
 		buf := make([]byte, window)
-		if window > 0 {
-			if _, err := f.ReadAt(buf, st.Size()-window); err != nil {
-				return 0, err
-			}
+		if _, err := f.ReadAt(buf, st.Size()-window); err != nil {
+			return 0, err
 		}
 		lines := bytes.Split(buf, []byte{'\n'})
 		// Highest seq in the window, not the last line: a hand-appended
@@ -254,10 +246,7 @@ func lastSeq(home string) (int, error) {
 			if json.Unmarshal(line, &e) != nil {
 				continue
 			}
-			found = true
-			if e.Seq > best {
-				best = e.Seq
-			}
+			found, best = true, max(best, e.Seq)
 		}
 		if found {
 			return best, nil

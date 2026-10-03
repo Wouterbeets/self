@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"net"
 	"net/url"
@@ -16,19 +17,14 @@ import (
 const defaultPort = "8377"
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
-	}
+	port := cmp.Or(os.Getenv("PORT"), defaultPort)
 	u := browseURL(port, os.Args[1:])
-
 	if !listening(port) {
 		if err := startServer(port); err != nil {
 			fmt.Fprintf(os.Stderr, "self-browse: %s\n", err)
 			os.Exit(1)
 		}
 	}
-
 	if err := openURL(u); err != nil {
 		fmt.Println(u)
 	}
@@ -61,9 +57,7 @@ func startServer(port string) error {
 		return err
 	}
 	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "PORT="+port)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	cmd.Env = append(os.Environ(), "PORT="+port) // stdout and stderr stay detached
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return err
@@ -97,11 +91,9 @@ func lookServe() (string, error) {
 
 func openURL(u string) error {
 	for _, name := range []string{"xdg-open", "open"} {
-		p, err := exec.LookPath(name)
-		if err != nil {
-			continue
+		if p, err := exec.LookPath(name); err == nil {
+			return exec.Command(p, u).Run()
 		}
-		return exec.Command(p, u).Run()
 	}
 	return fmt.Errorf("no opener")
 }

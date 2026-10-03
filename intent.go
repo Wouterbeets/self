@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -104,11 +105,7 @@ func intentBrief(st *state) string {
 
 func intentDetail(st *state, name string) (string, error) {
 	if name == "" {
-		open := st.openIntents()
-		if len(open) == 0 {
-			return "No open intents.\n", nil
-		}
-		return intentIndex(open), nil
+		return cmp.Or(intentIndex(st.openIntents()), "No open intents.\n"), nil
 	}
 	w := st.intent(name)
 	if w == nil {

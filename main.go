@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -89,15 +91,13 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		page := brief(home, st)
 		if len(args) > 0 {
-			page, err := briefOne(st, args[0])
-			if err != nil {
+			if page, err = briefOne(st, args[0]); err != nil {
 				return err
 			}
-			_, err = io.WriteString(out, page)
-			return err
 		}
-		_, err = io.WriteString(out, brief(home, st))
+		_, err = io.WriteString(out, page)
 		return err
 
 	case "run", "view":
@@ -115,30 +115,24 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			return err
 		}
 		name, rest := args[0], args[1:]
-		if unknown := unfoldMissing(st, typ, name); unknown != "" {
-			io.WriteString(os.Stderr, unknown)
-		}
+		io.WriteString(os.Stderr, unfoldMissing(st, typ, name))
 		said := &tally{w: os.Stderr}
+		var page []byte
 		if verb == "view" {
-			page, err := runViewDiag(home, st, name, said, rest...)
-			if err != nil {
-				io.WriteString(os.Stderr, unfoldFailed(st, typ, name, said.n == 0))
-				return err
+			page, err = runViewDiag(home, st, name, said, rest...)
+		} else {
+			var evs []Event
+			evs, err = runCommand(home, st, name, rest, doorCLI, callerClaim(), said)
+			for _, e := range evs {
+				page = fmt.Appendf(page, "%d\t%s\t%s\n", e.Seq, e.Name, trunc(compact(e.Payload), 160))
 			}
-			_, err = out.Write(page)
-			return err
 		}
-		evs, err := runCommand(home, st, name, rest, doorCLI, callerClaim(), said)
 		if err != nil {
 			io.WriteString(os.Stderr, unfoldFailed(st, typ, name, said.n == 0))
 			return err
 		}
-		for _, e := range evs {
-			if _, err := fmt.Fprintf(out, "%d\t%s\t%s\n", e.Seq, e.Name, trunc(compact(e.Payload), 160)); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err = out.Write(page)
+		return err
 
 	case "loop":
 		return cmdLoop(home, args, out, os.Stderr)
@@ -165,11 +159,11 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if len(args) != 1 {
 			return fmt.Errorf("usage: self completion <zsh|bash|fish>")
 		}
-		script, err := completionScript(args[0])
-		if err != nil {
-			return err
+		script, ok := completionShims[args[0]]
+		if !ok {
+			return fmt.Errorf("no completion for %q — shells: zsh bash fish", args[0])
 		}
-		_, err = io.WriteString(out, script)
+		_, err := io.WriteString(out, script)
 		return err
 
 	case "__complete":
@@ -197,10 +191,7 @@ func brief(home string, st *state) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# self — %s\n\n", home)
 
-	caller := callerClaim()
-	if caller == "" {
-		caller = `unset — export SELF_CALLER="<who you are>" so your writes are attributable`
-	}
+	caller := cmp.Or(callerClaim(), `unset — export SELF_CALLER="<who you are>" so your writes are attributable`)
 	fmt.Fprintf(&b, "log: %d events    caller: %s\n", len(st.Events), caller)
 	fmt.Fprintf(&b, "head: %s\n", head(st.Events))
 	if anyClipped(st) {
@@ -210,10 +201,8 @@ func brief(home string, st *state) string {
 		b.WriteString("\n**no .secret beside this log** — no receipt can verify, so this instance has no capabilities.\n")
 	}
 
-	b.WriteString("\n## commands — `self run <name> [args…]`\n\n")
-	b.WriteString(capabilityList(st, kindCommand))
-	b.WriteString("\n## views — `self view <name> [args…]`\n\n")
-	b.WriteString(capabilityList(st, kindView))
+	fmt.Fprintf(&b, "\n## commands — `self run <name> [args…]`\n\n%s\n## views — `self view <name> [args…]`\n\n%s",
+		capabilityList(st, kindCommand), capabilityList(st, kindView))
 
 	if p := st.pending(); len(p) > 0 {
 		b.WriteString("\n## pending — declared, no script yet\n\n")
@@ -224,10 +213,7 @@ func brief(home string, st *state) string {
 	if len(st.Reject) > 0 {
 		b.WriteString("\n## refused — standing, until authored or retired\n\n")
 		for _, r := range st.Reject {
-			where := strings.Trim(r.Type+"/"+r.Name, "/")
-			if where == "" {
-				where = "(unnamed)"
-			}
+			where := cmp.Or(strings.Trim(r.Type+"/"+r.Name, "/"), "(unnamed)")
 			fmt.Fprintf(&b, "- %s (seq %d): %s\n", where, r.Seq, oneLine(r.Reason))
 		}
 	}
@@ -237,17 +223,14 @@ func brief(home string, st *state) string {
 		b.WriteString("\nnothing pending, nothing refused.\n")
 	}
 
-	b.WriteString("\n## where\n\n")
-	b.WriteString("`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n")
-	b.WriteString("`self help` the protocol · `self view log` what happened lately · `self brief <name>` one capability in full\n")
+	b.WriteString("\n## where\n\n" +
+		"`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n" +
+		"`self help` the protocol · `self view log` what happened lately · `self brief <name>` one capability in full\n")
 	return b.String()
 }
 
 func unfoldMissing(st *state, typ, name string) string {
-	if st.cap(typ, name) != nil || st.cap(otherKind(typ), name) != nil {
-		return ""
-	}
-	if typ == kindView && name == "log" {
+	if st.cap(typ, name) != nil || st.cap(otherKind(typ), name) != nil || (typ == kindView && name == "log") {
 		return ""
 	}
 	return fmt.Sprintf("self: no %s %q in this log. What there is:\n\n%s\n", typ, name, capabilityList(st, typ))
@@ -353,12 +336,7 @@ func capabilityList(st *state, typ string) string {
 }
 
 func anyClipped(st *state) bool {
-	for _, c := range st.Caps {
-		if strings.HasSuffix(c.Decl.summary(), "…") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(st.Caps, func(c *capability) bool { return strings.HasSuffix(c.Decl.summary(), "…") })
 }
 
 func pendingMark(c *capability) string {
@@ -371,12 +349,7 @@ func pendingMark(c *capability) string {
 	return "  *(pending — no script yet)*"
 }
 
-func oneLine(s string) string {
-	if s := oneLineOrEmpty(s); s != "" {
-		return s
-	}
-	return "(no description)"
-}
+func oneLine(s string) string { return cmp.Or(oneLineOrEmpty(s), "(no description)") }
 
 func oneLineOrEmpty(s string) string { return strings.Join(strings.Fields(s), " ") }
 
