@@ -281,7 +281,8 @@ deleted; a deletion is a later event.
 
 ## Provenance
 
-- `via`, the channel: `cli`, `hear`, `kernel`, or `learn:<account>`. Stamped by
+- `via`, the channel: `cli`, `cli:<command>` for what `self run <command>`
+  emitted, `hear`, `kernel`, or `learn:<account>`. Stamped by
   the kernel from what it saw, never accepted from a script, mind or record. A
   local fact, like `seq`.
 - `by`, the mind: `SELF_CALLER` recorded verbatim, a claim, never verified.

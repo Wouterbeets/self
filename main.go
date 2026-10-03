@@ -122,7 +122,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			page, err = runViewDiag(home, st, name, said, rest...)
 		} else {
 			var evs []Event
-			evs, err = runCommand(home, st, name, rest, doorCLI, callerClaim(), said)
+			evs, err = runCommand(home, st, name, rest, doorCLI+":"+name, callerClaim(), said)
 			for _, e := range evs {
 				page = fmt.Appendf(page, "%d\t%s\t%s\n", e.Seq, e.Name, trunc(compact(e.Payload), 160))
 			}

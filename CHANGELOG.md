@@ -2,6 +2,12 @@
 
 ## Unreleased — Unix integration, everything is a file
 
+Events a command emits are stamped `via: "cli:<command>"`, so the log says
+which capability wrote them and how often each one ran with an effect. `cli`
+stays for kernel verbs run from the command line; `hear`, `kernel` and
+`learn:<account>` are unchanged. Readers that test `via` by prefix (`learn:`)
+or equality with `kernel` are unaffected.
+
 `self run` and `self view` exit with a capability's own non-zero status, so a
 lease refusal's `3` reaches `||` and shell scripts; other failures stay `1`.
 Commands receive the caller's working directory as `SELF_CWD` (views do not);

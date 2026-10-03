@@ -109,6 +109,20 @@ func TestSilentCommand(t *testing.T) {
 	}
 }
 
+func TestRunStampsTheCommandInVia(t *testing.T) {
+	h := home(t)
+	heard(t, h, line(t, "command.declared", decl{Name: "emit"})+
+		line(t, "script.authored", authored{Type: kindCommand, Name: "emit", Script: "#!/bin/sh\ncat >/dev/null\necho '{\"name\":\"note.added\",\"payload\":{}}'\n"}))
+	var out bytes.Buffer
+	if err := dispatch(h, "run", []string{"emit"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	evs := replayed(t, h).Events
+	if last := evs[len(evs)-1]; last.Name != "note.added" || last.Via != "cli:emit" {
+		t.Fatalf("via = %q on %s, want cli:emit", last.Via, last.Name)
+	}
+}
+
 type closedOutput struct{}
 
 func (closedOutput) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
