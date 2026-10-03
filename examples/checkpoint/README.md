@@ -32,7 +32,7 @@ action never both succeed.
 ## Install
 
 ```sh
-jq -nc '{name:"command.declared",payload:{name:"checkpoint",summary:"Propose exact actions for a human decision; use each approved action once",description:"usage: see examples/checkpoint/command.py",atomic:true}}
+jq -nc '{name:"command.declared",payload:{name:"checkpoint",summary:"Propose exact actions for a human decision; use each approved action once",description:"usage: see examples/checkpoint/command.py",atomic:true,consumes:["checkpoint.proposed","checkpoint.approved","checkpoint.rejected","checkpoint.withdrawn","checkpoint.used"]}}
         ,{name:"view.declared",payload:{name:"checkpoint",summary:"Actions awaiting a human decision, and what approvals still cover",description:"usage: see examples/checkpoint/view.py",consumes:["checkpoint.proposed","checkpoint.approved","checkpoint.rejected","checkpoint.withdrawn","checkpoint.used"]}}' | self hear
 jq -nc --rawfile c examples/checkpoint/command.py --rawfile v examples/checkpoint/view.py \
   '{name:"script.authored",payload:{type:"command",name:"checkpoint",script:$c}},{name:"script.authored",payload:{type:"view",name:"checkpoint",script:$v}}' | self hear

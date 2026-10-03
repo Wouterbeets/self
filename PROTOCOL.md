@@ -83,12 +83,13 @@ append lock. A mismatch commits nothing: reread and reconsider before retrying.
 This protects a decision and its event batch, not external side effects. It is
 not a lease, sandbox, or permission to retry a command that already acted.
 
-`self watch [--after <id|empty>] [--timeout 10m] [event-prefix]` waits for and
-prints the first matching batch as full event JSONL, then exits. Without
-`--after`, it starts at the current head; `empty` includes existing events.
+`self watch [--after <id|empty>] [--timeout 10m] [--follow] [event-prefix]`
+waits for and prints the first matching batch as full event JSONL, then exits.
+Without `--after`, it starts at the current head; `empty` includes existing events.
 Use the last returned event ID to resume. A missing cursor or timeout is an
-error. Reads append nothing, including on timeout. Filters match name prefixes;
-domain filtering belongs in consumers. An ID cursor detects a lost anchor,
+error. `--follow` keeps printing matching batches; its timeout then ends the
+stream successfully. Reads append nothing, including on timeout. Filters match
+name prefixes; domain filtering belongs in consumers. An ID cursor detects a lost anchor,
 not edits to arbitrary earlier records.
 
 ## Desired outcomes
@@ -153,7 +154,8 @@ view prints; a view has no path to the log through the kernel.
 {"name":"view.declared","payload":{"name":"journal","summary":"every entry, newest first","description":"usage: journal — no arguments; the whole journal in reverse order","consumes":["journal.entry"]}}
 ```
 
-A declaration is `{name, summary, description}` plus `consumes` for a view.
+A declaration is `{name, summary, description}`, plus optional `consumes`: the
+event names its script is fed, signed into its receipt.
 Two prose fields, two readers:
 
 - `summary`: one terse line, what this is for. The brief prints it, so every
@@ -167,9 +169,14 @@ fallback, not the contract.
 
 A command declaration may add `"atomic": true` when the command only decides
 from the log it reads (a claim, a counter, a one-use approval). Its batch then
-commits only if the log head is still the one it was fed; otherwise the kernel
-reruns it on the fresh log, up to eight times, then fails. Reruns repeat any
-external effect, so never mark a command atomic that acts outside the log.
+commits only if nothing it consumes was appended since it was fed; otherwise
+the kernel reruns it on the fresh log, up to eight times, then fails. Reruns
+repeat any external effect, so never mark a command atomic that acts outside
+the log.
+
+A command declaration may add `"stdin": true` to read the caller's stdin
+(`cat notes.md | self run remember`); its log then arrives on fd 3. Atomic
+reruns replay the same bytes.
 
 A declaration stays pending until a script is installed. A refused attempt
 records `script.rejected`; its reason remains in the brief until superseded.
@@ -187,10 +194,11 @@ The kernel signs and installs bytes or records a refusal. `script.authored`
 is a wire message, never a stored event. Test before authoring; an installation
 receipt proves which bytes were installed, not that their behavior is correct.
 
-Commands receive argv, the whole log on stdin, `SELF_HOME`, and the instance
-working directory; stdout is new event JSONL. Views receive argv and their
-signed `consumes` events, no `SELF_HOME`, and an empty scratch directory; stdout
-is read-only bytes. Use a shebang and a standard-library language.
+Commands receive argv, their `consumes` events on stdin (fd 3 with
+`"stdin": true`), `SELF_HOME`, the caller's directory as `SELF_CWD`, and the
+instance working directory; stdout is new event JSONL. Views receive argv and
+their signed `consumes` events, no `SELF_HOME`, and an empty scratch directory;
+stdout is read-only bytes. Use a shebang and a standard-library language.
 
 Keep summaries terse; put usage and rationale in descriptions. A parameterized
 view's zero-argument form lists valid keys. Named records need revision and
@@ -237,14 +245,16 @@ determinism: fixed `PATH`, `TZ=UTC`, `LC_ALL=C`, `PYTHONHASHSEED=0`, plus the
 caller's `SELF_*` variables, which is how you hand a capability configuration.
 
 - **command**: an effect on one instance. argv after `self run <name>`; stdin
-  the whole log as JSONL; `SELF_HOME` set; cwd the instance; stdout new events.
+  its `consumes` events as JSONL, all by default (on fd 3 with `"stdin": true`,
+  stdin then being the caller's); `SELF_HOME` set; `SELF_CWD` the caller's
+  working directory, for relative paths; cwd the instance; stdout new events.
   Exit non-zero and nothing is appended.
 - **view**: a pure function of its events. argv after `self view <name>`; stdin
   exactly its receipt's `consumes` events in log order (`[]` or `["*"]` means
   all); no `SELF_HOME`; cwd an empty scratch directory; stdout opaque bytes for
   the reader, never the log. Same events in, same bytes out: no clock, no
-  network. Never materialized; replayed on demand. Not a sandbox — the kernel
-  simply hands a view no path.
+  network. Never stored in the log; replayed on demand. Not a sandbox — the
+  kernel simply hands a view no path.
 
 ## Events
 
@@ -292,6 +302,13 @@ Bytes live at `cap/blob/<sha256>`; `cap/<type>/<name>/run` symlinks to the blob.
 Execution resolves the latest live verified receipt, checks the blob's hash,
 rewrites it if it differs, runs it. Hand-edits under `cap/` are overwritten by
 the log.
+
+Two opt-in trees follow the same rule, each kept only if its directory exists.
+`view/<name>` holds what `self view <name>` prints, rewritten after a commit
+only when that output changes. `bin/<name>` is a shim for `self run <name>`,
+so `PATH=$SELF_HOME/bin:$PATH` makes capabilities commands. Anything else in
+them is removed; a projection failure is reported on stderr and never fails a
+commit.
 
 `self rehydrate` makes disk match the log exactly from `events.jsonl` and
 `.secret` alone: no model, no network.
@@ -376,9 +393,9 @@ self view <name> [args…]    replay a view ("log" is built in, shadowable)
 self view log [--all]       last 10 events, or every one
 self loop [opts] -- <mind>  run a mind until the log stops changing
 self learn [--into ID] <dir> deposit an account, print its learning prompt
-self watch [opts] [prefix]  wait for matching events; no append (READ)
+self watch [opts] [prefix]  wait for (--follow: stream) matching events (READ)
 self give <sel> <dir>       write an account from the log
-self rehydrate              make cap/ match the log
+self rehydrate              make cap/, view/, bin/ match the log
 self completion <shell>     completion shim (zsh|bash|fish)
 self help                   this file
 ```
@@ -462,9 +479,10 @@ fixed point, including a pass cap reached on a quiet pass.
 
 ## Exit codes
 
-`0` did the thing, `1` did not. Unknown or unrunnable capability: stderr
-diagnostics, empty stdout, failure. A command emitting no events succeeds
-silently. Output write failures fail; already committed events stay committed.
+`0` did the thing, `1` did not. `run` and `view` pass a capability's own
+non-zero status through, such as a refusal's `3`. Unknown or unrunnable
+capability: stderr diagnostics, empty stdout, failure. A command emitting no
+events succeeds silently. Output write failures fail; already committed events stay committed.
 
 ## Environment
 
@@ -510,6 +528,7 @@ kernel, `self learn` under this one: the protocol is its own migration path.
   critical section. Concurrent commands may read the same earlier state; their
   committed batches cannot interleave. External effects are not rolled back.
 - **Capability scripts are not timed out.** Only the loop's mind process is.
+  With `view/`, a write waits for the views it reruns.
 - **The last log line is judged by whether it is a whole event.** Terminated: a
   record. Unterminated but parsing: a record, given its newline by the next
   append. Unterminated and unparseable: a torn write, skipped and dropped by the

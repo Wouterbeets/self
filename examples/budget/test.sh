@@ -14,7 +14,7 @@ export SELF_HOME=$tmp/home SELF_CALLER=loop
 s() { "$bin" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-jq -nc '{name:"command.declared",payload:{name:"budget",summary:"Spend bounded counters per scope and class",description:"see script",atomic:true}}
+jq -nc '{name:"command.declared",payload:{name:"budget",summary:"Spend bounded counters per scope and class",description:"see script",atomic:true,consumes:["budget.set","budget.spent","budget.exhausted"]}}
         ,{name:"view.declared",payload:{name:"budget",summary:"Spent and remaining budget per scope",description:"see script",consumes:["budget.set","budget.spent","budget.exhausted"]}}' | s hear >/dev/null 2>&1
 jq -nc --rawfile c "$here/command.py" --rawfile v "$here/view.py" \
 	'{name:"script.authored",payload:{type:"command",name:"budget",script:$c}},{name:"script.authored",payload:{type:"view",name:"budget",script:$v}}' | s hear >/dev/null 2>&1

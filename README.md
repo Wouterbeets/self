@@ -88,6 +88,11 @@ self brief <name>         # one capability or intent in full
 self hear < batch.jsonl   # append events or authored scripts
 ```
 
+Opt in to plain files with `mkdir $SELF_HOME/view $SELF_HOME/bin`. After each
+write, `view/<name>` holds what `self view <name>` prints, for `cat`, `grep -r`
+and editors; `bin/<name>` runs `self run <name>`, so with
+`PATH=$SELF_HOME/bin:$PATH` capabilities are ordinary commands.
+
 A capability is an ordinary executable in any language. `self rehydrate`
 rebuilds all of them from `events.jsonl` and `.secret`, with no model and no
 network: the log is the whole self.

@@ -16,13 +16,8 @@ import (
 var protocolDoc string
 
 func protocolLayer(name string) string {
-	begin := "<!-- prompt:" + name + ":begin -->"
-	end := "<!-- prompt:" + name + ":end -->"
-	_, rest, ok := strings.Cut(protocolDoc, begin)
-	if !ok {
-		return ""
-	}
-	body, _, ok := strings.Cut(rest, end)
+	_, rest, _ := strings.Cut(protocolDoc, "<!-- prompt:"+name+":begin -->")
+	body, _, ok := strings.Cut(rest, "<!-- prompt:"+name+":end -->") // a missing begin leaves rest empty
 	if !ok {
 		return ""
 	}
@@ -83,11 +78,13 @@ type authored struct {
 }
 
 func wire(body string) (evs []Event, scripts []authored, prose []string, err error) {
-	all, err := lines(body)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	for _, line := range all {
+	sc := bufio.NewScanner(strings.NewReader(body))
+	sc.Buffer(make([]byte, 1024*1024), lineLimit)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
 		probe, ok := eventLine(strings.TrimSpace(strings.Trim(line, "`")))
 		if !ok {
 			prose = append(prose, line)
@@ -100,6 +97,9 @@ func wire(body string) (evs []Event, scripts []authored, prose []string, err err
 			continue
 		}
 		evs = append(evs, newEvent(probe.Name, probe.Payload))
+	}
+	if err := sc.Err(); err != nil {
+		return nil, nil, nil, fmt.Errorf("reading the wire: %w (nothing was heard — a line longer than %dMB cannot be one)", err, lineLimit/(1024*1024))
 	}
 	return evs, scripts, prose, nil
 }
@@ -138,21 +138,6 @@ const lineLimit = 64 * 1024 * 1024
 // errLogChanged reports a conditional batch whose expected head moved.
 var errLogChanged = errors.New("log changed")
 
-func lines(body string) ([]string, error) {
-	var out []string
-	sc := bufio.NewScanner(strings.NewReader(body))
-	sc.Buffer(make([]byte, 1024*1024), lineLimit)
-	for sc.Scan() {
-		if line := strings.TrimSpace(sc.Text()); line != "" {
-			out = append(out, line)
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("reading the wire: %w (nothing was heard — a line longer than %dMB cannot be one)", err, lineLimit/(1024*1024))
-	}
-	return out, nil
-}
-
 // ingest is the shared commit path for validated input. Entry points retain
 // their parsing policy and assign provenance before handing over the batch.
 // Reports are written after unlocking; callers may discard them without losing
@@ -179,12 +164,14 @@ func ingest(home string, evs []Event, scripts []authored, prose []string, by str
 			if err != nil {
 				return err
 			}
-			if head(events) != after[0] {
-				return fmt.Errorf("%w: expected %s, have %s; reread before retrying", errLogChanged, after[0], head(events))
+			// after[0] is the expected head of the log, or of the events named next.
+			if have := head(consumed(events, after[1:])); have != after[0] {
+				return fmt.Errorf("%w: expected %s, have %s; reread before retrying", errLogChanged, after[0], have)
 			}
 		}
 		return ingestLocked(home, key, evs, scripts, prose, by, &report)
 	}()
+	project(home, false)
 	if _, werr := out.Write(report.Bytes()); werr != nil && err == nil {
 		return werr
 	}
@@ -297,10 +284,7 @@ func install(st *state, a authored, by string) (receipt, error) {
 	if c == nil {
 		return receipt{}, fmt.Errorf("%s/%s is not declared in this log — declare it in the same body, before the script", typ, name)
 	}
-	r := receipt{Type: typ, Name: name, Script: a.Script, By: by}
-	if typ == kindView {
-		r.Consumes = c.Decl.Consumes
-	}
+	r := receipt{Type: typ, Name: name, Script: a.Script, Consumes: c.Decl.Consumes, By: by}
 	r.Sig = sign(st.Key, r)
 	return r, nil
 }
@@ -344,9 +328,7 @@ func pendingSection(st *state) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n## Pending — declared, awaiting a script\n\n")
-	b.WriteString(protocolLayer("growth"))
-	b.WriteString("\n")
+	fmt.Fprintf(&b, "\n## Pending — declared, awaiting a script\n\n%s\n", protocolLayer("growth"))
 	for _, c := range pending {
 		d, _ := json.Marshal(c.Decl)
 		fmt.Fprintf(&b, "\n%s %q declared at seq %d:\n%s\n", c.Type, c.Name, c.DeclSeq, d)

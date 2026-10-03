@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -64,52 +65,35 @@ func positiveInt(value, source string) (int, error) {
 	return parsed, nil
 }
 
-func positiveDuration(value, source string) (time.Duration, error) {
-	parsed, err := time.ParseDuration(value)
-	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("%s needs a positive Go duration such as 30m or 45s", source)
-	}
-	return parsed, nil
-}
-
-func parseLoopOptions(args []string) (loopOptions, error) {
-	opts := loopOptions{Ask: os.Getenv("SELF_LOOP_ASK")}
+// parseLoopOptions validates only final values: an invalid environment
+// default is fine when a flag overrides it.
+func parseLoopOptions(args []string) (opts loopOptions, err error) {
+	env := func(name, fallback string) string { return cmp.Or(os.Getenv("SELF_LOOP_"+name), fallback) }
 	flags := flag.NewFlagSet("loop", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.StringVar(&opts.Ask, "ask", opts.Ask, "")
-	for name, fallback := range map[string]string{"max-passes": "12", "settle": "2", "timeout": "30m"} {
-		if value := os.Getenv("SELF_LOOP_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))); value != "" {
-			fallback = value
-		}
-		flags.String(name, fallback, "")
-	}
+	ask := flags.String("ask", os.Getenv("SELF_LOOP_ASK"), "")
+	maxPasses := flags.String("max-passes", env("MAX_PASSES", "12"), "")
+	settle := flags.String("settle", env("SETTLE", "2"), "")
+	timeout := flags.String("timeout", env("TIMEOUT", "30m"), "")
 	if err := flags.Parse(args); err != nil {
 		return opts, fmt.Errorf("loop options: %w — %s", err, loopUsage)
 	}
-	opts.Mind = flags.Args()
-	for _, option := range []struct {
-		name string
-		dst  *int
-	}{
-		{"max-passes", &opts.MaxPasses}, {"settle", &opts.Settle},
-	} {
-		value, err := positiveInt(flags.Lookup(option.name).Value.String(), "--"+option.name)
-		if err != nil {
-			return opts, err
-		}
-		*option.dst = value
-	}
-	var err error
-	opts.Timeout, err = positiveDuration(flags.Lookup("timeout").Value.String(), "--timeout")
-	if err != nil {
+	opts.Ask, opts.Mind = *ask, flags.Args()
+	if opts.MaxPasses, err = positiveInt(*maxPasses, "--max-passes"); err != nil {
 		return opts, err
 	}
+	if opts.Settle, err = positiveInt(*settle, "--settle"); err != nil {
+		return opts, err
+	}
+	if opts.Timeout, err = time.ParseDuration(*timeout); err != nil || opts.Timeout <= 0 {
+		return opts, fmt.Errorf("--timeout needs a positive Go duration such as 30m or 45s")
+	}
 	if len(opts.Mind) == 0 {
-		if mind := os.Getenv("SELF_LOOP_MIND"); mind != "" {
-			opts.Mind = []string{"sh", "-c", mind}
-		} else {
+		mind := os.Getenv("SELF_LOOP_MIND")
+		if mind == "" {
 			return opts, fmt.Errorf("no mind configured — pass one after -- or set SELF_LOOP_MIND")
 		}
+		opts.Mind = []string{"sh", "-c", mind}
 	}
 	return opts, nil
 }

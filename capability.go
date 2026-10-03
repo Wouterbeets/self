@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,11 +12,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
@@ -30,8 +32,10 @@ type decl struct {
 	Description string   `json:"description"`
 	Consumes    []string `json:"consumes,omitempty"`
 	// Atomic marks a command that only decides from the log it reads: its
-	// batch commits only if the log is unchanged, and it reruns otherwise.
+	// batch commits only if what it consumes is unchanged, else it reruns.
 	Atomic bool `json:"atomic,omitempty"`
+	// Stdin hands a command the caller's stdin, and its log on fd 3.
+	Stdin bool `json:"stdin,omitempty"`
 }
 
 // atomicAttempts bounds reruns of an atomic command under contention.
@@ -43,10 +47,7 @@ func (d decl) summary() string {
 	if s := oneLineOrEmpty(d.Summary); s != "" {
 		return clip(s, summaryBudget)
 	}
-	if s := oneLineOrEmpty(d.Description); s != "" {
-		return clip(firstSentence(s), summaryBudget)
-	}
-	return "(no description)"
+	return clip(firstSentence(oneLine(d.Description)), summaryBudget)
 }
 
 type capability struct {
@@ -103,11 +104,6 @@ func (st *state) apply(events []Event) {
 		rejects[r.Type+"/"+r.Name] = r
 	}
 
-	forget := func(k string) {
-		delete(st.byKey, k)
-		delete(rejects, k)
-		st.Caps = slices.DeleteFunc(st.Caps, func(c *capability) bool { return c.key() == k })
-	}
 	live := func(typ, name string) *capability {
 		k := typ + "/" + name
 		if c, ok := st.byKey[k]; ok {
@@ -164,18 +160,17 @@ func (st *state) apply(events []Event) {
 			if json.Unmarshal(e.Payload, &t) != nil || !validCapability(t.Type, t.Name) {
 				continue
 			}
-			forget(t.Type + "/" + t.Name)
+			k := t.Type + "/" + t.Name
+			delete(st.byKey, k)
+			delete(rejects, k)
+			st.Caps = slices.DeleteFunc(st.Caps, func(c *capability) bool { return c.key() == k })
 		}
 	}
 
 	for _, c := range st.Caps {
 		c.Reject = rejects[c.key()]
 	}
-	st.Reject = st.Reject[:0]
-	for _, r := range rejects {
-		st.Reject = append(st.Reject, r)
-	}
-	sort.Slice(st.Reject, func(i, j int) bool { return st.Reject[i].Seq < st.Reject[j].Seq })
+	st.Reject = slices.SortedFunc(maps.Values(rejects), func(a, b *rejection) int { return a.Seq - b.Seq })
 }
 
 func (st *state) cap(typ, name string) *capability { return st.byKey[typ+"/"+name] }
@@ -203,37 +198,22 @@ func (st *state) pending() []*capability {
 func (st *state) capabilitiesReady() bool { return len(st.pending()) == 0 && len(st.Reject) == 0 }
 
 func validCapability(typ, name string) bool {
-	if typ != kindCommand && typ != kindView {
-		return false
-	}
-	if name == "" || strings.Contains(name, `\`) {
-		return false
-	}
-	if len(name) > 200 {
+	if (typ != kindCommand && typ != kindView) || name == "" || len(name) > 200 || strings.Contains(name, `\`) {
 		return false
 	}
 	for _, seg := range strings.Split(name, "/") {
-		if len(seg) > 64 {
-			return false
-		}
-		if seg == "" || seg == "." || seg == ".." || strings.HasPrefix(seg, ".") {
-			return false
-		}
-		if seg == "run" {
+		// A leading dot also rules out "." and "..".
+		if seg == "" || seg == "run" || strings.HasPrefix(seg, ".") || len(seg) > 64 {
 			return false
 		}
 	}
 	return true
 }
 
-func capDir(home string) string  { return filepath.Join(home, "cap") }
-func blobDir(home string) string { return filepath.Join(home, "cap", "blob") }
-
-func blobPath(home, sum string) string { return filepath.Join(blobDir(home), sum) }
-
-func linkPath(home, typ, name string) string {
-	return filepath.Join(capDir(home), typ, name, "run")
-}
+func capDir(home string) string              { return filepath.Join(home, "cap") }
+func blobDir(home string) string             { return filepath.Join(home, "cap", "blob") }
+func blobPath(home, sum string) string       { return filepath.Join(blobDir(home), sum) }
+func linkPath(home, typ, name string) string { return filepath.Join(capDir(home), typ, name, "run") }
 
 func materialize(home string, st *state, typ, name string) (string, error) {
 	c := st.cap(typ, name)
@@ -252,8 +232,7 @@ func materialize(home string, st *state, typ, name string) (string, error) {
 	}
 
 	script := c.Receipt.Script
-	sum := sha256.Sum256([]byte(script))
-	hexsum := hex.EncodeToString(sum[:])
+	hexsum := fmt.Sprintf("%x", sha256.Sum256([]byte(script)))
 	blob := blobPath(home, hexsum)
 
 	if have, err := os.ReadFile(blob); err != nil || string(have) != script {
@@ -279,15 +258,8 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode, publish func(st
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
+	_, err = tmp.Write(data)
+	if err := errors.Join(err, tmp.Chmod(mode), tmp.Close()); err != nil {
 		return err
 	}
 	return publish(tmp.Name(), path)
@@ -322,6 +294,7 @@ func rehydrate(home string) error {
 	if err != nil {
 		return err
 	}
+	defer project(home, true) // deferred first, so it runs after unlock
 	defer unlock()
 	st, err := loadState(home)
 	if err != nil {
@@ -348,26 +321,33 @@ func rehydrate(home string) error {
 		installed++
 	}
 	for _, kind := range []string{kindCommand, kindView, "blob"} {
-		err := filepath.WalkDir(filepath.Join(capDir(home), kind), func(path string, entry fs.DirEntry, err error) error {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			if err != nil || keep[path] {
-				return err
-			}
-			if err := os.RemoveAll(path); err != nil {
-				return err
-			}
-			removed++
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		})
+		n, err := prune(filepath.Join(capDir(home), kind), keep)
+		removed += n
 		failures = errors.Join(failures, err)
 	}
 	fmt.Fprintf(os.Stderr, "self: %d capabilit(ies) materialized from the log, %d stale path(s) removed\n", installed, removed)
 	return failures
+}
+
+// prune removes everything under root that keep does not name.
+func prune(root string, keep map[string]bool) (removed int, err error) {
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil || keep[path] {
+			return err
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		removed++
+		if entry.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	return removed, err
 }
 
 func scriptEnv(selfHome, work string) []string {
@@ -379,10 +359,11 @@ func scriptEnv(selfHome, work string) []string {
 		"PYTHONHASHSEED=0", // otherwise set iteration is per-process random
 	}
 	if selfHome != "" {
-		env = append(env, "SELF_HOME="+selfHome)
+		cwd, _ := os.Getwd()
+		env = append(env, "SELF_HOME="+selfHome, "SELF_CWD="+cwd)
 	}
 	for _, kv := range os.Environ() {
-		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SELF_") && k != "SELF_HOME" {
+		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SELF_") && k != "SELF_HOME" && k != "SELF_CWD" {
 			env = append(env, kv)
 		}
 	}
@@ -402,13 +383,15 @@ func feed(w io.WriteCloser, events []Event) {
 }
 
 func runCommand(home string, st *state, name string, args []string, via, by string, diag ...io.Writer) ([]Event, error) {
-	c := st.cap(kindCommand, name)
-	if c == nil || !c.Decl.Atomic {
-		return runCommandOnce(home, st, name, args, via, by, nil, diag...)
+	var input []byte
+	if c := st.cap(kindCommand, name); c != nil && c.Decl.Stdin {
+		var err error
+		if input, err = io.ReadAll(os.Stdin); err != nil {
+			return nil, err
+		}
 	}
 	for attempt := 1; ; attempt++ {
-		after := []string{head(st.Events)}
-		out, err := runCommandOnce(home, st, name, args, via, by, after, diag...)
+		out, err := runCommandOnce(home, st, name, args, via, by, input, diag...)
 		if !errors.Is(err, errLogChanged) || attempt == atomicAttempts {
 			return out, err
 		}
@@ -418,19 +401,28 @@ func runCommand(home string, st *state, name string, args []string, via, by stri
 	}
 }
 
-func runCommandOnce(home string, st *state, name string, args []string, via, by string, after []string, diag ...io.Writer) ([]Event, error) {
+func runCommandOnce(home string, st *state, name string, args []string, via, by string, input []byte, diag ...io.Writer) ([]Event, error) {
 	bin, err := materialize(home, st, kindCommand, name)
 	if err != nil {
 		return nil, err
 	}
+	c := st.cap(kindCommand, name)
+	events := consumed(st.Events, c.Receipt.Consumes)
 	stderr := io.Writer(os.Stderr)
 	if len(diag) > 0 && diag[0] != nil {
 		stderr = diag[0]
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home, home), home, stderr
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
+	var log io.WriteCloser
+	if c.Decl.Stdin {
+		r, w, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+		cmd.Stdin, cmd.ExtraFiles, log = bytes.NewReader(input), []*os.File{r}, w
+	} else if log, err = cmd.StdinPipe(); err != nil {
 		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
@@ -440,7 +432,7 @@ func runCommandOnce(home string, st *state, name string, args []string, via, by 
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	feed(stdin, st.Events)
+	feed(log, events)
 
 	var out []Event
 	var parseErr error
@@ -472,6 +464,10 @@ func runCommandOnce(home string, st *state, name string, args []string, via, by 
 	}
 	if parseErr != nil {
 		return nil, fmt.Errorf("%w (nothing appended)", parseErr)
+	}
+	var after []string
+	if c.Decl.Atomic {
+		after = append([]string{head(events)}, c.Receipt.Consumes...)
 	}
 	if err := ingest(home, out, nil, nil, by, io.Discard, after...); err != nil {
 		return nil, err
@@ -552,12 +548,8 @@ func builtinLogView(st *state, all bool) []byte {
 		events = events[len(events)-builtinLogTail:]
 	}
 	for _, e := range events {
-		by := e.By
-		if by == "" {
-			by = "-"
-		}
 		fmt.Fprintf(&b, "%d\t%s\t%s\tvia=%s\tby=%s\t%s\n",
-			e.Seq, e.OccurredAt.Format(time.RFC3339), e.Name, e.Via, by,
+			e.Seq, e.OccurredAt.Format(time.RFC3339), e.Name, e.Via, cmp.Or(e.By, "-"),
 			trunc(compact(e.Payload), 200))
 	}
 	return []byte(b.String())

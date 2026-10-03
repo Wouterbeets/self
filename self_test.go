@@ -799,6 +799,7 @@ func TestViewGetsNoPathToTheInstance(t *testing.T) {
 	h := home(t)
 	t.Setenv("SNEAKY", "leaked")
 	t.Setenv("SELF_PASSED", "on purpose")
+	t.Setenv("SELF_CWD", "/caller")
 	body := line(t, "view.declared", decl{Name: "env", Description: "x", Consumes: []string{"*"}}) +
 		line(t, "script.authored", authored{Type: "view", Name: "env",
 			Script: "#!/bin/sh\ncat >/dev/null\nenv | sort\necho \"cwd=$(pwd)\"\nls events.jsonl 2>&1 | sed 's/^/ls: /'\n"})
@@ -811,7 +812,7 @@ func TestViewGetsNoPathToTheInstance(t *testing.T) {
 	if strings.Contains(got, "SNEAKY") {
 		t.Fatalf("the caller's environment leaked into a view:\n%s", got)
 	}
-	if strings.Contains(got, "SELF_HOME=") {
+	if strings.Contains(got, "SELF_HOME=") || strings.Contains(got, "SELF_CWD=") {
 		t.Fatalf("a view was handed a path to the instance:\n%s", got)
 	}
 	if strings.Contains(got, "cwd="+h) {
@@ -830,19 +831,21 @@ func TestViewGetsNoPathToTheInstance(t *testing.T) {
 	}
 }
 
-// A command, unlike a view, is an effect on this instance and is told which one.
+// A command, unlike a view, is an effect on this instance and is told which one,
+// and where its caller stands.
 func TestCommandGetsTheInstanceAndNothingElse(t *testing.T) {
 	h := home(t)
 	t.Setenv("SNEAKY", "leaked")
+	t.Setenv("SELF_CWD", "/forged")
 	body := line(t, "command.declared", decl{Name: "env", Description: "x"}) +
 		line(t, "script.authored", authored{Type: "command", Name: "env",
-			Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"env.seen\",\"payload\":{\"home\":\"%s\",\"cwd\":\"%s\",\"sneaky\":\"%s\"}}\\n' \"$SELF_HOME\" \"$(pwd)\" \"${SNEAKY:-}\"\n"})
+			Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"env.seen\",\"payload\":{\"home\":\"%s\",\"cwd\":\"%s\",\"sneaky\":\"%s\",\"caller\":\"%s\"}}\\n' \"$SELF_HOME\" \"$(pwd)\" \"${SNEAKY:-}\" \"$SELF_CWD\"\n"})
 	heard(t, h, body)
 	evs, err := runCommand(h, replayed(t, h), "env", nil, doorCLI, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var p struct{ Home, Cwd, Sneaky string }
+	var p struct{ Home, Cwd, Sneaky, Caller string }
 	json.Unmarshal(evs[0].Payload, &p)
 	// macOS reports $(pwd) through /private, so judge the cwd resolved.
 	cwd, _ := filepath.EvalSymlinks(p.Cwd)
@@ -852,6 +855,9 @@ func TestCommandGetsTheInstanceAndNothingElse(t *testing.T) {
 	}
 	if p.Sneaky != "" {
 		t.Fatalf("the caller's environment leaked into a command: %q", p.Sneaky)
+	}
+	if wd, _ := os.Getwd(); p.Caller != wd {
+		t.Fatalf("SELF_CWD = %q, want the caller's %q", p.Caller, wd)
 	}
 }
 

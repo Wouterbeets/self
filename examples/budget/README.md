@@ -21,7 +21,7 @@ scope) is the caller's judgment; the counter only makes the bound hold. Like
 ## Install
 
 ```sh
-jq -nc '{name:"command.declared",payload:{name:"budget",summary:"Spend bounded counters per scope and class",description:"usage: see examples/budget/command.py",atomic:true}}
+jq -nc '{name:"command.declared",payload:{name:"budget",summary:"Spend bounded counters per scope and class",description:"usage: see examples/budget/command.py",atomic:true,consumes:["budget.set","budget.spent","budget.exhausted"]}}
         ,{name:"view.declared",payload:{name:"budget",summary:"Spent and remaining budget per scope",description:"usage: see examples/budget/view.py",consumes:["budget.set","budget.spent","budget.exhausted"]}}' | self hear
 jq -nc --rawfile c examples/budget/command.py --rawfile v examples/budget/view.py \
   '{name:"script.authored",payload:{type:"command",name:"budget",script:$c}},{name:"script.authored",payload:{type:"view",name:"budget",script:$v}}' | self hear
