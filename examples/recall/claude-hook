@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""claude-hook - Claude Code hooks that write every turn into self and read it back.
+
+One script for every hook; install.sh wires it into a settings.json:
+
+    SessionStart       print `self view recall` (injected), record a session marker, compact
+    UserPromptSubmit   print `self view recall` (injected), then record the prompt
+    PostToolUse        record the call and its (clipped) result
+    PostToolUseFailure record the call and its error
+    SubagentStop       record the subagent's report
+    Stop               record the agent's reply, then compact in the background
+
+Every message is one chat.message {kind, text, session, cwd, tool?, agent?},
+heard by self as SELF_CALLER=claude-code. `claude-hook --compact` runs the
+compaction the recall view plans: it builds summaries with a model, outside
+self (the kernel holds no model), and hears recall.node and recall.merged.
+One compaction at a time per SELF_HOME: by hand it waits its turn; the one a
+hook starts in the background leaves a busy instance alone.
+
+A hook never fails Claude: errors go to stderr and the exit status is 0.
+
+Environment (all optional):
+    SELF_BIN            the self binary (default: self on PATH)
+    SELF_HOME           the instance (default: self's own default, the cwd)
+    SELF_RECALL_LINE    bytes per memory line (200)
+    SELF_RECALL_LOW     bytes the memory shrinks to in a merge batch (6000)
+    SELF_RECALL_HIGH    bytes that start a merge batch (9000); Claude Code caps
+                        injected hook output at 10,000 characters
+    SELF_RECALL_CLIP    characters of a tool result that are recorded (2000)
+    SELF_RECALL_MIND    shell command: prompt on stdin, one line on stdout
+                        (default: claude -p --model haiku, no tools)
+    SELF_RECALL_LOG     file for compaction diagnostics (default: discarded)
+SELF_RECALL_SKIP=1 is set for the mind, so a nested claude records nothing.
+"""
+
+import concurrent.futures
+import fcntl
+import json
+import os
+import subprocess
+import sys
+
+SELF = os.environ.get("SELF_BIN") or "self"
+LINE = os.environ.get("SELF_RECALL_LINE", "200")
+LOW = os.environ.get("SELF_RECALL_LOW", "6000")
+HIGH = os.environ.get("SELF_RECALL_HIGH", "9000")
+CLIP = int(os.environ.get("SELF_RECALL_CLIP", "2000"))
+MIND = os.environ.get("SELF_RECALL_MIND") or (
+    "claude -p --model haiku --tools '' --no-session-persistence "
+    "--system-prompt 'You compress entries of an agent memory. Reply with one line only.'"
+)
+ATTEMPTS = 5
+ROUNDS = 64
+WORKERS = 8
+
+
+def warn(msg):
+    sys.stderr.write("claude-hook: %s\n" % msg)
+
+
+def self_(args, data=None, caller="recall"):
+    env = dict(os.environ, SELF_CALLER=caller)
+    r = subprocess.run([SELF] + args, input=data, capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        warn("self %s: %s" % (" ".join(args[:2]), r.stderr.strip()))
+    return r.stdout if r.returncode == 0 else None
+
+
+def view(*extra):
+    return self_(["view", "recall", "--line", LINE] + list(extra))
+
+
+def hear(events, caller="recall"):
+    if events:
+        self_(["hear"], "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events), caller)
+
+
+def clip(text, n):
+    return text if len(text) <= n else text[:n] + " …[%d more chars]" % (len(text) - n)
+
+
+def show(value):
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def tool_input(inp):
+    if isinstance(inp, dict):
+        for k in ("command", "file_path", "filePath", "pattern", "url", "query", "prompt", "description"):
+            if isinstance(inp.get(k), str):
+                rest = {x: y for x, y in inp.items() if x != k and isinstance(y, (str, int, bool))}
+                tail = (" " + clip(json.dumps(rest, ensure_ascii=False), 300)) if rest else ""
+                return clip(inp[k], 600) + tail
+    return clip(show(inp), 600)
+
+
+def tool_result(resp):
+    if isinstance(resp, dict):
+        parts = [resp[k] for k in ("stdout", "stderr", "content", "result", "output", "error") if resp.get(k)]
+        if parts:
+            return "\n".join(show(p) for p in parts)
+    if isinstance(resp, list):
+        texts = [b.get("text", "") for b in resp if isinstance(b, dict) and b.get("type") == "text"]
+        if texts:
+            return "\n".join(texts)
+    return show(resp)
+
+
+def last_reply(d):
+    """The final assistant text: the hook field, else the transcript's last text blocks."""
+    if isinstance(d.get("last_assistant_message"), str):
+        return d["last_assistant_message"]
+    path = d.get("transcript_path") or d.get("agent_transcript_path")
+    texts = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for raw in f:
+                try:
+                    e = json.loads(raw)
+                except ValueError:
+                    continue
+                content = (e.get("message") or {}).get("content")
+                if e.get("type") == "assistant" and isinstance(content, list):
+                    t = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                    texts = (texts + t) if t else texts
+                elif e.get("type") == "user":
+                    texts = []
+    except (OSError, TypeError):
+        pass
+    return "\n".join(t for t in texts if t)
+
+
+def message(d):
+    ev = d.get("hook_event_name")
+    m = {"session": d.get("session_id"), "cwd": d.get("cwd")}
+    if d.get("agent_type"):
+        m["agent"] = d["agent_type"]
+    if ev == "SessionStart":
+        m.update(kind="session", text="session %s in %s" % (d.get("source", "started"), d.get("cwd")))
+    elif ev == "UserPromptSubmit":
+        m.update(kind="user", text=d.get("prompt") or "")
+    elif ev in ("PostToolUse", "PostToolUseFailure"):
+        failed = ev == "PostToolUseFailure"
+        result = d.get("error") if failed else tool_result(d.get("tool_response"))
+        arrow = " ✗ " if failed else " → "
+        m.update(kind="tool", tool=d.get("tool_name"),
+                 text="%s %s%s%s" % (d.get("tool_name"), tool_input(d.get("tool_input")), arrow,
+                                     clip(show(result or ""), CLIP)))
+    elif ev == "SubagentStop":
+        m.update(kind="subagent", text=last_reply(d))
+    elif ev == "Stop":
+        m.update(kind="agent", text=last_reply(d))
+    else:
+        return None
+    if not m["text"].strip():
+        return None
+    return {"name": "chat.message", "payload": {k: v for k, v in m.items() if v is not None}}
+
+
+def spawn_compaction():
+    log = os.environ.get("SELF_RECALL_LOG")
+    err = open(log, "a") if log else subprocess.DEVNULL
+    subprocess.Popen([sys.executable, os.path.abspath(__file__), "--compact", "--if-idle"], start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err)
+
+
+def summarize(task):
+    """Ask the mind for one line within the limit; cut it after ATTEMPTS replies."""
+    limit, prompt, line = task["limit"], task["prompt"], ""
+    env = dict(os.environ, SELF_RECALL_SKIP="1")
+    for _ in range(ATTEMPTS):
+        r = subprocess.run(["sh", "-c", MIND], input=prompt, capture_output=True, text=True, env=env)
+        if r.returncode != 0:
+            warn("mind failed on %s: %s" % (task["build"], r.stderr.strip()[-500:]))
+            return None
+        line = " ".join(r.stdout.split()).strip("`\"' ")
+        n = len(line.encode())
+        if line and n <= limit:
+            return line
+        prompt = "%s\nYour previous reply was %d bytes, over the limit of %d:\n%s\nReply with a shorter line.\n" % (
+            task["prompt"], n, limit, line)
+    return line.encode()[:limit].decode(errors="ignore") or None
+
+
+def compact(wait):
+    home = os.environ.get("SELF_HOME") or "."
+    lock = open(os.path.join(home, ".recall.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+    except OSError:
+        return  # another compaction is running; it will see what arrived
+    batch = False
+    with concurrent.futures.ThreadPoolExecutor(WORKERS) as pool:
+        for _ in range(ROUNDS):
+            out = view("--plan", "--low", LOW, "--high", HIGH, *(["--continue"] if batch else []))
+            if out is None:
+                return
+            plan = [json.loads(l) for l in out.splitlines() if l.strip()]
+            merges = [p for p in plan if p.get("name") == "recall.merged"]
+            builds = [p for p in plan if "build" in p]
+            if not plan:
+                return
+            batch = batch or bool(merges) or any(b["kind"] == "merge" for b in builds)
+            hear(merges)
+            done = [{"name": "recall.node", "payload": {"id": b["build"], "text": line}}
+                    for b, line in zip(builds, pool.map(summarize, builds)) if line]
+            hear(done)
+            if builds and not done and not merges:
+                return  # the mind is failing; try again on the next turn
+
+
+def main():
+    if sys.argv[1:2] == ["--compact"]:
+        compact(sys.argv[2:] != ["--if-idle"])
+        return
+    if os.environ.get("SELF_RECALL_SKIP"):
+        return
+    try:
+        d = json.load(sys.stdin)
+    except ValueError as e:
+        warn("hook input is not JSON: %s" % e)
+        return
+    ev = d.get("hook_event_name")
+    if ev in ("SessionStart", "UserPromptSubmit"):
+        sys.stdout.write(view() or "")
+        sys.stdout.flush()
+    m = message(d)
+    if m:
+        hear([m], "claude-code")
+    if ev in ("SessionStart", "Stop"):
+        spawn_compaction()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:  # a hook must never fail the session
+        warn("%s: %s" % (type(e).__name__, e))
+    sys.exit(0)

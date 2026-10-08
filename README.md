@@ -135,6 +135,9 @@ The full contract is [PROTOCOL.md](PROTOCOL.md), which `self help` prints.
 - [`examples/mind-claude`](examples/mind-claude),
   [`examples/mind-opencode`](examples/mind-opencode): wrap a harness as a mind
   with a live trace on stderr: `self loop -- examples/mind-claude`.
+- [recall](examples/recall/README.md): Claude Code hooks or an opencode
+  plugin record every turn in self, and every prompt is injected with a memory of all of it, compacted
+  so recent turns are detailed and old ones coarse.
 - [ask](examples/ask/README.md): ranks capabilities and views for a task with a
   local model; falls back to an unscored index.
 
