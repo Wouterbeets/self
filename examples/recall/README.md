@@ -1,8 +1,9 @@
-# Recall: every Claude Code turn in self, as one memory injected into every prompt
+# Recall: every agent turn in self, as one memory injected into every prompt
 
-Claude Code hooks write every user prompt, tool call, tool result, subagent
-report and reply into self as `chat.message` events: one conversation that
-never ends, across every session and project that shares a `SELF_HOME`. The
+Claude Code hooks, or an opencode plugin, write every user prompt, tool call,
+tool result, subagent report and reply into self as `chat.message` events: one
+conversation that never ends, across every session, project and harness that
+shares a `SELF_HOME`. The
 `recall` view compresses it into a memory that fits in a prompt: old lines
 summarize many messages, recent lines few. The hooks inject that memory into
 every prompt. This follows
@@ -12,11 +13,36 @@ every prompt. This follows
 export SELF_HOME=~/.self
 examples/recall/install.sh                        # ~/.claude/settings.json
 examples/recall/install.sh .claude/settings.json  # or one project
+examples/recall/install.sh --opencode             # ~/.config/opencode/plugin/recall.js
+examples/recall/install.sh --opencode .opencode/plugin
 ```
 
-`self` must be on `PATH` inside Claude Code so the agent can zoom. The installer
-writes `SELF_HOME`, `SELF_BIN` and any `SELF_RECALL_*` you set into the hook
-command. Rerunning it replaces the earlier recall hooks.
+`self` must be on `PATH` inside the agent's shell so the agent can zoom. The
+installer writes `SELF_HOME`, `SELF_BIN` and any `SELF_RECALL_*` you set into
+the hook command or the plugin. Rerunning it replaces the earlier install.
+Both harnesses can share one `SELF_HOME`: a session in one remembers the other.
+
+## opencode
+
+opencode has no shell hooks, so `opencode.js` is a plugin. It hands each turn
+to `claude-hook` as the JSON Claude Code would have sent, so both harnesses
+share one recorder and one compaction:
+
+| opencode | recorded as |
+|---|---|
+| `chat.message` | the prompt (after taking the turn's memory snapshot) |
+| tool part `completed` / `error` | the call and its result or error, once per call |
+| `session.idle` | the reply, or a subagent's report for a child session; starts a compaction |
+| `session.created` (top level) | a session marker |
+
+The memory goes into the system prompt through
+`experimental.chat.system.transform`, not into the conversation. It is
+snapshotted once per user message, so the system prompt changes once per turn
+rather than on every step, and copies do not pile up in the session as they do
+in Claude Code. The plugin runs `claude-hook`, so it needs `python3`. The
+default compaction mind is still `claude -p`. Without Claude Code, set
+`SELF_RECALL_MIND` before installing, for example
+`opencode run -m <provider/model> "$(cat)"`.
 
 ## What the agent sees
 
@@ -106,4 +132,6 @@ sh examples/recall/test.sh
 
 The test uses a stub in place of the model. It checks the hooks, the retry on
 over-long lines, the budget, that the lines tile all messages with coarse old
-ones and fine recent ones, zooming, and that the view is deterministic.
+ones and fine recent ones, zooming, and that the view is deterministic. With
+`bun` installed it also drives the opencode plugin with a stub client
+(`opencode-test.js`).

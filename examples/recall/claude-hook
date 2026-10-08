@@ -85,7 +85,7 @@ def show(value):
 
 def tool_input(inp):
     if isinstance(inp, dict):
-        for k in ("command", "file_path", "pattern", "url", "query", "prompt", "description"):
+        for k in ("command", "file_path", "filePath", "pattern", "url", "query", "prompt", "description"):
             if isinstance(inp.get(k), str):
                 rest = {x: y for x, y in inp.items() if x != k and isinstance(y, (str, int, bool))}
                 tail = (" " + clip(json.dumps(rest, ensure_ascii=False), 300)) if rest else ""

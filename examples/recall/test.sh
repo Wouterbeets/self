@@ -105,4 +105,22 @@ for i in $(seq 41 60); do
 done
 "$hook" --compact
 [ "$(v | wc -c)" -le 3000 ] || fail "second batch left $(v | wc -c) bytes"
+# opencode: the installed plugin under Bun, as opencode runs it, with a stub client.
+if command -v bun >/dev/null; then
+	export SELF_HOME=$tmp/oc
+	"$here/install.sh" --opencode "$tmp/plugin" >/dev/null
+	bun "$here/opencode-test.js" "$tmp/plugin" >"$tmp/oc-system" || fail "plugin errored"
+	grep -q '^<recall>' "$tmp/oc-system" || fail "plugin injected no memory: $(cat "$tmp/oc-system")"
+	grep -q 'user: read notes' "$tmp/oc-system" && fail "prompt recorded before its snapshot"
+	m=$(v | grep -o '^[0-9+]* [0-9-]* [0-9:]* .*' | cut -d' ' -f4- | cut -c1-40)
+	[ "$(echo "$m" | grep -c '^session:')" = 1 ] || fail "subagent session marked as a session: $m"
+	echo "$m" | grep -qx 'user: read notes' || fail "prompt: $m"
+	[ "$(echo "$m" | grep -c '^tool: read /w/notes → hello')" = 1 ] || fail "tool not recorded once: $m"
+	echo "$m" | grep -q '^tool: read /w/gone ✗ no such file' || fail "tool error: $m"
+	echo "$m" | grep -q '^subagent: notes say hello' || fail "subagent stop: $m"
+	echo "$m" | tail -1 | grep -qx 'agent: notes say hello' || fail "stop: $m"
+	SELF_RECALL_SKIP=1 bun "$here/opencode-test.js" "$tmp/plugin" | grep -q . && fail "skipped plugin injected"
+else
+	echo "recall: no bun; skipping the opencode plugin" >&2
+fi
 echo "recall: all checks passed"
