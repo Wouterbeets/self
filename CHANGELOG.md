@@ -2,6 +2,12 @@
 
 ## Unreleased — Unix integration, everything is a file
 
+`examples/recall` records every Claude Code turn into self through hooks and
+injects a compacted memory of all of it into every prompt. A `recall` view
+renders a binary tree of summaries: recent turns are detailed, old ones coarse,
+and merges are planned by age in units of each span's own size. A hook script
+builds the summaries with a model outside the kernel.
+
 Events a command emits are stamped `via: "cli:<command>"`, so the log says
 which capability wrote them and how often each one ran with an effect. `cli`
 stays for kernel verbs run from the command line; `hear`, `kernel` and
