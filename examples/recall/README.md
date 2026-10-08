@@ -111,10 +111,53 @@ Set these before running `install.sh`, which writes them into the hook command.
 | `SELF_RECALL_CLIP` | 2000 | characters of each tool result recorded |
 | `SELF_RECALL_MIND` | `claude -p --model haiku --tools '' …` | prompt on stdin, one line on stdout |
 | `SELF_RECALL_LOG` | (discarded) | file for background compaction errors |
+| `SELF_RECALL_INJECT` | `prompt` | `start` injects on SessionStart only, so a long session holds one copy instead of one per prompt |
 
 The mind runs with `SELF_RECALL_SKIP=1`, so a nested `claude` records nothing.
 To avoid the subscription login and skip all hooks, use `claude --bare -p …`
 with an `ANTHROPIC_API_KEY`.
+
+## Beside a main instance
+
+Learned wiring recall into a busy instance that syncs with peers:
+
+- **Give it its own instance.** Recall records prompts and tool results, and
+  those can hold production data and credentials. If `SELF_HOME` is an instance
+  that `sync.push` gives to peers, every turn travels to them, because
+  `chat.message` is crossable. A busy day can also be tens of MB of turns, and
+  every view replays the log. A subsystem keeps the stream local and the parent
+  small:
+
+  ```sh
+  self run subsystem spawn recall --owns chat.,recall.
+  SELF_HOME=~/.self/sub/recall SELF_RECALL_INJECT=start \
+    SELF_RECALL_LOG=~/.self/sub/recall/compact.log examples/recall/install.sh
+  ```
+
+- **Let the parent zoom.** The memory tells the agent to run `self view
+  recall <first>+<count>`, and the agent's shell uses the parent instance. Give
+  the parent a `recall` view that forwards to the child. Views run without your
+  `PATH`, so name the binary:
+
+  ```sh
+  #!/bin/sh
+  bin=${SELF_BIN:-$(command -v self || echo "$HOME/go/bin/self")}
+  exec env SELF_HOME="$HOME/.self/sub/recall" "$bin" view recall "$@" </dev/null
+  ```
+
+- **Inject once per session.** Claude Code keeps every injected copy, so with
+  `prompt` a 100-prompt session holds about 900 KB of memory. With
+  `SELF_RECALL_INJECT=start`, the memory arrives on SessionStart, which also
+  fires after `/compact` and on resume.
+
+- **Keep other hooks out of the mind.** The default mind is `claude -p`, so
+  every hook in your user settings runs for each summary as well. Start your
+  own SessionStart and UserPromptSubmit hooks with
+  `[ -n "${SELF_RECALL_SKIP:-}" ] && exit 0;`. Without it, the summarizer gets
+  your startup brief and its prompts land wherever those hooks write.
+
+Measured on a 20 MB parent log: a hook takes 60 to 90 ms, and a haiku
+compaction of 7 tool messages takes 13 s.
 
 ## Limits
 

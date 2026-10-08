@@ -8,6 +8,9 @@ renders a binary tree of summaries: recent turns are detailed, old ones coarse,
 and merges are planned by age in units of each span's own size. A hook script
 builds the summaries with a model outside the kernel. An opencode plugin feeds
 the same recorder and puts the memory in the system prompt, once per turn.
+`SELF_RECALL_INJECT=start` injects only on SessionStart, so a long Claude
+Code session holds one copy of the memory. The README shows how to run recall
+as a subsystem, so turns stay out of a log that syncs to peers.
 
 Events a command emits are stamped `via: "cli:<command>"`, so the log says
 which capability wrote them and how often each one ran with an effect. `cli`
