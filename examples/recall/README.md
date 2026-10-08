@@ -111,6 +111,7 @@ Set these before running `install.sh`, which writes them into the hook command.
 | `SELF_RECALL_CLIP` | 2000 | characters of each tool result recorded |
 | `SELF_RECALL_MIND` | `claude -p --model haiku --tools '' …` | prompt on stdin, one line on stdout |
 | `SELF_RECALL_LOG` | (discarded) | file for background compaction errors |
+| `SELF_RECALL_INJECT` | `prompt` | `start` injects on SessionStart only, so a long session holds one copy instead of one per prompt |
 
 The mind runs with `SELF_RECALL_SKIP=1`, so a nested `claude` records nothing.
 To avoid the subscription login and skip all hooks, use `claude --bare -p …`

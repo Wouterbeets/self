@@ -30,6 +30,8 @@ Environment (all optional):
     SELF_RECALL_MIND    shell command: prompt on stdin, one line on stdout
                         (default: claude -p --model haiku, no tools)
     SELF_RECALL_LOG     file for compaction diagnostics (default: discarded)
+    SELF_RECALL_INJECT  prompt: inject on SessionStart and every prompt (default);
+                        start: inject on SessionStart only
 SELF_RECALL_SKIP=1 is set for the mind, so a nested claude records nothing.
 """
 
@@ -45,6 +47,7 @@ LINE = os.environ.get("SELF_RECALL_LINE", "200")
 LOW = os.environ.get("SELF_RECALL_LOW", "6000")
 HIGH = os.environ.get("SELF_RECALL_HIGH", "9000")
 CLIP = int(os.environ.get("SELF_RECALL_CLIP", "2000"))
+INJECT = ("SessionStart",) if os.environ.get("SELF_RECALL_INJECT") == "start" else ("SessionStart", "UserPromptSubmit")
 MIND = os.environ.get("SELF_RECALL_MIND") or (
     "claude -p --model haiku --tools '' --no-session-persistence "
     "--system-prompt 'You compress entries of an agent memory. Reply with one line only.'"
@@ -220,7 +223,7 @@ def main():
         warn("hook input is not JSON: %s" % e)
         return
     ev = d.get("hook_event_name")
-    if ev in ("SessionStart", "UserPromptSubmit"):
+    if ev in INJECT:
         sys.stdout.write(view() or "")
         sys.stdout.flush()
     m = message(d)

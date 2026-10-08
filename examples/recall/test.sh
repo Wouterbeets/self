@@ -123,4 +123,6 @@ if command -v bun >/dev/null; then
 else
 	echo "recall: no bun; skipping the opencode plugin" >&2
 fi
+SELF_RECALL_INJECT=start send '{hook_event_name:"UserPromptSubmit",prompt:"start mode",session_id:"s3",cwd:"/w"}' | grep -q . && fail "start mode injected on a prompt"
+SELF_RECALL_INJECT=start send '{hook_event_name:"SessionStart",source:"startup",session_id:"s3",cwd:"/w"}' | grep -q '^<recall>' || fail "start mode did not inject on SessionStart"
 echo "recall: all checks passed"
