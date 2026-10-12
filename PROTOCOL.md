@@ -174,6 +174,17 @@ the kernel reruns it on the fresh log, up to eight times, then fails. Reruns
 repeat any external effect, so never mark a command atomic that acts outside
 the log.
 
+A view may also carry `brief: {order, bytes}`: read it on arrival. Bare `self`
+and `self prompt` run every such view with no arguments, lowest `order` first,
+and print its output under `## <name>`, clipped at line boundaries to `bytes`
+(default 2000, at most 16000). It runs as any view does: a read, appending
+nothing. A view that fails or takes over three seconds prints one
+`(unavailable: …)` line in its place. `self brief` itself stays a pure read of
+declarations and runs nothing. Bare `self` then names capabilities without
+their summaries, to leave room; `self brief` has them. Use it for what a mind
+should know before it acts (open work, recent memory), within the budget it
+earns: every arrival pays for it.
+
 A command declaration may add `"stdin": true` to read the caller's stdin
 (`cat notes.md | self run remember`); its log then arrives on fd 3. Atomic
 reruns replay the same bytes.

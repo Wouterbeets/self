@@ -187,14 +187,25 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 	}
 }
 
-func brief(home string, st *state) string {
+func brief(home string, st *state) string { return briefWith(home, st, false) }
+
+// sessionBrief is what bare `self` shows a mind already busy with a task: the
+// capabilities by name only, leaving room for the brief sections. `self brief`
+// and execution prompts keep the summaries.
+func sessionBrief(home string, st *state) string { return briefWith(home, st, true) }
+
+func briefWith(home string, st *state, terse bool) string {
+	list := capabilityList
+	if terse {
+		list = capabilityNames
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# self — %s\n\n", home)
 
 	caller := cmp.Or(callerClaim(), `unset — export SELF_CALLER="<who you are>" so your writes are attributable`)
 	fmt.Fprintf(&b, "log: %d events    caller: %s\n", len(st.Events), caller)
 	fmt.Fprintf(&b, "head: %s\n", head(st.Events))
-	if anyClipped(st) {
+	if !terse && anyClipped(st) {
 		b.WriteString("lines below are clipped; `self brief <name>` prints one declaration in full\n")
 	}
 	if len(st.Events) > 0 && st.Key == nil {
@@ -202,7 +213,7 @@ func brief(home string, st *state) string {
 	}
 
 	fmt.Fprintf(&b, "\n## commands — `self run <name> [args…]`\n\n%s\n## views — `self view <name> [args…]`\n\n%s",
-		capabilityList(st, kindCommand), capabilityList(st, kindView))
+		list(st, kindCommand), list(st, kindView))
 
 	if p := st.pending(); len(p) > 0 {
 		b.WriteString("\n## pending — declared, no script yet\n\n")
@@ -301,6 +312,9 @@ func briefOne(st *state, selector string) (string, error) {
 				consumes = "the whole log"
 			}
 			fmt.Fprintf(&b, "\nconsumes: %s\n", consumes)
+			if s := c.Decl.Brief; s != nil {
+				fmt.Fprintf(&b, "brief section: order %d, %d bytes\n", s.Order, s.budget())
+			}
 		}
 		fmt.Fprintf(&b, "declared at seq %d", c.DeclSeq)
 		if c.Receipt != nil {
@@ -333,6 +347,27 @@ func capabilityList(st *state, typ string) string {
 		fmt.Fprintf(&b, "(no declared %ss yet — `self help` shows how to author one)\n", typ)
 	}
 	return b.String()
+}
+
+func capabilityNames(st *state, typ string) string {
+	var names []string
+	for _, c := range st.list(typ) {
+		names = append(names, c.Name+pendingFlag(c))
+	}
+	if typ == kindView && st.cap(kindView, "log") == nil {
+		names = append(names, "log")
+	}
+	if len(names) == 0 {
+		return fmt.Sprintf("(no declared %ss yet — `self help` shows how to author one)\n", typ)
+	}
+	return strings.Join(names, " · ") + "\n\n`self brief` says what each is for; `self brief <name>` one in full.\n"
+}
+
+func pendingFlag(c *capability) string {
+	if c.Pending() {
+		return " (pending)"
+	}
+	return ""
 }
 
 func anyClipped(st *state) bool {

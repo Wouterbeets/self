@@ -36,6 +36,8 @@ type decl struct {
 	Atomic bool `json:"atomic,omitempty"`
 	// Stdin hands a command the caller's stdin, and its log on fd 3.
 	Stdin bool `json:"stdin,omitempty"`
+	// Brief asks for this view to be read on arrival; see briefSections.
+	Brief *briefSpec `json:"brief,omitempty"`
 }
 
 // atomicAttempts bounds reruns of an atomic command under contention.
