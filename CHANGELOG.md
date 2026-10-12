@@ -11,6 +11,13 @@ the same recorder and puts the memory in the system prompt, once per turn.
 `SELF_RECALL_INJECT=start` injects only on SessionStart, so a long Claude
 Code session holds one copy of the memory. The README shows how to run recall
 as a subsystem, so turns stay out of a log that syncs to peers.
+Fixes from four days of real use: the background compaction runs from
+`SELF_HOME`, because a hook's cwd is often a removed worktree and the mind died
+on getcwd (300 of 699 failures in home's compact.log). Summaries that echo
+the line format's `<first>+<count> <stamp>` prefix lose it, in the hook and when
+rendered, so old echoes in the log stop wasting line bytes. A failing mind logs
+its exit status and stdout when stderr is empty. `test.sh` passes under macOS
+`/bin/sh`, where `VAR=x send` leaked the variable into the rest of the run.
 
 Events a command emits are stamped `via: "cli:<command>"`, so the log says
 which capability wrote them and how often each one ran with an effect. `cli`

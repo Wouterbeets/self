@@ -112,6 +112,7 @@ Set these before running `install.sh`, which writes them into the hook command.
 | `SELF_RECALL_MIND` | `claude -p --model haiku --tools '' …` | prompt on stdin, one line on stdout |
 | `SELF_RECALL_LOG` | (discarded) | file for background compaction errors |
 | `SELF_RECALL_INJECT` | `prompt` | `start` injects on SessionStart only, so a long session holds one copy instead of one per prompt |
+|  |  | `none` records only: the memory reaches the agent as a brief section of the parent instance (a forwarding `recall` view declared with `brief: {order, bytes}`), so bare `self` carries it |
 
 The mind runs with `SELF_RECALL_SKIP=1`, so a nested `claude` records nothing.
 To avoid the subscription login and skip all hooks, use `claude --bare -p …`

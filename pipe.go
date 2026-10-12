@@ -34,7 +34,7 @@ func cmdOrient(home string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(out, protocolLayer("core")+"\n\n"+protocolLayer("session")+"\n\n"+brief(home, st))
+	_, err = io.WriteString(out, protocolLayer("core")+"\n\n"+protocolLayer("session")+"\n\n"+sessionBrief(home, st)+briefSections(home, st))
 	return err
 }
 
@@ -315,7 +315,7 @@ func applyRetirements(home string, st *state, evs []Event) []string {
 func situate(home string, st *state, ask string) string {
 	return strings.Join([]string{
 		protocolLayer("core"), protocolLayer("execution"),
-		strings.TrimSpace(brief(home, st)),
+		strings.TrimSpace(brief(home, st) + briefSections(home, st)),
 		"## Intent\n\n" + protocolLayer("intent"),
 		strings.TrimSpace(pendingSection(st)),
 		"## The ask\n\n" + strings.TrimSpace(ask),
