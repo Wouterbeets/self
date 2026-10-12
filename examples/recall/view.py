@@ -51,7 +51,7 @@ PROMPT = '''You maintain the long-term memory of a coding agent: one conversatio
 
 {task}
 
-Keep, in this order of priority: what the user said and wants (their words, decisions, preferences); lasting effects and failures (files and commits changed, what broke or was left undone); findings and answers; tool steps last. Name concrete things: paths, commands, identifiers, numbers. Never make progress sound further along than it was. One line: no preamble, no line breaks, no markdown, no id or date prefix.
+Messages carry a [lane]: the working directory of the session that wrote them. Different lanes are different agents working in parallel; never blend their facts, and name the lane of each fact you keep. Separate what a tool result showed from what an agent or subagent only claimed (write "claimed"). When two lines disagree, the later one wins; drop the stale claim. Keep, in this order of priority: what the user said and wants (their words, decisions, preferences); lasting effects and failures (files and commits changed, what broke or was left undone); findings and answers; tool steps last. Name concrete things: paths, commands, identifiers, numbers. Never make progress sound further along than it was. One line: no preamble, no line breaks, no markdown, no id or date prefix.
 
 <input>
 {input}
@@ -148,9 +148,16 @@ for raw in sys.stdin:
 T = len(msgs)
 
 
+def lane(m):
+    '''The session's working directory, last path element: which parallel agent spoke.'''
+    cwd = (m.get('cwd') or '').rstrip('/')
+    return cwd.rsplit('/', 1)[-1] if cwd else ''
+
+
 def raw(i):
     m = msgs[i]
-    return flat('%s: %s' % (m['kind'], m['text']))
+    tag = '[%s] ' % lane(m) if lane(m) else ''
+    return flat('%s%s: %s' % (tag, m['kind'], m['text']))
 
 
 def text(first, count):
@@ -160,7 +167,9 @@ def text(first, count):
     if nid(first, count) in nodes:
         return clip(nodes[nid(first, count)], LINE, '…'), True
     if count == 1:
-        return clip(raw(first), LINE, '…'), False
+        # A tool call is its command and the head of its result: a clip says
+        # that as well as a model would, and costs no call. Zoom shows it all.
+        return clip(raw(first), LINE, '…'), msgs[first]['kind'] == 'tool'
     return None, False
 
 
@@ -199,7 +208,8 @@ def build(kind, first, count, ls, children=()):
     if kind == 'leaf':
         task = 'Task: compress message %s, below, into one line that will stand for it in the memory.' % first
         body = clip(msgs[first]['text'], CONTEXT, ' [clipped]')
-        body = '%s (%s): %s' % (msgs[first]['kind'], stamp(first), body)
+        tag = '[%s] ' % lane(msgs[first]) if lane(msgs[first]) else ''
+        body = '%s%s (%s): %s' % (tag, msgs[first]['kind'], stamp(first), body)
     else:
         last = first + count - 1
         task = ('Task: merge the two adjacent lines below, which cover messages %d..%d, into one line '

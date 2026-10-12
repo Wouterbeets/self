@@ -71,7 +71,7 @@ v >"$tmp/before"
 v >"$tmp/after"
 n=$(wc -c <"$tmp/after")
 [ "$n" -le 3000 ] || fail "memory is $n bytes after compaction"
-grep -q '…$' "$tmp/after" && fail "a line is still a draft: $(grep '…$' "$tmp/after")"
+grep '…$' "$tmp/after" | grep -v '^[0-9]*+1 .* tool: ' | grep -q . && fail "a line is still a draft: $(grep '…$' "$tmp/after")"  # a tool call stays a clip by design
 grep -q 'xxxxxxxxxx' "$tmp/after" && fail "an over-long reply was kept"
 grep -q '^[0-9]*+[0-9]* [0-9-]* [0-9:]* [0-9]*+' "$tmp/after" && fail "an echoed id was kept: $(grep -m1 '^[0-9]*+[0-9]* [0-9-]* [0-9:]* [0-9]*+' "$tmp/after")"
 ids=$(grep -o '^[0-9]*+[0-9]*' "$tmp/after")
@@ -130,6 +130,16 @@ else
 fi
 send_env SELF_RECALL_INJECT=start '{hook_event_name:"UserPromptSubmit",prompt:"start mode",session_id:"s3",cwd:"/w"}' | grep -q . && fail "start mode injected on a prompt"
 send_env SELF_RECALL_INJECT=start '{hook_event_name:"SessionStart",source:"startup",session_id:"s3",cwd:"/w"}' | grep -q '^<recall>' || fail "start mode did not inject on SessionStart"
+send_env SELF_RECALL_INJECT=none '{hook_event_name:"SessionStart",source:"startup",session_id:"s3",cwd:"/w"}' | grep -q . && fail "none mode injected"
+send_env SELF_RECALL_INJECT=none '{hook_event_name:"UserPromptSubmit",prompt:"none mode records",session_id:"s3",cwd:"/srv/lane-b"}' >/dev/null
+v | grep -q '\[lane-b\] user: none mode records' || fail "none mode did not record, or lost its lane: $(v | tail -3)"
+
+# A long tool call renders as a final clip: no model call is planned for it.
+long=$(printf 'x%.0s' $(seq 1 400))
+send --arg r "$long" '{hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"echo long"},tool_response:{stdout:$r},session_id:"s3",cwd:"/srv/lane-b"}' >/dev/null
+n=$(v | grep 'echo long' | grep -o '^[0-9]*+1')
+[ -n "$n" ] || fail "tool call not rendered: $(v | tail -3)"
+"$bin" view recall --plan | grep -q "\"build\": \"$n\"" && fail "a tool call was planned for a summary"
 
 # A summary already in the log with an echoed prefix renders without it.
 f=$(v | grep -o -m1 '^[0-9]*+[0-9]*')
