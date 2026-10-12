@@ -149,9 +149,12 @@ T = len(msgs)
 
 
 def lane(m):
-    '''The session's working directory, last path element: which parallel agent spoke.'''
+    '''Which parallel agent spoke: its working directory's last element, and
+    the head of its session id, since sessions often share a directory.'''
     cwd = (m.get('cwd') or '').rstrip('/')
-    return cwd.rsplit('/', 1)[-1] if cwd else ''
+    where = cwd.rsplit('/', 1)[-1] if cwd else ''
+    who = str(m.get('session') or '')[:4]
+    return '%s:%s' % (where, who) if where and who else where or who
 
 
 def raw(i):

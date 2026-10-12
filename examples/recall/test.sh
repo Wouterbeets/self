@@ -132,7 +132,7 @@ send_env SELF_RECALL_INJECT=start '{hook_event_name:"UserPromptSubmit",prompt:"s
 send_env SELF_RECALL_INJECT=start '{hook_event_name:"SessionStart",source:"startup",session_id:"s3",cwd:"/w"}' | grep -q '^<recall>' || fail "start mode did not inject on SessionStart"
 send_env SELF_RECALL_INJECT=none '{hook_event_name:"SessionStart",source:"startup",session_id:"s3",cwd:"/w"}' | grep -q . && fail "none mode injected"
 send_env SELF_RECALL_INJECT=none '{hook_event_name:"UserPromptSubmit",prompt:"none mode records",session_id:"s3",cwd:"/srv/lane-b"}' >/dev/null
-v | grep -q '\[lane-b\] user: none mode records' || fail "none mode did not record, or lost its lane: $(v | tail -3)"
+v | grep -q '\[lane-b:s3\] user: none mode records' || fail "none mode did not record, or lost its lane: $(v | tail -3)"
 
 # A long tool call renders as a final clip: no model call is planned for it.
 long=$(printf 'x%.0s' $(seq 1 400))
