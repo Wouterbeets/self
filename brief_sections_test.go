@@ -89,3 +89,49 @@ func TestBriefOneNamesTheSection(t *testing.T) {
 		t.Fatalf("section budget not reported or not capped:\n%s", got)
 	}
 }
+
+// A slow section is cut off at the timeout and the rest of the brief arrives.
+func TestBriefSectionTimeoutIsContained(t *testing.T) {
+	h := home(t)
+	heard(t, h, sectionView(t, "slow", &briefSpec{Order: 1}, "sleep 30\n")+
+		sectionView(t, "fine", &briefSpec{Order: 2}, "echo FINE\n"))
+	got := briefSections(h, replayed(t, h))
+	if !strings.Contains(got, "(unavailable: no answer within") || !strings.Contains(got, "FINE") {
+		t.Fatalf("a slow section held up the brief:\n%s", got)
+	}
+}
+
+// Execution prompts carry the sections; `self brief` runs nothing.
+func TestBriefSectionsReachPromptsNotTheCard(t *testing.T) {
+	h := home(t)
+	heard(t, h, sectionView(t, "open", &briefSpec{}, "echo OPEN-WORK\n"))
+	var prompt, card bytes.Buffer
+	if err := dispatch(h, "prompt", []string{"do it"}, &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatch(h, "brief", nil, &card); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt.String(), "OPEN-WORK") {
+		t.Fatal("an execution prompt lacks the sections")
+	}
+	if strings.Contains(card.String(), "OPEN-WORK") {
+		t.Fatal("`self brief` ran a view; it should stay a pure read of declarations")
+	}
+}
+
+// Bare self names its capabilities; `self brief` keeps what each is for.
+func TestBareSelfNamesCapabilitiesTersely(t *testing.T) {
+	h := home(t)
+	heard(t, h, line(t, "command.declared", decl{Name: "entry", Summary: "append a journal entry", Description: "x"}))
+	var out bytes.Buffer
+	if err := dispatch(h, "", nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if p := out.String(); !strings.Contains(p, "entry (pending)") || strings.Contains(p, "append a journal entry") {
+		t.Fatalf("bare self should list names only:\n%s", p)
+	}
+	if !strings.Contains(brief(h, replayed(t, h)), "append a journal entry") {
+		t.Fatal("`self brief` lost the summaries")
+	}
+}
