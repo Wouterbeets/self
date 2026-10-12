@@ -18,7 +18,8 @@ hook=$here/claude-hook
 v() { "$bin" view recall --line 120 "$@"; }
 
 # The stub summarizes the first 60 bytes of its input; the first time it sees a
-# prompt it answers too long, so every summary also proves the retry.
+# prompt it answers too long, so every summary also proves the retry. Like real
+# models, it echoes the line format's id and stamp, which must not be kept.
 cat >"$tmp/stub" <<'EOF'
 #!/usr/bin/env python3
 import re, sys
@@ -27,7 +28,7 @@ if 'previous reply' not in p:
     print('x' * 500)
     sys.exit(0)
 m = re.search(r'<input>\n(.*?)\n</input>', p, re.S)
-print('S[' + ' '.join(m.group(1).split())[:60] + ']')
+print('9+1 01-01 00:00 S[' + ' '.join(m.group(1).split())[:60] + ']')
 EOF
 chmod +x "$tmp/stub"
 export SELF_RECALL_MIND=$tmp/stub
@@ -40,18 +41,21 @@ jq -e '.hooks.PostToolUse[0].matcher == "*"' "$tmp/settings.json" >/dev/null || 
 
 # Recording: the injected memory is printed before the prompt is recorded.
 send() { jq -nc "$@" | "$hook"; }
+# One variable for one hook. Not "VAR=x send": a prefix assignment on a shell
+# function outlives the call in a POSIX sh (macOS /bin/sh), though not in dash.
+send_env() { e=$1; shift; jq -nc "$@" | env "$e" "$hook"; }
 out=$(send '{hook_event_name:"SessionStart",source:"startup",session_id:"s1",cwd:"/w"}')
 echo "$out" | grep -q 'No earlier conversations' || fail "empty memory not injected: $out"
 for i in $(seq 1 40); do
 	send --arg p "please do task $i" '{hook_event_name:"UserPromptSubmit",prompt:$p,session_id:"s1",cwd:"/w"}' >"$tmp/injected"
 	send --arg o "$(seq 1 $((i * 5)) | tr '\n' ' ')" '{hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"seq"},tool_response:{stdout:$o},session_id:"s1",cwd:"/w"}' >/dev/null
-	SELF_RECALL_MIND=false send --arg r "done with task $i" '{hook_event_name:"Stop",last_assistant_message:$r,session_id:"s1",cwd:"/w"}' >/dev/null
+	send_env SELF_RECALL_MIND=false --arg r "done with task $i" '{hook_event_name:"Stop",last_assistant_message:$r,session_id:"s1",cwd:"/w"}' >/dev/null
 done
 grep -q '^<recall>' "$tmp/injected" || fail "prompt hook injected nothing"
 grep -q 'please do task 40' "$tmp/injected" && fail "prompt recorded before the memory was injected"
 send '{hook_event_name:"PostToolUseFailure",tool_name:"Read",tool_input:{file_path:"/nope"},error:"no such file",session_id:"s1",cwd:"/w"}' >/dev/null
 send '{hook_event_name:"SubagentStop",agent_type:"Explore",last_assistant_message:"found it in log.go",session_id:"s1",cwd:"/w"}' >/dev/null
-SELF_RECALL_SKIP=1 send '{hook_event_name:"UserPromptSubmit",prompt:"nested",session_id:"s2",cwd:"/w"}' | grep -q . && fail "skipped hook printed"
+send_env SELF_RECALL_SKIP=1 '{hook_event_name:"UserPromptSubmit",prompt:"nested",session_id:"s2",cwd:"/w"}' | grep -q . && fail "skipped hook printed"
 "$bin" view log --all | grep -c chat.message | grep -qx 123 || fail "expected 123 messages: $("$bin" view log --all | grep -c chat.message)"
 "$bin" view log --all | grep -q nested && fail "skipped hook recorded"
 v 121+1 | grep -q 'Read /nope ✗ no such file' || fail "failure not recorded: $(v 121+1)"
@@ -69,6 +73,7 @@ n=$(wc -c <"$tmp/after")
 [ "$n" -le 3000 ] || fail "memory is $n bytes after compaction"
 grep -q '…$' "$tmp/after" && fail "a line is still a draft: $(grep '…$' "$tmp/after")"
 grep -q 'xxxxxxxxxx' "$tmp/after" && fail "an over-long reply was kept"
+grep -q '^[0-9]*+[0-9]* [0-9-]* [0-9:]* [0-9]*+' "$tmp/after" && fail "an echoed id was kept: $(grep -m1 '^[0-9]*+[0-9]* [0-9-]* [0-9:]* [0-9]*+' "$tmp/after")"
 ids=$(grep -o '^[0-9]*+[0-9]*' "$tmp/after")
 next=0
 for id in $ids; do
@@ -123,6 +128,21 @@ if command -v bun >/dev/null; then
 else
 	echo "recall: no bun; skipping the opencode plugin" >&2
 fi
-SELF_RECALL_INJECT=start send '{hook_event_name:"UserPromptSubmit",prompt:"start mode",session_id:"s3",cwd:"/w"}' | grep -q . && fail "start mode injected on a prompt"
-SELF_RECALL_INJECT=start send '{hook_event_name:"SessionStart",source:"startup",session_id:"s3",cwd:"/w"}' | grep -q '^<recall>' || fail "start mode did not inject on SessionStart"
+send_env SELF_RECALL_INJECT=start '{hook_event_name:"UserPromptSubmit",prompt:"start mode",session_id:"s3",cwd:"/w"}' | grep -q . && fail "start mode injected on a prompt"
+send_env SELF_RECALL_INJECT=start '{hook_event_name:"SessionStart",source:"startup",session_id:"s3",cwd:"/w"}' | grep -q '^<recall>' || fail "start mode did not inject on SessionStart"
+
+# A summary already in the log with an echoed prefix renders without it.
+f=$(v | grep -o -m1 '^[0-9]*+[0-9]*')
+jq -nc --arg id "$f" '{name:"recall.node",payload:{id:$id,text:($id+" 01-01 00:00 "+$id+" 01-01 00:00 echoed")}}' | "$bin" hear >/dev/null
+v | grep -q "^$f [0-9-]* [0-9:]* echoed$" || fail "echoed prefix rendered: $(v | grep -m1 "^$f ")"
+
+# The background compaction runs from SELF_HOME, not from the hook's cwd: that
+# is often a worktree removed before the mind starts, which then dies on getcwd.
+mkdir "$tmp/wt"
+long=$(seq 1 100 | tr '\n' ' ')
+(cd "$tmp/wt" && send_env SELF_RECALL_MIND="pwd -P >'$tmp/mindcwd'; echo short" --arg r "$long" \
+	'{hook_event_name:"Stop",last_assistant_message:$r,session_id:"s3",cwd:"/w"}' >/dev/null)
+rmdir "$tmp/wt"
+for _ in $(seq 1 50); do [ -s "$tmp/mindcwd" ] && break; sleep 0.2; done
+[ "$(cat "$tmp/mindcwd" 2>/dev/null)" = "$(cd "$SELF_HOME" && pwd -P)" ] || fail "compaction ran in $(cat "$tmp/mindcwd" 2>/dev/null), not SELF_HOME"
 echo "recall: all checks passed"

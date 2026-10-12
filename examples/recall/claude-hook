@@ -39,6 +39,7 @@ import concurrent.futures
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -55,6 +56,9 @@ MIND = os.environ.get("SELF_RECALL_MIND") or (
 ATTEMPTS = 5
 ROUNDS = 64
 WORKERS = 8
+# The prompt shows lines as "<first>+<count> <month-day time> <summary>", and
+# models echo that prefix despite being told not to; it would cost line bytes.
+ECHO = re.compile(r"^(\d+\+\d+ (?=\d\d-\d\d \d\d:\d\d)(\d\d-\d\d \d\d:\d\d\s+)?)+")
 
 
 def warn(msg):
@@ -160,9 +164,13 @@ def message(d):
 
 
 def spawn_compaction():
+    """Compact in the background, from SELF_HOME: the hook's cwd is often a
+    worktree that is removed before the compaction ends, and a mind started
+    there dies on getcwd."""
     log = os.environ.get("SELF_RECALL_LOG")
     err = open(log, "a") if log else subprocess.DEVNULL
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "--compact", "--if-idle"], start_new_session=True,
+                     cwd=os.environ.get("SELF_HOME") or None,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err)
 
 
@@ -173,9 +181,10 @@ def summarize(task):
     for _ in range(ATTEMPTS):
         r = subprocess.run(["sh", "-c", MIND], input=prompt, capture_output=True, text=True, env=env)
         if r.returncode != 0:
-            warn("mind failed on %s: %s" % (task["build"], r.stderr.strip()[-500:]))
+            warn("mind failed on %s (exit %d): %s" % (task["build"], r.returncode,
+                                                      (r.stderr.strip() or r.stdout.strip())[-500:]))
             return None
-        line = " ".join(r.stdout.split()).strip("`\"' ")
+        line = ECHO.sub("", " ".join(r.stdout.split()).strip("`\"' "))
         n = len(line.encode())
         if line and n <= limit:
             return line
