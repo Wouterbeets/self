@@ -165,10 +165,16 @@ def message(d):
     return {"name": "chat.message", "payload": {k: v for k, v in m.items() if v is not None}}
 
 
+def compaction_paused():
+    return os.path.exists(os.path.join(os.environ.get("SELF_HOME") or ".", "COMPACTION_PAUSED"))
+
+
 def spawn_compaction():
     """Compact in the background, from SELF_HOME: the hook's cwd is often a
     worktree that is removed before the compaction ends, and a mind started
     there dies on getcwd."""
+    if compaction_paused():
+        return
     log = os.environ.get("SELF_RECALL_LOG")
     err = open(log, "a") if log else subprocess.DEVNULL
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "--compact", "--if-idle"], start_new_session=True,
@@ -181,6 +187,8 @@ def summarize(task):
     limit, prompt, line = task["limit"], task["prompt"], ""
     env = dict(os.environ, SELF_RECALL_SKIP="1")
     for _ in range(ATTEMPTS):
+        if compaction_paused():
+            return None
         r = subprocess.run(["sh", "-c", MIND], input=prompt, capture_output=True, text=True, env=env)
         if r.returncode != 0:
             warn("mind failed on %s (exit %d): %s" % (task["build"], r.returncode,
@@ -196,6 +204,8 @@ def summarize(task):
 
 
 def compact(wait):
+    if compaction_paused():
+        return
     home = os.environ.get("SELF_HOME") or "."
     lock = open(os.path.join(home, ".recall.lock"), "w")
     try:
@@ -205,6 +215,8 @@ def compact(wait):
     batch = False
     with concurrent.futures.ThreadPoolExecutor(WORKERS) as pool:
         for _ in range(ROUNDS):
+            if compaction_paused():
+                return
             out = view("--plan", "--low", LOW, "--high", HIGH, *(["--continue"] if batch else []))
             if out is None:
                 return
