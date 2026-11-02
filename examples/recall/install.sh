@@ -3,20 +3,24 @@
 #
 # usage: examples/recall/install.sh [settings.json]
 #        examples/recall/install.sh --opencode [plugin-dir]
+#        examples/recall/install.sh --pi [extension-dir]
 #
 # Declares and authors the recall view in $SELF_HOME. For Claude Code, merges
 # hooks for every event claude-hook handles into the settings file (default
 # ~/.claude/settings.json; use .claude/settings.json for one project); rerunning
 # replaces the earlier recall hooks instead of adding more. For opencode, writes
-# recall.js into the plugin directory (default ~/.config/opencode/plugin; use
-# .opencode/plugin for one project). SELF_HOME, SELF_BIN and any SELF_RECALL_*
-# set now are written into the hook command or the plugin.
+# recall.js into the plugin directory (default ~/.config/opencode/plugins; use
+# .opencode/plugins for one project). For pi, writes self-recall.ts into the
+# extension directory (default ~/.pi/agent/extensions; .pi/extensions for one
+# project). SELF_HOME, SELF_BIN and any SELF_RECALL_* set now are written into
+# the hook command, the plugin or the extension.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
-opencode=
-if [ "${1:-}" = --opencode ]; then
-	opencode=${2:-$HOME/.config/opencode/plugin}
-fi
+plugin= src= dest=
+case "${1:-}" in
+--opencode) plugin=${2:-$HOME/.config/opencode/plugins} src=opencode.js dest=recall.js ;;
+--pi) plugin=${2:-$HOME/.pi/agent/extensions} src=pi.ts dest=self-recall.ts ;;
+esac
 settings=${1:-$HOME/.claude/settings.json}
 bin=${SELF_BIN:-$(command -v self || true)}
 [ -n "$bin" ] || { echo "install: no self on PATH; set SELF_BIN" >&2; exit 1; }
@@ -29,16 +33,16 @@ c='["chat.message","recall.node","recall.merged"]'
 jq -nc --argjson c "$c" '{name:"view.declared",payload:{name:"recall",summary:"Every earlier conversation as one memory: recent lines detailed, old ones coarse; zoom with <first>+<count>",description:"usage: self view recall [<first>+<count>] — see examples/recall/view.py",consumes:$c}}' | s hear >/dev/null
 jq -nc --rawfile v "$here/view.py" '{name:"script.authored",payload:{type:"view",name:"recall",script:$v}}' | s hear >/dev/null
 
-if [ -n "$opencode" ]; then
-	mkdir -p "$opencode"
+if [ -n "$plugin" ]; then
+	mkdir -p "$plugin"
 	env=$(env | sed -n 's/^\(SELF_RECALL_[A-Z]*\)=.*/\1/p' | sort | jq -R . | jq -sc --arg h "$SELF_HOME" --arg b "$bin" \
 		'reduce .[] as $k ({SELF_HOME: $h, SELF_BIN: $b}; .[$k] = env[$k])')
-	tmp=$opencode/.recall.js.$$
+	tmp=$plugin/.$dest.$$
 	lit() { printf %s "$1" | sed 's/[|&\\]/\\&/g'; }
 	sed -e "s|^const HOOK = .*|const HOOK = $(lit "$(jq -nc --arg h "$here/claude-hook" '$h')")|" \
-		-e "s|^const ENV = {}|const ENV = $(lit "$env")|" "$here/opencode.js" >"$tmp"
-	mv "$tmp" "$opencode/recall.js"
-	echo "recall: view installed in $SELF_HOME; plugin written to $opencode/recall.js"
+		-e "s|^const ENV = {}|const ENV = $(lit "$env")|" "$here/$src" >"$tmp"
+	mv "$tmp" "$plugin/$dest"
+	echo "recall: view installed in $SELF_HOME; written to $plugin/$dest"
 	exit 0
 fi
 

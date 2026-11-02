@@ -11,7 +11,8 @@ One script for every hook; install.sh wires it into a settings.json:
     Stop               record the agent's reply, then compact in the background
 
 Every message is one chat.message {kind, text, session, cwd, tool?, agent?},
-heard by self as SELF_CALLER=claude-code. `claude-hook --compact` runs the
+heard by self as SELF_CALLER=$SELF_RECALL_HARNESS (default claude-code;
+the opencode plugin and the pi extension set opencode and pi). `claude-hook --compact` runs the
 compaction the recall view plans: it builds summaries with a model, outside
 self (the kernel holds no model), and hears recall.node and recall.merged.
 One compaction at a time per SELF_HOME: by hand it waits its turn; the one a
@@ -30,6 +31,7 @@ Environment (all optional):
     SELF_RECALL_MIND    shell command: prompt on stdin, one line on stdout
                         (default: claude -p --model haiku, no tools)
     SELF_RECALL_LOG     file for compaction diagnostics (default: discarded)
+    SELF_RECALL_HARNESS the caller chat.message is heard as (default: claude-code)
     SELF_RECALL_INJECT  prompt: inject on SessionStart and every prompt (default);
                         start: inject on SessionStart only; none: record only,
                         when the memory reaches the agent another way (a brief
@@ -239,7 +241,7 @@ def main():
         sys.stdout.flush()
     m = message(d)
     if m:
-        hear([m], "claude-code")
+        hear([m], os.environ.get("SELF_RECALL_HARNESS") or "claude-code")
     if ev in ("SessionStart", "Stop"):
         spawn_compaction()
 
