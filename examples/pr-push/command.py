@@ -25,6 +25,8 @@ the earlier ones found and may add events. `--steps` lists them:
            only when asked.
   pr       the open PR for this branch is updated (pr.updated), else one is
            created with gh: --title/--body, or filled from the commits; --draft.
+           gh runs as the account named after the repo owner when it holds one
+           (SELF_GH_USER overrides), whatever account is active.
   track    with a goal: self run ship track <goal> <url>, so ship ticks CI, CD
            and rollout for it. A refused track warns and does not fail.
 
@@ -217,11 +219,21 @@ def step_push(ctx):
                            "head": ctx["head"], "forced": bool(opts.get("--force-with-lease"))})]
 
 
+def gh_env(owner):
+    '''gh holds several accounts and only one is active: use the one named after the repo owner when gh has it
+    (SELF_GH_USER overrides), so a work-active gh still opens PRs on a personal repo and the reverse.'''
+    user = os.environ.get("SELF_GH_USER") or owner
+    r = sh([GH, "auth", "token", "--user", user], check=False, timeout=20)
+    token = r.stdout.strip() if r.returncode == 0 else ""
+    return dict(ENV, GH_TOKEN=token) if token else ENV
+
+
 def step_pr(ctx):
     if not ctx.get("gh_repo"):
         raise RuntimeError("remote is not on github.com; no PR step for it yet")
+    env = gh_env(ctx["gh_repo"].split("/")[0])
     view = sh([GH, "pr", "list", "--repo", ctx["gh_repo"], "--head", ctx["branch"], "--state", "open",
-               "--json", "url,number,isDraft,title", "--limit", "1"], cwd=ctx["repo"])
+               "--json", "url,number,isDraft,title", "--limit", "1"], cwd=ctx["repo"], env=env)
     found = json.loads(view.stdout or "[]")
     if found:
         pr = found[0]
@@ -239,13 +251,13 @@ def step_pr(ctx):
         cmd += ["--fill"]
     if opts.get("--draft"):
         cmd += ["--draft"]
-    out = sh(cmd, cwd=ctx["repo"]).stdout.strip().splitlines()
+    out = sh(cmd, cwd=ctx["repo"], env=env).stdout.strip().splitlines()
     url = next((l for l in reversed(out) if "/pull/" in l), "")
     if not url:
         raise RuntimeError("gh pr create printed no PR url: " + " ".join(out)[-300:])
     ctx["url"] = url
     title = opts.get("--title") or sh([GH, "pr", "view", url, "--json", "title", "-q", ".title"],
-                                      cwd=ctx["repo"], check=False).stdout.strip()
+                                      cwd=ctx["repo"], check=False, env=env).stdout.strip()
     say("opened %s" % url)
     return [("pr.opened", {"repo": ctx["repo"], "url": url, "number": int(url.rstrip("/").rsplit("/", 1)[-1]),
                            "branch": ctx["branch"], "head": ctx["head"], "title": title,
