@@ -1,0 +1,5 @@
+{
+  "events": 8,
+  "record_sha256": "88426578abae39f6cdb53e7db337dd91e7ea12fd963767a776deb2c74a49af7a",
+  "capability": "command/wait-log"
+}
