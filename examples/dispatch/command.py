@@ -207,7 +207,8 @@ prompt = ("You are %s, one worker in a relay on goal %s; the shared event log is
           "Report with: self run goal progress %s '<change; evidence; blockers; next action>'\n"
           "Use the other self tools freely: self brief lists them, and they compose well with the rest of unix, so pipe them into grep, jq, and friends.\n"
           "Stop at the first natural checkpoint: humans steer only between runs. Work beyond your outcome becomes subgoals you report, not work you do.\n"
-          "Worktree: __WORKTREE__ on branch %s of %s.\n\n"
+          "Worktree: __WORKTREE__ on branch %s of %s.\n"
+          "__PRACTICES__\n"
           "Assignment:\n" % (name, goal, goal, goal, branch, repo)) + assignment
 
 base = {"goal": goal, "agent": name, "requested_agent": requested_name, "kind": kind, "model": model_full,
@@ -321,6 +322,20 @@ def prepare_opencode_launch(args, directory):
     info = api("get", "/api/session/" + session)["data"]
 
 
+def practices_block(cwd):
+    '''The practices declared `--at work` for the worktree, and how work leaves it. A read; a failure costs the block.'''
+    push = "Push with: self run pr.push (it checks the practices at push, pushes, opens the PR, binds it to this goal).\n"
+    binary = os.environ.get("SELF_BIN") or shutil.which("self", path=ENV["PATH"])
+    try:
+        shown = subprocess.run([binary or "self", "run", "practice", "show", "--at", "work", "--dir", cwd],
+                               capture_output=True, text=True, timeout=20, env=ENV, cwd=cwd)
+    except (OSError, subprocess.SubprocessError):
+        return push
+    if shown.returncode or not shown.stderr.strip():
+        return push
+    return "Practices here (self view practices <id> for one in full):\n" + shown.stderr.rstrip() + "\n" + push
+
+
 def run(argv, timeout=30, check=True, cwd=None):
     proc = subprocess.run(argv, text=True, capture_output=True, env=ENV, timeout=timeout, cwd=cwd)
     if check and proc.returncode:
@@ -384,6 +399,7 @@ try:
         if made.returncode:
             run(["git", "-C", repo, "worktree", "add", "-q", cwd, branch], timeout=120)
     prompt = prompt.replace("__WORKTREE__", cwd)   # str.replace so a '%' in the assignment cannot break it
+    prompt = prompt.replace("__PRACTICES__", practices_block(cwd), 1)
     base["prompt"] = prompt
     base["worktree"] = cwd
 

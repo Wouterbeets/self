@@ -45,6 +45,9 @@ declared `-`; a named tab never placed in an area; a doing line missing since
 the last rename or older than 3 hours. --show, --nudge and --clear append
 nothing. Outside hc or with no Herdr window everything is a silent no-op, exit 0.
 
+With a goal or `-`, it then prints (stderr) the practices declared `--at work` for
+this repo and that work leaves with `self run pr.push` (self view practices).
+
 `self run name` is the old form of this command and still works (it never
 touches the goal); it prints a reminder to use working-on.
 Source: ~/self examples/working-on/command.py.
@@ -226,6 +229,32 @@ elif args:
         area = goal_area(goal)
         if area:
             area = normalise([area], 16) or None
+
+# ---- practices: how work is done where this conversation works, and how it leaves ----
+def practices_note():
+    '''Print, on stderr, the practices declared `--at work` for the caller's repo and how to push.
+    A read: it appends nothing, and any failure costs only the note.'''
+    import pwd
+    user_home = pwd.getpwuid(os.getuid()).pw_dir
+    path = os.pathsep.join([user_home + "/go/bin", user_home + "/.local/bin", "/opt/homebrew/bin", "/usr/local/bin",
+                            "/usr/bin", "/bin"])
+    binary = os.environ.get("SELF_BIN") or shutil.which("self", path=path)
+    if not binary:
+        return
+    try:
+        shown = subprocess.run([binary, "run", "practice", "show", "--at", "work"], capture_output=True, text=True,
+                               timeout=10, cwd=os.environ.get("SELF_CWD") or None,
+                               env=dict(os.environ, HOME=user_home, PATH=path))
+    except (OSError, subprocess.SubprocessError):
+        return
+    if shown.returncode == 0 and shown.stderr.strip():
+        print("Practices here (self view practices <id> for one in full):\n" + shown.stderr.rstrip(), file=sys.stderr)
+        print("Push with `self run pr.push`: it checks these, pushes, opens the PR and binds it to the goal.",
+              file=sys.stderr)
+
+
+if goal or unfiled:
+    practices_note()
 
 # ---- herdr-core and the window ----
 terminal = env.get("HC_TERMINAL_ID", "")
