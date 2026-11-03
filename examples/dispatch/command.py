@@ -21,6 +21,14 @@ WORKTREES = os.environ.get("SELF_WORKTREES") or (HOME + "/.herdr/worktrees")
 AGENT_ARGS_RAW = os.environ.get("SELF_DISPATCH_AGENT_ARGS") or os.environ.get("SELF_HERDR_AGENT_ARGS", "")
 
 USAGE = """usage: dispatch [--area <space>] [--tab <label>] [--pane <doing>] [--no-preflight] <goal> <name> <kind> <repo> [prompt]
+       dispatch --auto <goal> [prompt]
+
+  --dry-run  print what would be started (stderr) and start nothing.
+
+  --auto   infer the rest, for one-click starts (the Herdr goal-agents list): kind
+           claude; repo and area from the latest dispatch on this goal or its
+           nearest ancestor (else the latest dispatch anywhere); name from the goal
+           id, numbered past names already used on it; prompt from the goal title.
 
   <name> becomes the agent's speaker identity and its hc terminal name, so name it
   <kind>-<model>-<task> (e.g. claude-opus-payment-bug-fixer).
@@ -45,7 +53,7 @@ def without_prompt(payload):
 
 # ---- argv: optional labels anywhere, then the four positionals and the prompt ----
 raw = sys.argv[1:]
-labels, preflight, positional = {}, True, []
+labels, preflight, positional, auto, dry = {}, True, [], False, False
 i = 0
 while i < len(raw):
     tok = raw[i]
@@ -65,19 +73,31 @@ while i < len(raw):
         preflight = False
         i += 1
         continue
+    if tok == "--dry-run":
+        dry = True
+        i += 1
+        continue
+    if tok == "--auto":
+        auto = True
+        i += 1
+        continue
     positional.append(tok)
     i += 1
-if len(positional) < 4:
+if len(positional) < (1 if auto else 4):
     print(USAGE, file=sys.stderr)
     raise SystemExit(2)
-goal, name, kind, repo = positional[:4]
+if auto:
+    goal, name, kind, repo = positional[0], "", "claude", ""
+    positional = [goal, "", "", ""] + positional[1:]
+else:
+    goal, name, kind, repo = positional[:4]
 
 # ---- fold the log: the goal must be open, unheld, unblocked ----
 events = [json.loads(line) for line in sys.stdin if line.strip()]
 def event_key(e):
     stamp = re.match(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$", str(e.get("occurred_at", "")))
     return ("".join(stamp.group(i) for i in range(1, 7)) + (stamp.group(7) or "")[:9].ljust(9, "0") if stamp else "", e.get("name", ""), json.dumps(e.get("payload"), sort_keys=True))
-goals, removed = {}, set()
+goals, removed, requested = {}, set(), []
 for event in sorted(events, key=event_key):
     item = event.get("payload")
     if not isinstance(item, dict):
@@ -89,6 +109,8 @@ for event in sorted(events, key=event_key):
         goals[target].update({k: item[k] for k in ("status", "depends_on") if k in item})
     elif event.get("name") == "goal.removed":
         removed.add(target)
+    elif event.get("name") == "agent.requested":
+        requested.append(item)
 def closed(target):
     return target in removed or str(goals.get(target, {}).get("status", "active")).lower() in {"closed", "done", "completed", "cancelled", "removed"}
 if goal not in goals or closed(goal):
@@ -102,6 +124,37 @@ while current in goals and current not in visited:
 blocked = [g for g in goals[goal].get("depends_on", []) if not closed(g)]
 if blocked:
     sys.exit("dispatch: goal is blocked by " + ", ".join(blocked))
+if auto:
+    lineage, current = [], goal
+    while current in goals and current not in lineage:
+        lineage.append(current)
+        current = goals[current].get("parent")
+    near = lambda item: lineage.index(item["goal"]) if item.get("goal") in lineage else len(lineage)
+    # Another body's dispatches name paths that do not exist here (/home/wouter/...).
+    prior = [item for item in requested if isinstance(item.get("repo"), str) and os.path.isabs(item["repo"])
+             and os.path.isdir(item["repo"])]
+    if not prior:
+        sys.exit("dispatch --auto: no earlier dispatch to take a repo from; dispatch it once by hand")
+    best = min(range(len(prior)), key=lambda i: (near(prior[i]), -i))
+    repo = prior[best]["repo"]
+    if near(prior[best]) < len(lineage) and (prior[best].get("labels") or {}).get("area"):
+        labels.setdefault("area", prior[best]["labels"]["area"])
+    words = [w for w in re.split(r"[^a-z0-9]+", goal.lower()) if w]
+    stem = ""
+    for word in reversed(words[-3:]):
+        if len(word) + len(stem) + 1 > 24 and stem:
+            break
+        stem = (word + "-" + stem).strip("-")
+    stem = stem[:24] or "agent"
+    used = {item.get("agent") for item in requested if item.get("goal") == goal}
+    name, n = stem, 1
+    while name in used:
+        n += 1
+        name = "%s-%d" % (stem, n)
+    labels.setdefault("tab", " ".join(words[-4:]))
+    if len(positional) <= 4:
+        positional.append("Move goal %s toward its outcome: %s. Read the outcome and history in self view context first."
+                          % (goal, goals[goal].get("title") or goal))
 if not os.path.isabs(repo):
     sys.exit("dispatch: repository must be an absolute path")
 
@@ -154,7 +207,8 @@ prompt = ("You are %s, one worker in a relay on goal %s; the shared event log is
           "Report with: self run goal progress %s '<change; evidence; blockers; next action>'\n"
           "Use the other self tools freely: self brief lists them, and they compose well with the rest of unix, so pipe them into grep, jq, and friends.\n"
           "Stop at the first natural checkpoint: humans steer only between runs. Work beyond your outcome becomes subgoals you report, not work you do.\n"
-          "Worktree: __WORKTREE__ on branch %s of %s.\n\n"
+          "Worktree: __WORKTREE__ on branch %s of %s.\n"
+          "__PRACTICES__\n"
           "Assignment:\n" % (name, goal, goal, goal, branch, repo)) + assignment
 
 base = {"goal": goal, "agent": name, "requested_agent": requested_name, "kind": kind, "model": model_full,
@@ -163,6 +217,9 @@ base = {"goal": goal, "agent": name, "requested_agent": requested_name, "kind": 
         "prompt": prompt}
 if agent_args:
     base["agent_args"] = AGENT_ARGS_RAW
+if dry:
+    print(json.dumps(dict(without_prompt(base), assignment=" ".join(positional[4:])), indent=1), file=sys.stderr)
+    raise SystemExit(0)
 
 
 def opencode_binary():
@@ -265,6 +322,20 @@ def prepare_opencode_launch(args, directory):
     info = api("get", "/api/session/" + session)["data"]
 
 
+def practices_block(cwd):
+    '''The practices declared `--at work` for the worktree, and how work leaves it. A read; a failure costs the block.'''
+    push = "Push with: self run pr.push (it checks the practices at push, pushes, opens the PR, binds it to this goal).\n"
+    binary = os.environ.get("SELF_BIN") or shutil.which("self", path=ENV["PATH"])
+    try:
+        shown = subprocess.run([binary or "self", "run", "practice", "show", "--at", "work", "--dir", cwd],
+                               capture_output=True, text=True, timeout=20, env=ENV, cwd=cwd)
+    except (OSError, subprocess.SubprocessError):
+        return push
+    if shown.returncode or not shown.stderr.strip():
+        return push
+    return "Practices here (self view practices <id> for one in full):\n" + shown.stderr.rstrip() + "\n" + push
+
+
 def run(argv, timeout=30, check=True, cwd=None):
     proc = subprocess.run(argv, text=True, capture_output=True, env=ENV, timeout=timeout, cwd=cwd)
     if check and proc.returncode:
@@ -328,6 +399,7 @@ try:
         if made.returncode:
             run(["git", "-C", repo, "worktree", "add", "-q", cwd, branch], timeout=120)
     prompt = prompt.replace("__WORKTREE__", cwd)   # str.replace so a '%' in the assignment cannot break it
+    prompt = prompt.replace("__PRACTICES__", practices_block(cwd), 1)
     base["prompt"] = prompt
     base["worktree"] = cwd
 
