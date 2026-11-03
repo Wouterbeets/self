@@ -15,6 +15,8 @@ id). `set` revises only on change; `retire` tombstones it. Read them with
 --at     the insertion points that read it. Known today:
            work  shown when work starts: dispatch prompts, working-on output
            push  enforced by `self run pr.push` before anything leaves the machine
+           pr    the pull request itself (title, body); pr.push gates it with push,
+                 and checks read the title from SELF_PR_TITLE
          New points (deploy, monitor, review…) need no change here: a caller
          asks `practice show --at <point>` and gets what was declared for it.
 --check  a self command that enforces the rule at push. Contract:
@@ -24,9 +26,9 @@ id). `set` revises only on change; `retire` tombstones it. Read them with
 --remote applies only in repos whose `origin` URL contains this substring.
 
 `show` appends nothing. It prints, on stderr, the live practices for --at that
-apply to the git repo at --dir (default: the caller's directory): at `push`
-the paths are the files the branch changed since its merge-base with --base
-(default origin/HEAD); at any other point they are the repo's tracked files.
+apply to the git repo at --dir (default: the caller's directory): with --base,
+or at `push`, the paths are the files the branch changed since its merge-base
+with --base (default origin/HEAD); otherwise they are the repo's tracked files.
 --json prints one JSON object per practice instead, with `paths` (push only).
 Outside a git repo it matches nothing and exits 0.
 
@@ -174,7 +176,7 @@ elif cmd == "show":
         raise SystemExit(0)
     remote = git(top, "remote", "get-url", "origin") or ""
     practices = [p for p in practices if not p.get("remote") or p["remote"] in remote]
-    if at == "push":
+    if at == "push" or found["--base"]:
         base = found["--base"][-1] if found["--base"] else "origin/HEAD"
         mb = (git(top, "merge-base", base, "HEAD") or "").strip()
         if not mb:
@@ -196,7 +198,7 @@ elif cmd == "show":
         if found["--json"]:
             print(json.dumps(p, ensure_ascii=False, sort_keys=True), file=sys.stderr)
         else:
-            enforced = " (checked by %s at push)" % p["check"] if p.get("check") else ""
+            enforced = " (pr.push checks it: %s)" % p["check"] if p.get("check") else ""
             print("- %s — %s%s\n  %s" % (p["practice"], p["title"], enforced,
                                          p["rule"].replace("\n", "\n  ")), file=sys.stderr)
 

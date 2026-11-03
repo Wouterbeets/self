@@ -14,8 +14,11 @@ the earlier ones found and may add events. `--steps` lists them:
            this terminal's latest working-on). Refuses a detached HEAD and the
            default branch; warns about uncommitted tracked changes, which are
            not pushed.
-  check    every practice declared `--at push` whose globs match the files the
-           branch changed (self run practice show --at push). Each one with a
+  check    every practice declared `--at push` or `--at pr` whose globs match the
+           files the branch changed (self run practice show). Both points are
+           gated here, before anything leaves the machine. The PR title is
+           resolved first (--title, else the open PR's, else the first commit's
+           subject) and handed to checks as SELF_PR_TITLE. Each one with a
            --check runs it on exactly those files and only the lines the branch
            adds. Any finding stops pr.push here, prints the rule and the
            findings, exits 1, and appends nothing: fix, commit, run it again.
@@ -23,8 +26,9 @@ the earlier ones found and may add events. `--steps` lists them:
            the reason is recorded in pr.checked for the reviewer.
   push     git push -u <remote> <branch> (default origin), --force-with-lease
            only when asked.
-  pr       the open PR for this branch is updated (pr.updated), else one is
-           created with gh: --title/--body, or filled from the commits; --draft.
+  pr       the open PR for this branch is updated (pr.updated; a new --title or
+           --body is applied), else one is created with gh under the resolved
+           title and --body, else a body from the commits; --draft.
            gh runs as the account named after the repo owner when it holds one
            (SELF_GH_USER overrides), whatever account is active.
   track    with a goal: self run ship track <goal> <url>, so ship ticks CI, CD
@@ -36,9 +40,9 @@ the machine (push done, PR call failed) still records what happened plus
 pr.push.failed {step, error} and says FAILED on stderr, so the log never
 loses an effect; exit status is then 0, as dispatch does.
 
-Events: pr.checked {repo, branch, head, base, practices[{practice, ok, findings, override?}]}
+Events: pr.checked {repo, branch, head, base, title, practices[{practice, at, ok, findings, override?}]}
         pr.pushed {repo, remote, branch, head, forced}
-        pr.opened {repo, url, number, branch, head, title, draft} | pr.updated {repo, url, number, head}
+        pr.opened {repo, url, number, branch, head, title, draft} | pr.updated {repo, url, number, head, title}
         pr.push.failed {repo, branch, head, step, error}
 Extending: a step is a function step_<name>(ctx) -> [events] registered in
 STEPS with whether it acts outside the machine. Deploy, monitor and the like
@@ -162,50 +166,92 @@ def step_context(ctx):
     return []
 
 
-def step_check(ctx):
-    r = sh([SELF, "run", "practice", "show", "--at", "push", "--dir", ctx["repo"], "--base", ctx["base"], "--json"],
+GATES = ("push", "pr")  # insertion points pr.push gates before anything leaves the machine
+
+
+def gh_env(owner):
+    '''gh holds several accounts and only one is active: use the one named after the repo owner when gh has it
+    (SELF_GH_USER overrides), so a work-active gh still opens PRs on a personal repo and the reverse.'''
+    user = os.environ.get("SELF_GH_USER") or owner
+    r = sh([GH, "auth", "token", "--user", user], check=False, timeout=20)
+    token = r.stdout.strip() if r.returncode == 0 else ""
+    return dict(ENV, GH_TOKEN=token) if token else ENV
+
+
+def resolve_pr(ctx):
+    '''The open PR for the branch (if any) and the title the PR will carry: --title, else the open PR's,
+    else the first commit's subject.'''
+    if "title" in ctx:
+        return
+    ctx["gh_env"], ctx["open_pr"] = ENV, None
+    if ctx.get("gh_repo"):
+        ctx["gh_env"] = gh_env(ctx["gh_repo"].split("/")[0])
+        view = sh([GH, "pr", "list", "--repo", ctx["gh_repo"], "--head", ctx["branch"], "--state", "open",
+                   "--json", "url,number,isDraft,title", "--limit", "1"], cwd=ctx["repo"], env=ctx["gh_env"],
+                  check=False)
+        found = json.loads(view.stdout or "[]") if view.returncode == 0 else []
+        ctx["open_pr"] = found[0] if found else None
+    subjects = sh(["git", "log", "--reverse", "--format=%s", ctx["base"] + "..HEAD"], cwd=ctx["repo"]).stdout
+    subjects = [l for l in subjects.splitlines() if l.strip()]
+    ctx["subjects"] = subjects
+    ctx["title"] = opts.get("--title") or (ctx["open_pr"] or {}).get("title") or (subjects[0] if subjects else "")
+
+
+def practices_at(ctx, point):
+    r = sh([SELF, "run", "practice", "show", "--at", point, "--dir", ctx["repo"], "--base", ctx["base"], "--json"],
            cwd=ctx["repo"], check=False)
     if r.returncode:
         raise Stop("practice show failed: " + r.stderr.strip()[-400:])
-    practices = []
+    out = []
     for raw in r.stderr.splitlines():
         try:
-            practices.append(json.loads(raw))
+            out.append(json.loads(raw))
         except ValueError:
             pass
-    results, blocked = [], []
-    for p in practices:
-        res = {"practice": p["practice"], "ok": True, "findings": 0}
-        if p.get("check"):
-            c = sh([SELF, "run", p["check"], "--base", ctx["base"], "--head", ctx["head"], *p.get("paths", [])],
-                   cwd=ctx["repo"], check=False)
-            found = [l for l in c.stderr.splitlines() if re.match(r"^[^\s:]+:\d+: ", l)]
-            if c.returncode not in (0, 1):
-                raise Stop("check %s broke (exit %d): %s" % (p["check"], c.returncode, c.stderr.strip()[-400:]))
-            res["findings"] = len(found)
-            if c.returncode == 1:
-                res["ok"] = False
-                if p["practice"] in overrides:
-                    res.update(ok=True, override=overrides[p["practice"]])
-                    say("override %s (%d finding(s)): %s" % (p["practice"], len(found), overrides[p["practice"]]))
-                else:
-                    blocked.append((p, found or c.stderr.strip().splitlines()))
-        else:
-            say("practice %s has no check; its rule: %s" % (p["practice"], p.get("rule", "")))
-        results.append(res)
-        if res["ok"] and not res.get("override"):
-            say("ok %s (%d file(s))" % (p["practice"], len(p.get("paths", []))))
+    return out
+
+
+def step_check(ctx):
+    resolve_pr(ctx)
+    env = dict(ENV, SELF_PR_TITLE=ctx["title"])
+    seen, results, blocked = set(), [], []
+    for point in GATES:
+        for p in practices_at(ctx, point):
+            if p["practice"] in seen:
+                continue
+            seen.add(p["practice"])
+            res = {"practice": p["practice"], "at": point, "ok": True, "findings": 0}
+            if p.get("check"):
+                c = sh([SELF, "run", p["check"], "--base", ctx["base"], "--head", ctx["head"], *p.get("paths", [])],
+                       cwd=ctx["repo"], check=False, env=env)
+                found = [l for l in c.stderr.splitlines() if re.match(r"^[^\s:]+:\d+: ", l)]
+                if c.returncode not in (0, 1):
+                    raise Stop("check %s broke (exit %d): %s" % (p["check"], c.returncode, c.stderr.strip()[-400:]))
+                res["findings"] = len(found)
+                if c.returncode == 1:
+                    res["ok"] = False
+                    if p["practice"] in overrides:
+                        res.update(ok=True, override=overrides[p["practice"]])
+                        say("override %s (%d finding(s)): %s" % (p["practice"], len(found), overrides[p["practice"]]))
+                    else:
+                        blocked.append((p, found or c.stderr.strip().splitlines()))
+            else:
+                say("practice %s has no check; its rule: %s" % (p["practice"], p.get("rule", "")))
+            results.append(res)
+            if res["ok"] and not res.get("override"):
+                say("ok %s (%d file(s))" % (p["practice"], len(p.get("paths", []))))
     if blocked:
         for p, found in blocked:
             print("\n✗ %s — %s\n  %s\n" % (p["practice"], p.get("title", ""), p.get("rule", "").replace("\n", "\n  ")),
                   file=sys.stderr)
             for f in found:
                 print("  " + f, file=sys.stderr)
-        print("\npr.push: blocked before push. Fix and commit, then run pr.push again "
-              "(or --override <practice>=<reason> when the rule truly does not apply).", file=sys.stderr)
+        print("\npr.push: blocked before push. Fix and commit (a title: --title '<type>(<scope>): <subject>'), then "
+              "run pr.push again (or --override <practice>=<reason> when the rule truly does not apply).",
+              file=sys.stderr)
         raise SystemExit(1)
     return [("pr.checked", {"repo": ctx["repo"], "branch": ctx["branch"], "head": ctx["head"], "base": ctx["base"],
-                            "practices": results})]
+                            "title": ctx["title"], "practices": results})]
 
 
 def step_push(ctx):
@@ -219,36 +265,34 @@ def step_push(ctx):
                            "head": ctx["head"], "forced": bool(opts.get("--force-with-lease"))})]
 
 
-def gh_env(owner):
-    '''gh holds several accounts and only one is active: use the one named after the repo owner when gh has it
-    (SELF_GH_USER overrides), so a work-active gh still opens PRs on a personal repo and the reverse.'''
-    user = os.environ.get("SELF_GH_USER") or owner
-    r = sh([GH, "auth", "token", "--user", user], check=False, timeout=20)
-    token = r.stdout.strip() if r.returncode == 0 else ""
-    return dict(ENV, GH_TOKEN=token) if token else ENV
-
-
 def step_pr(ctx):
     if not ctx.get("gh_repo"):
         raise RuntimeError("remote is not on github.com; no PR step for it yet")
-    env = gh_env(ctx["gh_repo"].split("/")[0])
-    view = sh([GH, "pr", "list", "--repo", ctx["gh_repo"], "--head", ctx["branch"], "--state", "open",
-               "--json", "url,number,isDraft,title", "--limit", "1"], cwd=ctx["repo"], env=env)
-    found = json.loads(view.stdout or "[]")
-    if found:
-        pr = found[0]
+    resolve_pr(ctx)
+    env, pr = ctx["gh_env"], ctx["open_pr"]
+    if pr:
         ctx["url"] = pr["url"]
-        say("updated %s" % pr["url"])
-        return [("pr.updated", {"repo": ctx["repo"], "url": pr["url"], "number": pr["number"], "head": ctx["head"]})]
-    cmd = [GH, "pr", "create", "--repo", ctx["gh_repo"], "--head", ctx["branch"], "--base", ctx["default"]]
-    if opts.get("--title"):
-        cmd += ["--title", opts["--title"]]
+        edit = []
+        if opts.get("--title") and opts["--title"] != pr.get("title"):
+            edit += ["--title", opts["--title"]]
         if opts.get("--body-file"):
-            cmd += ["--body-file", os.path.join(CWD, opts["--body-file"])]
-        else:
-            cmd += ["--body", opts.get("--body", "")]
+            edit += ["--body-file", os.path.join(CWD, opts["--body-file"])]
+        elif opts.get("--body"):
+            edit += ["--body", opts["--body"]]
+        if edit:
+            sh([GH, "pr", "edit", pr["url"], *edit], cwd=ctx["repo"], env=env)
+        say("updated %s" % pr["url"])
+        return [("pr.updated", {"repo": ctx["repo"], "url": pr["url"], "number": pr["number"], "head": ctx["head"],
+                                "title": ctx["title"]})]
+    cmd = [GH, "pr", "create", "--repo", ctx["gh_repo"], "--head", ctx["branch"], "--base", ctx["default"],
+           "--title", ctx["title"]]
+    if opts.get("--body-file"):
+        cmd += ["--body-file", os.path.join(CWD, opts["--body-file"])]
+    elif opts.get("--body"):
+        cmd += ["--body", opts["--body"]]
     else:
-        cmd += ["--fill"]
+        log = sh(["git", "log", "--reverse", "--format=%s%n%n%b", ctx["base"] + "..HEAD"], cwd=ctx["repo"]).stdout
+        cmd += ["--body", log.strip() if len(ctx["subjects"]) == 1 else "\n".join("- " + s for s in ctx["subjects"])]
     if opts.get("--draft"):
         cmd += ["--draft"]
     out = sh(cmd, cwd=ctx["repo"], env=env).stdout.strip().splitlines()
@@ -256,11 +300,9 @@ def step_pr(ctx):
     if not url:
         raise RuntimeError("gh pr create printed no PR url: " + " ".join(out)[-300:])
     ctx["url"] = url
-    title = opts.get("--title") or sh([GH, "pr", "view", url, "--json", "title", "-q", ".title"],
-                                      cwd=ctx["repo"], check=False, env=env).stdout.strip()
     say("opened %s" % url)
     return [("pr.opened", {"repo": ctx["repo"], "url": url, "number": int(url.rstrip("/").rsplit("/", 1)[-1]),
-                           "branch": ctx["branch"], "head": ctx["head"], "title": title,
+                           "branch": ctx["branch"], "head": ctx["head"], "title": ctx["title"],
                            "draft": bool(opts.get("--draft"))})]
 
 
