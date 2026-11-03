@@ -20,7 +20,7 @@ built in 51 s; a catch-up pass with nothing new takes 0.17 s.
 
 ## What it does not do, and why
 
-This replaces `examples/recall`, which hooked every turn into a self child
+This replaced `examples/recall` (since removed), which hooked every turn into a self child
 instance and kept a summary tree compacted by `claude -p --model haiku`. That
 spent a whole five-hour subscription window in two minutes: up to eight
 concurrent Haiku processes, each given the entire rendered memory, retried up
