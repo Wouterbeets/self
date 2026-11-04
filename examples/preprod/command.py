@@ -5,9 +5,9 @@ usage: self run preprod login [--as fan|creator]
        self run preprod shot <url|/path> <name> [--as fan|creator] [--anon] [--out <dir>] [--wait <ms>]
        self run preprod verdict <goal> pass|fail|skip <evidence…> [--shot <png>]…
 
-Account: wouter.beets@mym.fans on https://preprod-v2.mym.fans, password from
-`pass show preprod-v2.mym.fans/wouter.beets@mym.fans` (SELF_PREPROD_PASS_ENTRY
-overrides). Sessions are Playwright storageState files in ~/.self-preprod/
+Account: Wouter's, on https://preprod-v2.mym.fans: the entry under
+preprod-v2.mym.fans/ in pass names the email (wouter.beets+4@mym.fans) and
+holds the password (SELF_PREPROD_EMAIL / SELF_PREPROD_PASS_ENTRY override). Sessions are Playwright storageState files in ~/.self-preprod/
 (0600, outside every repo), one per role.
 
 login: headless Chromium signs in at /app/sign-in on the fan or creator tab
@@ -50,7 +50,10 @@ GH = os.environ.get("SELF_GH_BIN") or shutil.which("gh", path=ENV["PATH"]) or "g
 NODE = shutil.which("node", path=ENV["PATH"]) or "node"
 PASS = shutil.which("pass", path=ENV["PATH"]) or "pass"
 BASE = os.environ.get("SELF_PREPROD_URL", "https://preprod-v2.mym.fans").rstrip("/")
-EMAIL = os.environ.get("SELF_PREPROD_EMAIL", "wouter.beets@mym.fans")
+STORE = os.environ.get("PASSWORD_STORE_DIR", HOME + "/.password-store")
+_found = sorted(f[:-4] for f in os.listdir(STORE + "/preprod-v2.mym.fans") if f.endswith(".gpg")) \
+    if os.path.isdir(STORE + "/preprod-v2.mym.fans") else []
+EMAIL = os.environ.get("SELF_PREPROD_EMAIL") or (_found[0] if _found else "wouter.beets@mym.fans")
 ENTRY = os.environ.get("SELF_PREPROD_PASS_ENTRY", "preprod-v2.mym.fans/" + EMAIL)
 NODE_PATH = os.environ.get("SELF_PREPROD_NODE_PATH", HOME + "/mym/frontends/business/node_modules")
 STATE_DIR = HOME + "/.self-preprod"
@@ -91,7 +94,8 @@ async function shoot(browser, w, h, scale, mobile, file) {
   await p.waitForTimeout(+waitMs);
   if (anon !== '1' && signIn(p.url())) { await ctx.close(); return { bounced: p.url() }; }
   await p.addStyleTag({ content: '.sf-toolbar,.sf-minitoolbar,[id^=sfwdt],[id^=sfMiniToolbar],#didomi-host,#axeptio_overlay{display:none!important}' }).catch(() => {});
-  await p.getByRole('button', { name: /^(deny|refuser|tout refuser|continuer sans accepter)$/i }).click({ timeout: 2000 }).catch(() => {});
+  await p.getByRole('button', { name: /^(deny|refuser|tout refuser|continuer sans accepter)$/i }).click({ timeout: 2000 })
+    .catch(() => p.getByText(/^(refuser|deny)$/i).first().click({ timeout: 2000 })).catch(() => {});
   await p.waitForTimeout(800);
   await p.screenshot({ path: file, fullPage: true });
   const url = p.url();
