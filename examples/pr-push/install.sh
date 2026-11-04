@@ -31,6 +31,14 @@ declare command check.workflow-scope "Stop a push touching .github/workflows/ wh
   "$here/check-workflow-scope/command.py" '["practice.saved"]'
 declare command check.pr-title "The PR title must be a Conventional Commit with a lowercase subject" \
   "$here/check-pr-title/command.py" '["practice.saved"]'
+declare command practice.backtest "Replay the practice checks on merged history or anyone's open PR: calibrate each check, list gated escapes" \
+  "$here/practice-backtest/command.py" '["practice.saved","practice.retired","pr.opened","pr.updated","pr.checked"]'
+declare command feedback "Carry reviewers' comments on a goal's PR to the agent that owns it; recurring ones become practices" \
+  "$here/feedback/command.py" '["ship.tracked","agent.started","goal.worked","goal.updated","goal.removed","feedback.received","feedback.delivered"]'
+declare command preprod "Test a merged change on preprod as Wouter: log in, screenshot desktop+mobile, record a verdict on the goal and PR" \
+  "$here/preprod/command.py" '["ship.tracked"]'
+declare view ship "Ship pipeline per goal: stage, PR, announce, preprod verification; actions prints the driver's TSV to-do list" \
+  "$here/ship/view.py" '["*"]'
 declare command pr.push "The one way to push: check the practices at push, push, open or update the PR, bind it to the goal" \
   "$here/pr-push/command.py" '["goal.worked"]'
 
@@ -59,3 +67,9 @@ self run practice set pr/title \
   --title "PR title is a Conventional Commit with a lowercase subject" \
   --rule 'The squash merge makes the PR title the commit subject, gated by pr-title.yml: <type>(<project>): <subject>, type one of feat|fix|docs|chore|refactor|test|ci|build|perf|revert|security, subject starting lowercase. Pass it as self run pr.push --title "…".' \
   --when '**' --at work,pr --check check.pr-title --remote MYM-Tech/monorepo >/dev/null
+
+self run practice set preprod/frontend-screenshots \
+  --title "A frontend change is verified on preprod with desktop and mobile screenshots" \
+  --rule 'Shoot every screen the PR touches with self run preprod shot <path> <name> (desktop 1440 + mobile 390), logged in as the role that sees it. Read every PNG before the verdict: screenshots have caught bugs assertions missed (#2353 lowercased greeting, #2358 clipped tooltip). Attach them with --shot so the verdict comment shows them on the PR.' \
+  --when 'frontends/**,monolith/core/templates/**,monolith/core/assets/**,!**/*.test.*,!**/*.spec.*' \
+  --at verify --remote MYM-Tech/monorepo >/dev/null

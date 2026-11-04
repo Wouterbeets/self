@@ -10,7 +10,8 @@ while another PR merges a newer-dated migration into the same directory.
 
 For each .sql file the branch adds in a directory holding atlas.sum: its
 version (the leading digits of the file name) must be greater than every
-version in that directory on --tip (default origin/HEAD, as fetched by
+version in that directory on --tip (default SELF_PRACTICE_TIP, which
+practice.backtest sets to the merged commit's parent, else origin/HEAD, as fetched by
 pr.push), and the branch must change that atlas.sum. Fix: rename the file to
 a version after the newest one on the tip, then `atlas migrate hash` (or the
 service's make target) in that directory, and commit both.
@@ -37,7 +38,7 @@ def git(*args, ok=False):
     return r.stdout
 
 
-args, base, head, tip = sys.argv[1:], None, "HEAD", "origin/HEAD"
+args, base, head, tip = sys.argv[1:], None, "HEAD", os.environ.get("SELF_PRACTICE_TIP") or "origin/HEAD"
 i = 0
 while i < len(args):
     if args[i] in ("--base", "--head", "--tip") and i + 1 < len(args):

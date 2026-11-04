@@ -1,0 +1,35 @@
+#!/bin/bash
+set -u
+export SELF_HOME="${SELF_HOME:-$HOME/.self}"
+export SELF_CALLER="${SELF_CALLER:-ship-driver}"
+export PATH="$HOME/go/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+REPO="${SELF_SHIP_REPO:-$HOME/mym}"
+LOCK="${TMPDIR:-/tmp}/self-ship-drive.lock"
+mkdir "$LOCK" 2>/dev/null || { echo "$(date -u +%FT%TZ) another pass is running"; exit 0; }
+trap 'rmdir "$LOCK"' EXIT
+
+echo "$(date -u +%FT%TZ) tick"
+git -C "$REPO" fetch -q origin master 2>/dev/null || true
+self run ship tick || echo "tick failed"
+self run feedback tick || echo "feedback tick failed"
+
+self view ship actions | while IFS=$'\t' read -r act goal key arg; do
+  echo "  $act $goal $key"
+  case "$act" in
+    announce) self run ship announce "$goal" ;;
+    alert)
+      self run goal hold "$goal" "ship: $arg" || true
+      self run dm-wouter "ship alert: $arg" && self run ship acted "$goal" "$key" "dm sent" ;;
+    notify)
+      self run dm-wouter "ship: $arg" && self run ship acted "$goal" "$key" "dm sent" ;;
+    close) self run goal close "$goal" completed "$arg" ;;
+    verify)
+      prompt=$(printf %s "$arg" | base64 -D)
+      SELF_DISPATCH_AGENT_ARGS="--model ${SELF_SHIP_MODEL:-opus}" SELF_CALLER=ship-driver \
+        self run dispatch --area "${SELF_SHIP_AREA:-mym}" --pane "verify $goal on preprod" "$goal" "$key" claude "$REPO" "$prompt" ;;
+    dispatch)
+      prompt=$(printf %s "$arg" | base64 -D)
+      SELF_DISPATCH_AGENT_ARGS="--model ${SELF_SHIP_MODEL:-opus}" SELF_CALLER=ship-driver \
+        self run dispatch --area "${SELF_SHIP_AREA:-mym}" --pane "ship $goal" "$goal" "$key" claude "$REPO" "$prompt" ;;
+  esac
+done
