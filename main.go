@@ -119,10 +119,10 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if st.Preview && st.cap(typ, name) != nil {
 			if verb == "run" {
 				if err := seedNow(home); err != nil {
-					return err
+					return fmt.Errorf("prepare a new instance to run %s: %w", name, err)
 				}
 				if st, err = loadState(home); err != nil {
-					return err
+					return fmt.Errorf("reload the log after seeding: %w", err)
 				}
 			} else {
 				if viewHome, err = os.MkdirTemp("", "self-seed-"); err != nil {

@@ -174,7 +174,7 @@ func ingest(home string, evs []Event, scripts []authored, prose []string, by str
 			}
 		}
 		if err := seedLocked(home, key); err != nil {
-			return err
+			return fmt.Errorf("prepare a new instance: %w", err)
 		}
 		return ingestLocked(home, key, evs, scripts, prose, by, &report)
 	}()
