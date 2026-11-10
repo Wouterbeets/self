@@ -34,7 +34,11 @@ func cmdOrient(home string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(out, protocolLayer("core")+"\n\n"+protocolLayer("session")+"\n\n"+sessionBrief(home, st)+briefSections(home, st))
+	layers := []string{protocolLayer("core"), protocolLayer("session")}
+	if len(st.Events) == 0 {
+		layers = append(layers, protocolLayer("first"))
+	}
+	_, err = io.WriteString(out, strings.Join(layers, "\n\n")+"\n\n"+sessionBrief(home, st)+briefSections(home, st))
 	return err
 }
 
