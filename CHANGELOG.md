@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+A new instance starts with one worked example: the command `entry` and the view
+`journal`. An empty log shows both as if installed and they already run; reads
+still write nothing. The first write to the log records them ahead of its own
+events, as two declarations stamped `via: "seed"` and two signed receipts
+(seq 1-4), so the log itself shows how a capability is declared and installed.
+A log that already holds events is never seeded. The scripts need `python3`.
+Retire them with `capability.retired` if you do not want them.
+
 ## v1.2.0 — Unix integration, everything is a file
 
 The repository holds the kernel, the protocol, the mind adapters and lessons,

@@ -173,6 +173,9 @@ func ingest(home string, evs []Event, scripts []authored, prose []string, by str
 				return fmt.Errorf("%w: expected %s, have %s; reread before retrying", errLogChanged, after[0], have)
 			}
 		}
+		if err := seedLocked(home, key); err != nil {
+			return err
+		}
 		return ingestLocked(home, key, evs, scripts, prose, by, &report)
 	}()
 	project(home, false)
