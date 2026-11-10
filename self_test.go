@@ -1309,7 +1309,7 @@ func TestAccountEdgesAreRefused(t *testing.T) {
 }
 
 func TestExecutionPromptCarriesTheDietNotTheProtocol(t *testing.T) {
-	for _, layer := range []string{"core", "session", "execution", "intent", "growth", "loop"} {
+	for _, layer := range []string{"core", "session", "first", "execution", "intent", "growth", "loop"} {
 		if protocolLayer(layer) == "" {
 			t.Fatalf("PROTOCOL.md lost prompt layer %q", layer)
 		}

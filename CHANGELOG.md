@@ -10,6 +10,18 @@ pulse beside journal and memory, and workers, practices and ship as one team's
 domain layer), for any model to grow again. The README
 says so first: self holds no domain.
 
+Without `SELF_HOME` the instance is now the working directory only if it
+already holds `events.jsonl`, and `~/.self` otherwise. It used to be the
+working directory always, so a fresh directory that relied on that needs
+`SELF_HOME=.`; existing per-directory instances are found as before. Nothing
+has to be exported for one self across every shell and hook.
+
+On an empty log, bare `self` carries a first-run layer (`prompt:first` in
+PROTOCOL.md): what a mind may offer to set up, an instruction-file line and a
+session-start hook, changed only once the person agrees. It is a read like the
+rest of the brief, and it is gone once the log holds an event. Execution
+prompts do not carry it.
+
 Events a command emits are stamped `via: "cli:<command>"`, so the log says
 which capability wrote them and how often each one ran with an effect. `cli`
 stays for kernel verbs run from the command line; `hear`, `kernel` and

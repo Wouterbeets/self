@@ -30,7 +30,8 @@ self prompt [ask…]    print an execution prompt: brief + ask.                 
 Bare `self` supports an agent checking in before its existing task. It shares
 persistent identity with execution prompts, but adds no pass assignment, stdout
 contract, or authoring tutorial. Pending capabilities and open outcomes remain
-in the brief.
+in the brief. On an empty log it also carries the first-run layer: what a mind
+may offer to set up, which is gone once the log holds an event.
 `self prompt` prepares a mind whose output will be piped into `self hear`;
 `self <ask…>` remains shorthand for it. Neither mode reads stdin or writes state.
 
@@ -55,6 +56,16 @@ Read with `self view <name> [args...]`, inspect declarations with `self brief <n
 <!-- prompt:session:begin -->
 Continue the user's task; reply in the conversation. Preserve useful findings through commands or event JSONL piped into `self hear`. The brief shows possibilities to consider, not assignments. Read `self help` to declare an outcome or author a capability.
 <!-- prompt:session:end -->
+
+<!-- prompt:first:begin -->
+This log is empty: a first run. Nothing needs configuring for this session, and the instance directory named below is created by the first write. To make self part of every session, offer the person these and change their files only once they agree:
+
+- A line in the instruction file your harness reads for every project (`AGENTS.md`, `CLAUDE.md`, or a system prompt): `Before starting anything, run \`self\`.`
+- Where your harness has a session-start hook, have it run `self`, so the brief arrives before the first message.
+- If `self` ran by full path, put its directory on `PATH` for new shells.
+
+No environment variable is needed. `SELF_HOME` only moves the instance somewhere else.
+<!-- prompt:first:end -->
 
 <!-- prompt:execution:begin -->
 Make one pass. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel adds identity, time, and provenance. Only what you append to self enters its memory.
@@ -499,7 +510,7 @@ events succeeds silently. Output write failures fail; already committed events s
 ## Environment
 
 ```
-SELF_HOME              the instance: events.jsonl and .secret (default: cwd)
+SELF_HOME              the instance: events.jsonl and .secret
 SELF_CALLER            recorded verbatim as `by`, signed into your receipts
 SELF_LOOP_MIND         default mind shell command for `self loop`
 SELF_LOOP_ASK          default ask for every pass
@@ -508,6 +519,11 @@ SELF_LOOP_SETTLE       quiet passes before the loop stops (2)
 SELF_LOOP_TIMEOUT      per-mind timeout (30m)
 SELF_*                 anything else passes through to capability scripts
 ```
+
+Without `SELF_HOME` the instance is the working directory if it already holds
+`events.jsonl`, and `~/.self` otherwise. One person has one self by default, in
+every shell and every hook, with nothing exported. Set `SELF_HOME` to keep an
+instance elsewhere; `SELF_HOME=.` starts one in the working directory.
 
 ## Lineage
 

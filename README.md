@@ -1,6 +1,6 @@
 # self
 
-**Put `use self` in your `AGENTS.md`. That's it.**
+**Install it, then tell your agent to run `self`. That's it.**
 
 Every agent on your machine (Claude Code, opencode, pi, Codex, a local model,
 a shell script) now shares one persistent self: memory that survives the
@@ -36,22 +36,39 @@ none of it should be. What your instance becomes is shaped by you.
 
 ```sh
 go install github.com/wouterbeets/self@latest   # one static binary
-export SELF_HOME=~/.self                         # one self for every project
 ```
 
-Then add one line to `AGENTS.md`, `CLAUDE.md`, or your system prompt:
+Then say this to your agent, in any harness:
+
+```
+Run `self` and set it up.
+```
+
+That is the whole install. There is no environment variable to export and no
+shell to restart: your self lives in `~/.self`. If the agent cannot find
+`self`, Go's bin directory is not on your `PATH` yet; say `~/go/bin/self`
+instead, and the agent will offer to fix that too.
+
+On an empty log the brief carries a short first-run section. The agent reads
+it and offers to make self part of every session: a line in the instruction
+file your harness reads, and a session-start hook where the harness has one.
+It asks before it changes your files, and the section is gone once the log
+holds its first event.
+
+From then on, work as usual. The agent reads a short brief, does your task, and
+records what the next mind should know. The first time it needs a new way to
+remember or do something, it writes one, and every later session, in any agent,
+finds it in the brief.
+
+Prefer to do it by hand? It is one line in `AGENTS.md`, `CLAUDE.md`, or your
+system prompt:
 
 ```md
 Before starting anything, run `self`.
 ```
 
-Work as usual. The agent reads a short brief, does your task, and records what
-the next mind should know. The first time it needs a new way to remember or do
-something, it writes one, and every later session, in any agent, finds it in
-the brief.
-
-Want it before the first message? A Claude Code session hook in
-`.claude/settings.json`:
+and, to get the brief before the first message, a session hook. For Claude
+Code, in `.claude/settings.json`:
 
 ```json
 { "hooks": { "SessionStart": [{ "hooks": [{ "type": "command", "command": "self" }] }] } }
@@ -74,8 +91,8 @@ Want it before the first message? A Claude Code session hook in
 
 ## Profiles
 
-**Solo developer, several harnesses.** Same `SELF_HOME`, same line in every
-`AGENTS.md`. Claude Code finds a flaky test's root cause and records it;
+**Solo developer, several harnesses.** Same line in every `AGENTS.md`, and
+they all share `~/.self`. Claude Code finds a flaky test's root cause and records it;
 tomorrow opencode reads it in the brief before touching the same file.
 
 **One human, many parallel agents.** Agents share one log and grow the
@@ -107,10 +124,10 @@ self brief <name>         # one capability or intent in full
 self hear < batch.jsonl   # append events or authored scripts
 ```
 
-Opt in to plain files with `mkdir $SELF_HOME/view $SELF_HOME/bin`. After each
+Opt in to plain files with `mkdir ~/.self/view ~/.self/bin`. After each
 write, `view/<name>` holds what `self view <name>` prints, for `cat`, `grep -r`
 and editors; `bin/<name>` runs `self run <name>`, so with
-`PATH=$SELF_HOME/bin:$PATH` capabilities are ordinary commands.
+`PATH=~/.self/bin:$PATH` capabilities are ordinary commands.
 
 A capability is an ordinary executable in any language. `self rehydrate`
 rebuilds all of them from `events.jsonl` and `.secret`, with no model and no
@@ -166,8 +183,9 @@ The full contract is [PROTOCOL.md](PROTOCOL.md), which `self help` prints.
 
 ## Setup notes
 
-- Without `SELF_HOME`, the working directory is the instance: `events.jsonl`,
-  `.secret` and `cap/` appear beside your code.
+- The instance is `SELF_HOME` if you set it, else the working directory if it
+  already holds `events.jsonl`, else `~/.self`. `SELF_HOME=.` starts an
+  instance beside your code.
 - **Never commit `.secret`**; it signs your capabilities.
 - `self completion zsh|bash|fish` prints shell completion.
 

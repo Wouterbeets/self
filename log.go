@@ -53,11 +53,21 @@ func newEvent(name string, payload json.RawMessage) Event {
 }
 
 func homeDir() string {
-	home := cmp.Or(os.Getenv("SELF_HOME"), ".")
+	home := cmp.Or(os.Getenv("SELF_HOME"), defaultHome())
 	if abs, err := filepath.Abs(home); err == nil {
 		return abs
 	}
 	return home
+}
+
+func defaultHome() string {
+	if _, err := os.Stat(logPath(".")); err == nil {
+		return "."
+	}
+	if user, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(user, ".self")
+	}
+	return "."
 }
 
 func logPath(home string) string { return filepath.Join(home, "events.jsonl") }
