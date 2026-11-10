@@ -129,7 +129,8 @@ self learn lessons/memory | claude -p | self hear # grow a lesson's capabilities
 
 A lesson is an intent a mind turns into capabilities: a page saying what should
 become possible and what must hold, and no code. Your model writes the scripts,
-so a better model grows a better instance from the same page. Six ship here:
+so a better model grows a better instance from the same page. Nine ship here.
+Six assume nothing about what you do:
 
 - [`lessons/journal`](lessons/journal/intent.md): the smallest possible set,
   one command and one view. `./demo.sh` grows it offline.
@@ -143,6 +144,16 @@ so a better model grows a better instance from the same page. Six ship here:
   sessions, across every harness.
 - [`lessons/pulse`](lessons/pulse/intent.md): notice when your own automation
   loops or goes quiet.
+
+Three come from one software team's instance, as an example of a domain layer
+and not as a recommendation:
+
+- [`lessons/workers`](lessons/workers/intent.md): start parallel workers, see
+  them, clean up after them.
+- [`lessons/practices`](lessons/practices/intent.md): say how work is done
+  here, and enforce it where work leaves.
+- [`lessons/ship`](lessons/ship/intent.md): follow a change from published to
+  running, and say who it waits on.
 
 There are no capability scripts in this repository beyond the stub the demo
 uses. The ones an instance grows live in its log, signed under its own key.

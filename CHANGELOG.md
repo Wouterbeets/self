@@ -5,8 +5,9 @@
 The repository holds the kernel, the protocol, the mind adapters and lessons,
 and nothing shaped to one person. The capability scripts that had gathered
 under `examples/` are gone: an instance's capabilities live in its own log.
-What they taught stays as intents under `lessons/` (goals, howto, recall,
-pulse, beside journal and memory), for any model to grow again. The README
+What they taught stays as intents under `lessons/` (goals, howto, recall and
+pulse beside journal and memory, and workers, practices and ship as one team's
+domain layer), for any model to grow again. The README
 says so first: self holds no domain.
 
 Events a command emits are stamped `via: "cli:<command>"`, so the log says
