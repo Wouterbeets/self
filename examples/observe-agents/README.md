@@ -1,11 +1,19 @@
 # observe-agents: witness hc terminals and worktrees for every goal dispatch
 
-`self run observe-agents` reads `hc ls --all --json` (herdr-core) instead of the
-retired `herdr agent list`. A dispatch's hc terminal name is its agent name;
-`status` is the terminal's agent status (`working`, `idle`, `done`, `blocked`),
-its state when not live (`finished`), or `not in hc`; `pane` is the hc address.
-Worktree state (dirty, unpushed, branch) is unchanged. Install: author
-`command.py` as `command/observe-agents` (declared at seq 2517).
+`self run observe-agents` reads `hc ls --all --json` and, for each live
+terminal, `hc get` for its current folder. For every unreclaimed dispatch made
+on this body it records the status of the dispatch's own terminal, the other
+terminals living in its worktree, and the worktree's git state, as one
+`agent.observed` snapshot (schema 4, `runtime: hc`). An unchanged snapshot
+appends nothing.
 
-Verified 02/11/2026: seq 14881 agent.observed, ship-04-live seen `done` at t1r;
-`self view reclaim` replays it.
+`self view agents` (`view.py`) replays that snapshot: workers by state, with
+`--by`, `--goal`, `--status`, `--names`, `--tsv`. `self view reclaim` and
+`self run reclaim` (in `examples/reclaim`) read the same rows.
+
+Install with `examples/reclaim/install.sh`, which installs all four together.
+States and row fields are in the docstrings: `self brief observe-agents`,
+`self brief agents`.
+
+Verified 10/11/2026 on Linux: 55 dispatches and 28 live terminals observed in
+under five seconds; two worktrees reported a second session (`others`).
