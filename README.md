@@ -1,36 +1,13 @@
 # self
 
-**Install it, then tell your agent to run `self`. That's it.**
+**One persistent memory for every AI agent on your machine. Install it, then
+tell your agent to run `self`.**
 
-Every agent on your machine (Claude Code, opencode, pi, Codex, a local model,
-a shell script) now shares one persistent self: memory that survives the
-session, crosses harnesses and model providers, and grows its own capabilities.
-Insight compounds instead of evaporating when the context window closes.
-
-## It holds no domain
-
-self knows nothing about code, or printers, or anything else. The kernel is an
-append-only log, a way to read it, and a way to sign small scripts into it.
-Everything specific is grown by your own agents, in your own instance, from
-what you ask for:
-
-```sh
-intent() { jq -nc --arg n "$1" --arg s "$2" --arg d "$3" \
-  '{name:"intent.declared",payload:{name:$n,summary:$s,description:$d}}' | self hear; }
-
-intent spool-fit  "Can the blue spool finish the enclosure?" \
-  "Compare remaining filament with the sliced model, with a margin. Record what you measured."
-intent club-dues  "Who has not paid this season's subscription?" \
-  "Members, what each owes and paid, and a list I can send reminders from."
-intent prep-list  "What do we prep before Friday's service?" \
-  "From the bookings and the menu: quantities per dish, and what must be ordered by Wednesday."
-
-self loop -- claude -p
-```
-
-Three people, three instances that end up with nothing in common: a filament
-ledger, a membership roll, a prep sheet. None of it is in this repository, and
-none of it should be. What your instance becomes is shaped by you.
+Claude Code, opencode, pi, Codex, a local model, a shell script: each one
+starts a session knowing nothing about the last. self gives them a single
+shared log that survives the session, crosses harnesses and model providers,
+and grows its own capabilities. What one agent learns, the next one starts
+with.
 
 ## Quick start
 
@@ -74,6 +51,42 @@ Code, in `.claude/settings.json`:
 { "hooks": { "SessionStart": [{ "hooks": [{ "type": "command", "command": "self" }] }] } }
 ```
 
+## What it looks like
+
+Every session starts with the agent running `self`, which prints a brief: what
+this instance can do and what is still wanted.
+
+```
+# self — /home/you/.self
+
+log: 7 events    caller: claude
+head: 5e72fd393ba37b23ef6edccd77bcd65d
+
+## commands — `self run <name> [args…]`
+
+entry
+
+## views — `self view <name> [args…]`
+
+journal · log
+```
+
+Neither `entry` nor `journal` ships with self. A mind wrote both from a
+one-page [lesson](lessons/journal/intent.md), the kernel signed them into the
+log, and now any agent in any harness can use them:
+
+```sh
+self run entry staging database resets every Monday
+self view journal
+```
+
+```
+2026-11-10T13:52:47.994022648Z  staging database resets every Monday
+```
+
+The brief lists names, not history, so it stays short however long the log
+gets. An agent reads the views it needs and leaves the rest.
+
 ## What you get
 
 - **Cross-session memory.** Knowledge, goals and verified how-tos outlive the
@@ -89,11 +102,39 @@ Code, in `.claude/settings.json`:
 - **Rebuildable.** `events.jsonl` plus `.secret` is the whole self. Hand-edited
   scripts are ignored; the signed bytes from the log run instead.
 
-## Profiles
+## It holds no domain
+
+self knows nothing about code, or printers, or anything else. The kernel is an
+append-only log, a way to read it, and a way to sign small scripts into it.
+Everything specific is grown by your own agents, in your own instance, from
+what you ask for. In a session you just say what you want. From a shell you
+declare an intent, an outcome you want to become possible, and let a mind work
+on it:
+
+```sh
+intent() { jq -nc --arg n "$1" --arg s "$2" --arg d "$3" \
+  '{name:"intent.declared",payload:{name:$n,summary:$s,description:$d}}' | self hear; }
+
+intent spool-fit  "Can the blue spool finish the enclosure?" \
+  "Compare remaining filament with the sliced model, with a margin. Record what you measured."
+intent club-dues  "Who has not paid this season's subscription?" \
+  "Members, what each owes and paid, and a list I can send reminders from."
+intent prep-list  "What do we prep before Friday's service?" \
+  "From the bookings and the menu: quantities per dish, and what must be ordered by Wednesday."
+
+self loop -- claude -p   # run a mind until the log stops changing
+```
+
+Three people, three instances that end up with nothing in common: a filament
+ledger, a membership roll, a prep sheet. None of it is in this repository, and
+none of it should be. What your instance becomes is shaped by you.
+
+## Ways to use it
 
 **Solo developer, several harnesses.** Same line in every `AGENTS.md`, and
-they all share `~/.self`. Claude Code finds a flaky test's root cause and records it;
-tomorrow opencode reads it in the brief before touching the same file.
+they all share `~/.self`. Claude Code finds a flaky test's root cause and
+records it; tomorrow opencode reads it in the brief before touching the same
+file.
 
 **One human, many parallel agents.** Agents share one log and grow the
 coordination they need: a `recent` view of who touched what, a `howto` store of
@@ -142,6 +183,18 @@ self loop -- claude -p                           # run until the log settles
 self learn lessons/memory | claude -p | self hear # grow a lesson's capabilities
 ```
 
+### Where it lives
+
+The instance is `SELF_HOME` if you set it, else the working directory if it
+already holds `events.jsonl`, else `~/.self`. `SELF_HOME=.` starts an instance
+beside your code.
+
+`events.jsonl` and `.secret` are the whole self, so those two files are what
+you back up or move to another machine. `.secret` signs your capabilities:
+never commit it or share it.
+
+`self completion zsh|bash|fish` prints shell completion.
+
 ## Lessons
 
 A lesson is an intent a mind turns into capabilities: a page saying what should
@@ -180,14 +233,6 @@ capabilities as an account another instance can `self learn`.
 
 The full contract is [PROTOCOL.md](PROTOCOL.md), which `self help` prints.
 `./demo.sh` runs everything offline in about fifteen seconds.
-
-## Setup notes
-
-- The instance is `SELF_HOME` if you set it, else the working directory if it
-  already holds `events.jsonl`, else `~/.self`. `SELF_HOME=.` starts an
-  instance beside your code.
-- **Never commit `.secret`**; it signs your capabilities.
-- `self completion zsh|bash|fish` prints shell completion.
 
 ## Optional adapters
 
