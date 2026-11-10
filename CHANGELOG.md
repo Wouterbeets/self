@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Unix integration, everything is a file
+## v1.2.0 — Unix integration, everything is a file
 
 The repository holds the kernel, the protocol, the mind adapters and lessons,
 and nothing shaped to one person. The capability scripts that had gathered
