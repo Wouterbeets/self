@@ -7,6 +7,31 @@ a shell script) now shares one persistent self: memory that survives the
 session, crosses harnesses and model providers, and grows its own capabilities.
 Insight compounds instead of evaporating when the context window closes.
 
+## It holds no domain
+
+self knows nothing about code, or printers, or anything else. The kernel is an
+append-only log, a way to read it, and a way to sign small scripts into it.
+Everything specific is grown by your own agents, in your own instance, from
+what you ask for:
+
+```sh
+intent() { jq -nc --arg n "$1" --arg s "$2" --arg d "$3" \
+  '{name:"intent.declared",payload:{name:$n,summary:$s,description:$d}}' | self hear; }
+
+intent spool-fit  "Can the blue spool finish the enclosure?" \
+  "Compare remaining filament with the sliced model, with a margin. Record what you measured."
+intent club-dues  "Who has not paid this season's subscription?" \
+  "Members, what each owes and paid, and a list I can send reminders from."
+intent prep-list  "What do we prep before Friday's service?" \
+  "From the bookings and the menu: quantities per dish, and what must be ordered by Wednesday."
+
+self loop -- claude -p
+```
+
+Three people, three instances that end up with nothing in common: a filament
+ledger, a membership roll, a prep sheet. None of it is in this repository, and
+none of it should be. What your instance becomes is shaped by you.
+
 ## Quick start
 
 ```sh
@@ -58,15 +83,9 @@ coordination they need: a `recent` view of who touched what, a `howto` store of
 verified procedures, a command that pings you when one is blocked. None of it
 is built in; every later agent finds it in the brief.
 
-**Hobbyist or household.** Declare what you want to become possible and let a
-mind work on it:
-
-```sh
-echo '{"name":"intent.declared","payload":{"name":"spool-fit","summary":"Can the blue spool finish the enclosure?","description":"Compare remaining filament with the sliced model, with a margin. If measurements are missing, record what is needed."}}' | self hear
-self loop -- claude -p
-```
-
-The mind closes the intent with evidence, or leaves it open with what it needs.
+**Hobbyist, household, small business.** Declare what you want to become
+possible, as above, and let a mind work on it. It closes the intent with
+evidence, or leaves it open with what it still needs from you.
 
 **Unattended.** Any process that reads a prompt and prints events is a mind,
 so a cron job with a local model grows the same instance:
@@ -108,12 +127,36 @@ self learn lessons/memory | claude -p | self hear # grow a lesson's capabilities
 
 ## Lessons
 
-A lesson is an intent a mind turns into capabilities. Two ship here:
+A lesson is an intent a mind turns into capabilities: a page saying what should
+become possible and what must hold, and no code. Your model writes the scripts,
+so a better model grows a better instance from the same page. Nine ship here.
+Six assume nothing about what you do:
 
 - [`lessons/journal`](lessons/journal/intent.md): the smallest possible set,
   one command and one view. `./demo.sh` grows it offline.
 - [`lessons/memory`](lessons/memory/intent.md): durable memory for a stateless
   mind: `self run remember …`, `self view memory`.
+- [`lessons/goals`](lessons/goals/intent.md): outcomes that outlive the session
+  that wanted them, closed with evidence.
+- [`lessons/howto`](lessons/howto/intent.md): procedures that worked, kept with
+  their proof.
+- [`lessons/recall`](lessons/recall/intent.md): search what was said in earlier
+  sessions, across every harness.
+- [`lessons/pulse`](lessons/pulse/intent.md): notice when your own automation
+  loops or goes quiet.
+
+Three come from one software team's instance, as an example of a domain layer
+and not as a recommendation:
+
+- [`lessons/workers`](lessons/workers/intent.md): start parallel workers, see
+  them, clean up after them.
+- [`lessons/practices`](lessons/practices/intent.md): say how work is done
+  here, and enforce it where work leaves.
+- [`lessons/ship`](lessons/ship/intent.md): follow a change from published to
+  running, and say who it waits on.
+
+There are no capability scripts in this repository beyond the stub the demo
+uses. The ones an instance grows live in its log, signed under its own key.
 
 `self give <selector> <dir>` writes your own instance's knowledge or
 capabilities as an account another instance can `self learn`.
@@ -135,11 +178,8 @@ The full contract is [PROTOCOL.md](PROTOCOL.md), which `self help` prints.
 - [`examples/mind-claude`](examples/mind-claude),
   [`examples/mind-opencode`](examples/mind-opencode): wrap a harness as a mind
   with a live trace on stderr: `self loop -- examples/mind-claude`.
-- [recall](examples/recall/README.md): Claude Code hooks or an opencode
-  plugin record every turn in self, and every prompt is injected with a memory of all of it, compacted
-  so recent turns are detailed and old ones coarse.
-- [ask](examples/ask/README.md): ranks capabilities and views for a task with a
-  local model; falls back to an unscored index.
+- [`examples/mind-stub`](examples/mind-stub): a mind with no model, for the
+  offline demo and for tests.
 
 ## Limits
 
