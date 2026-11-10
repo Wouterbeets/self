@@ -1,13 +1,14 @@
 # self
 
-**One persistent memory for every AI agent on your machine. Install it, then
-tell your agent to run `self`.**
+**One persistent self for every AI agent on your machine: what they know and
+what they can do. Install it, then tell your agent to run `self`.**
 
 Claude Code, opencode, pi, Codex, a local model, a shell script: each one
-starts a session knowing nothing about the last. self gives them a single
-shared log that survives the session, crosses harnesses and model providers,
-and grows its own capabilities. What one agent learns, the next one starts
-with.
+starts a session knowing nothing about the last, and able to do only what its
+harness ships with. self gives them a single shared log that survives the
+session and crosses harnesses and model providers. It carries memory, and it
+carries capabilities: small tools the agents write for themselves when they
+need one. What one agent learns or builds, the next one starts with.
 
 ## Quick start
 
