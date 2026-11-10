@@ -2,22 +2,12 @@
 
 ## Unreleased — Unix integration, everything is a file
 
-`examples/recall` records every Claude Code turn into self through hooks and
-injects a compacted memory of all of it into every prompt. A `recall` view
-renders a binary tree of summaries: recent turns are detailed, old ones coarse,
-and merges are planned by age in units of each span's own size. A hook script
-builds the summaries with a model outside the kernel. An opencode plugin feeds
-the same recorder and puts the memory in the system prompt, once per turn.
-`SELF_RECALL_INJECT=start` injects only on SessionStart, so a long Claude
-Code session holds one copy of the memory. The README shows how to run recall
-as a subsystem, so turns stay out of a log that syncs to peers.
-Fixes from four days of real use: the background compaction runs from
-`SELF_HOME`, because a hook's cwd is often a removed worktree and the mind died
-on getcwd (300 of 699 failures in home's compact.log). Summaries that echo
-the line format's `<first>+<count> <stamp>` prefix lose it, in the hook and when
-rendered, so old echoes in the log stop wasting line bytes. A failing mind logs
-its exit status and stdout when stderr is empty. `test.sh` passes under macOS
-`/bin/sh`, where `VAR=x send` leaked the variable into the rest of the run.
+The repository holds the kernel, the protocol, the mind adapters and lessons,
+and nothing shaped to one person. The capability scripts that had gathered
+under `examples/` are gone: an instance's capabilities live in its own log.
+What they taught stays as intents under `lessons/` (goals, howto, recall,
+pulse, beside journal and memory), for any model to grow again. The README
+says so first: self holds no domain.
 
 Events a command emits are stamped `via: "cli:<command>"`, so the log says
 which capability wrote them and how often each one ran with an effect. `cli`
@@ -36,8 +26,7 @@ keeps printing matching batches until its timeout, which then exits 0.
 Commands may declare `consumes` like views: it is signed into the receipt and
 the command is fed only those events. An atomic command's batch now commits
 unless one of its consumed events was appended meanwhile, so unrelated appends
-no longer force reruns. Receipts without `consumes` sign as before. The lease,
-budget and checkpoint examples declare it.
+no longer force reruns. Receipts without `consumes` sign as before.
 
 Everything is a file on the read side, opt in by directory. If
 `$SELF_HOME/view/` exists, `view/<name>` holds what `self view <name>` prints
