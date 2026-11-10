@@ -83,6 +83,7 @@ type state struct {
 	byKey   map[string]*capability
 	Reject  []*rejection
 	Intents []*intentItem
+	Preview bool
 }
 
 func loadState(home string) (*state, error) {
@@ -90,7 +91,9 @@ func loadState(home string) (*state, error) {
 	if err != nil {
 		return nil, err
 	}
-	return replay(events, secret(home)), nil
+	st := replay(events, secret(home))
+	st.previewSeed()
+	return st, nil
 }
 
 func replay(events []Event, key []byte) *state {
@@ -298,10 +301,11 @@ func rehydrate(home string) error {
 	}
 	defer project(home, true) // deferred first, so it runs after unlock
 	defer unlock()
-	st, err := loadState(home)
+	events, err := readEvents(home)
 	if err != nil {
 		return err
 	}
+	st := replay(events, secret(home))
 	keep := map[string]bool{}
 	var failures error
 	installed, removed := 0, 0

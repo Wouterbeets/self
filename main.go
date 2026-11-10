@@ -115,11 +115,27 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			return err
 		}
 		name, rest := args[0], args[1:]
+		viewHome := home
+		if st.Preview && st.cap(typ, name) != nil {
+			if verb == "run" {
+				if err := seedNow(home); err != nil {
+					return fmt.Errorf("prepare a new instance to run %s: %w", name, err)
+				}
+				if st, err = loadState(home); err != nil {
+					return fmt.Errorf("reload the log after seeding: %w", err)
+				}
+			} else {
+				if viewHome, err = os.MkdirTemp("", "self-seed-"); err != nil {
+					return fmt.Errorf("make a scratch directory for the built-in view: %w", err)
+				}
+				defer os.RemoveAll(viewHome)
+			}
+		}
 		io.WriteString(os.Stderr, unfoldMissing(st, typ, name))
 		said := &tally{w: os.Stderr}
 		var page []byte
 		if verb == "view" {
-			page, err = runViewDiag(home, st, name, said, rest...)
+			page, err = runViewDiag(viewHome, st, name, said, rest...)
 		} else {
 			var evs []Event
 			evs, err = runCommand(home, st, name, rest, doorCLI+":"+name, callerClaim(), said)
@@ -214,6 +230,10 @@ func briefWith(home string, st *state, terse bool) string {
 
 	fmt.Fprintf(&b, "\n## commands — `self run <name> [args…]`\n\n%s\n## views — `self view <name> [args…]`\n\n%s",
 		list(st, kindCommand), list(st, kindView))
+
+	if st.Preview {
+		b.WriteString("\n`entry` and `journal` are built in as a worked example; the first write to this log records them in it.\n")
+	}
 
 	if p := st.pending(); len(p) > 0 {
 		b.WriteString("\n## pending — declared, no script yet\n\n")

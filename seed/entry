@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+import json
+import sys
+
+text = " ".join(sys.argv[1:]).strip()
+if not text:
+    print("usage: entry <text…>", file=sys.stderr)
+    sys.exit(2)
+print(json.dumps({"name": "journal.entry", "payload": {"text": text}}))

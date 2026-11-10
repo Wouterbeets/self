@@ -31,7 +31,10 @@ Bare `self` supports an agent checking in before its existing task. It shares
 persistent identity with execution prompts, but adds no pass assignment, stdout
 contract, or authoring tutorial. Pending capabilities and open outcomes remain
 in the brief. On an empty log it also carries the first-run layer: what a mind
-may offer to set up, which is gone once the log holds an event.
+may offer to set up, which is gone once the log holds an event. An empty log
+also shows the seed, `command/entry` and `view/journal`, as if installed: a read
+writes nothing, and the first write records the seed's two declarations and two
+receipts before its own events. A log that already holds events is never seeded.
 `self prompt` prepares a mind whose output will be piped into `self hear`;
 `self <ask…>` remains shorthand for it. Neither mode reads stdin or writes state.
 
@@ -65,6 +68,8 @@ This log is empty: a first run. Nothing needs configuring for this session, and 
 - If `self` ran by full path, put its directory on `PATH` for new shells.
 
 No environment variable is needed. `SELF_HOME` only moves the instance somewhere else.
+
+`entry` and `journal` below are built in: one command and one view, the smallest worked example. They already run. The first write to this log, yours or theirs, records them ahead of it as seq 1-4 (`via: seed`), and `self view log --all` then shows the declarations and scripts to copy when you author your own.
 <!-- prompt:first:end -->
 
 <!-- prompt:execution:begin -->
@@ -304,7 +309,8 @@ deleted; a deletion is a later event.
 ## Provenance
 
 - `via`, the channel: `cli`, `cli:<command>` for what `self run <command>`
-  emitted, `hear`, `kernel`, or `learn:<account>`. Stamped by
+  emitted, `hear`, `kernel`, `seed` for the two declarations the first write
+  records, or `learn:<account>`. Stamped by
   the kernel from what it saw, never accepted from a script, mind or record. A
   local fact, like `seq`.
 - `by`, the mind: `SELF_CALLER` recorded verbatim, a claim, never verified.

@@ -72,9 +72,11 @@ entry
 journal · log
 ```
 
-Neither `entry` nor `journal` ships with self. A mind wrote both from a
-one-page [lesson](lessons/journal/intent.md), the kernel signed them into the
-log, and now any agent in any harness can use them:
+`entry` and `journal` are the one example that ships with self: a new instance
+shows them from its first brief, and its first write records them in the log,
+signed, as the pattern to copy. Everything after that a mind writes, from a
+one-page [lesson](lessons/journal/intent.md) or from its own need, and any
+agent in any harness can use it:
 
 ```sh
 self run entry staging database resets every Monday
