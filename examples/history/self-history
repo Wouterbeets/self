@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """self-history: search every earlier agent conversation on this machine.
 
-usage: self-history search <words…> [--here | --lane DIR] [--src cc|oc|pi] [--role R]
+usage: self-history search <words…> [--here | --lane DIR] [--src cc|oc|pi|cx] [--role R]
                                [--since YYYY-MM-DD] [--recent] [-n N] [--raw]
        self-history show <id> [-C N] [--max BYTES]
        self-history sessions [--here | --lane DIR] [-n N]
        self-history index
 
-Reads the transcripts the harnesses already keep (Claude Code and pi JSONL,
-opencode's SQLite) into a full-text index. Nothing records turns, no hook runs,
+Reads the transcripts the harnesses already keep (Claude Code, pi and Codex
+JSONL, opencode's SQLite) into a full-text index. Nothing records turns, no hook runs,
 no model is called: the index is derived and catches up on each use, reading
 only what was appended since. Delete it and it rebuilds.
 """
@@ -26,6 +26,7 @@ DB = Path(os.environ.get("SELF_HISTORY_DB", HOME / ".cache/self-history/index.db
 CLAUDE = Path(os.environ.get("SELF_HISTORY_CLAUDE", HOME / ".claude/projects"))
 PI = Path(os.environ.get("SELF_HISTORY_PI", HOME / ".pi/agent/sessions"))
 OPENCODE = Path(os.environ.get("SELF_HISTORY_OPENCODE", HOME / ".local/share/opencode/opencode.db"))
+CODEX = Path(os.environ.get("SELF_HISTORY_CODEX", HOME / ".codex/sessions"))
 
 # Tool output is most of the bytes and least of the meaning: index its head and
 # tail. `show` reads the whole of it back from the source.
@@ -123,6 +124,32 @@ def pi_rows(db, d):
                 yield i, "tool", text
 
 
+def codex_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(b.get("text", "") for b in value if isinstance(b, dict) and isinstance(b.get("text"), str))
+    return "" if value is None else json.dumps(value, ensure_ascii=False)
+
+
+def codex_rows(db, d):
+    if d.get("type") != "response_item":
+        return
+    p = d.get("payload") or {}
+    t = p.get("type")
+    if t == "message" and p.get("role") in ("user", "assistant"):
+        for i, b in enumerate(p.get("content") or []):
+            text = b.get("text", "") if isinstance(b, dict) else ""
+            if text.strip() and not text.lstrip().startswith("<"):
+                yield i, p["role"], text
+    elif t in ("custom_tool_call", "function_call"):
+        text = clip(f"{p.get('name')} {codex_text(p.get('input', p.get('arguments')))}", CALL, 0)
+        if not echo(db, p.get("call_id"), text):
+            yield 0, "tool", text
+    elif t in ("custom_tool_call_output", "function_call_output") and not skipped(db, p.get("call_id")):
+        yield 0, "result", clip(codex_text(p.get("output")))
+
+
 def index_jsonl(db, src, path, rows):
     """Index the complete lines appended to path since the last pass."""
     size = path.stat().st_size
@@ -140,7 +167,7 @@ def index_jsonl(db, src, path, rows):
         data = f.read()
     end = data.rfind(b"\n") + 1
     session = lane = None
-    if src == "pi" and offset:
+    if src in ("pi", "cx") and offset:
         session, lane = db.execute(
             "SELECT session, lane FROM msg WHERE file=? LIMIT 1", (str(path),)).fetchone() or (None, None)
     for line in data[:end].splitlines():
@@ -151,6 +178,10 @@ def index_jsonl(db, src, path, rows):
             continue
         if src == "pi" and d.get("type") == "session":
             session, lane = d.get("id"), d.get("cwd")
+            continue
+        if src == "cx" and d.get("type") == "session_meta":
+            meta = d.get("payload") or {}
+            session, lane = meta.get("id"), meta.get("cwd")
             continue
         if src == "cc":
             session, lane = d.get("sessionId", session), d.get("cwd", lane)
@@ -227,7 +258,8 @@ def open_index():
 
 
 def refresh(db):
-    for src, root, rows, pattern in (("cc", CLAUDE, claude_rows, "**/*.jsonl"), ("pi", PI, pi_rows, "*/*.jsonl")):
+    for src, root, rows, pattern in (("cc", CLAUDE, claude_rows, "**/*.jsonl"), ("pi", PI, pi_rows, "*/*.jsonl"),
+                                     ("cx", CODEX, codex_rows, "**/rollout-*.jsonl")):
         if root.exists():
             for path in sorted(root.glob(pattern)):
                 with db:
@@ -303,6 +335,13 @@ def source(loc):
             if k == int(lineno):
                 break
     d = json.loads(line)
+    if d.get("type") == "response_item":
+        p = d.get("payload") or {}
+        if p.get("type") == "message":
+            return (p.get("content") or [])[int(i)].get("text", "")
+        if p.get("type") in ("custom_tool_call", "function_call"):
+            return f"{p.get('name')} {codex_text(p.get('input', p.get('arguments')))}"
+        return codex_text(p.get("output"))
     content = (d.get("message") or {}).get("content")
     if isinstance(content, str):
         return content
@@ -357,7 +396,7 @@ def main():
     for q in (s, sub.add_parser("sessions", help="recent sessions, newest first")):
         q.add_argument("--here", action="store_true", help="only this directory and below")
         q.add_argument("--lane", help="only this directory and below")
-        q.add_argument("--src", choices=["cc", "oc", "pi"], help="Claude Code, opencode, pi")
+        q.add_argument("--src", choices=["cc", "oc", "pi", "cx"], help="Claude Code, opencode, pi, Codex")
         q.add_argument("-n", type=int, default=15)
     w = sub.add_parser("show", help="one message in full, with its neighbours")
     w.add_argument("id", type=int)

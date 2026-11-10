@@ -9,7 +9,11 @@ $ self-history sessions --here     # recent sessions in this directory and below
 ```
 
 Claude Code (`~/.claude/projects/**/*.jsonl`, subagents included), pi
-(`~/.pi/agent/sessions`) and opencode (`opencode.db`) already keep every turn.
+(`~/.pi/agent/sessions`), Codex (`~/.codex/sessions/**/rollout-*.jsonl`, source
+`cx`) and opencode (`opencode.db`) already keep every turn. From a Codex
+rollout the user and assistant messages, tool calls and tool outputs are
+indexed; injected context blocks, reasoning and the duplicate `event_msg`
+copies are not.
 `self-history` reads them into an SQLite FTS5 index at
 `~/.cache/self-history/index.db` and searches it. Every call first catches the
 index up: a JSONL file is read from where the last pass stopped, opencode from

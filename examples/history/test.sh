@@ -1,12 +1,12 @@
 #!/bin/sh
-# End-to-end check of history against fixture transcripts for Claude Code, pi
-# and opencode, in a scratch index. Reads nothing from the real harnesses.
+# End-to-end check of history against fixture transcripts for Claude Code, pi,
+# opencode and Codex, in a scratch index. Reads nothing from the real harnesses.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export SELF_HISTORY_DB=$tmp/index.db SELF_HISTORY_CLAUDE=$tmp/claude \
-	SELF_HISTORY_PI=$tmp/pi SELF_HISTORY_OPENCODE=$tmp/opencode.db \
+	SELF_HISTORY_PI=$tmp/pi SELF_HISTORY_OPENCODE=$tmp/opencode.db SELF_HISTORY_CODEX=$tmp/codex \
 	CLAUDE_CODE_SESSION_ID= SELF_HISTORY_SESSION=
 h() { python3 "$here/self-history" "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -45,7 +45,27 @@ db.execute("INSERT INTO part VALUES ('a2', 'm2', 'o1', 1791000002000, 1791000002
 db.commit()
 PY
 
+mkdir -p "$tmp/codex/2026/10/04"
+cx=$tmp/codex/2026/10/04/rollout-2026-10-04T08-00-00-x1.jsonl
+jq -nc '
+	{timestamp:"2026-10-04T08:00:00Z",type:"session_meta",payload:{id:"x1",cwd:"/work/delta"}},
+	{timestamp:"2026-10-04T08:00:01Z",type:"response_item",payload:{type:"message",role:"user",content:[{type:"input_text",text:"<environment_context>pangolin injected</environment_context>"}]}},
+	{timestamp:"2026-10-04T08:00:02Z",type:"response_item",payload:{type:"message",role:"user",content:[{type:"input_text",text:"move the axolotl mailbox to the new tenant"}]}},
+	{timestamp:"2026-10-04T08:00:03Z",type:"event_msg",payload:{type:"user_message",message:"move the axolotl mailbox to the new tenant"}},
+	{timestamp:"2026-10-04T08:00:04Z",type:"response_item",payload:{type:"custom_tool_call",call_id:"q1",name:"exec",input:"dig axolotl.example MX"}},
+	{timestamp:"2026-10-04T08:00:05Z",type:"response_item",payload:{type:"custom_tool_call_output",call_id:"q1",output:[{type:"input_text",text:"axolotl.example mail is handled by capybara.example"}]}},
+	{timestamp:"2026-10-04T08:00:06Z",type:"response_item",payload:{type:"reasoning",encrypted_content:"tapir"}},
+	{timestamp:"2026-10-04T08:00:07Z",type:"response_item",payload:{type:"message",role:"assistant",content:[{type:"output_text",text:"The mailbox now routes through capybara."}]}}' >"$cx"
+
 h search zebrafish | grep -q "user: pick the \[zebrafish\]" || fail "claude prompt not found"
+h search axolotl mailbox --role user | grep -q "cx:x1" || fail "codex prompt not found"
+[ "$(h search axolotl mailbox --role user | grep -c 'cx:x1')" = 1 ] || fail "codex prompt indexed twice"
+h search capybara --role result | grep -q "result:" || fail "codex tool result not found"
+h search pangolin | grep -q "no match" || fail "codex injected context indexed"
+h search tapir | grep -q "no match" || fail "codex reasoning indexed"
+h search capybara --lane /work/delta | grep -q "cx:x1" || fail "codex lane"
+id=$(h search capybara --role result | awk -F'\t' 'NR==1{print $1}')
+h show "$id" -C 1 | grep -q "dig axolotl.example MX" || fail "codex show is missing the preceding call"
 h search zebrafish | grep -q echoed && fail "a history call's result was indexed"
 h search duplicate | grep -q "no match" || fail "api-request-blob indexed"
 h search okapi too slow | grep -q "result:" || fail "pi tool result not found"
