@@ -134,9 +134,6 @@ func cmdLearn(home, ref string, out io.Writer, into ...string) error {
 			return err
 		}
 		defer unlock()
-		if err := seedLocked(home, key); err != nil {
-			return fmt.Errorf("prepare a new instance: %w", err)
-		}
 		events, err := readEvents(home)
 		if err != nil {
 			return err

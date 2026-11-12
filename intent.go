@@ -94,8 +94,8 @@ func intentBrief(st *state) string {
 	}
 	const limit = 12
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n## Open intents — %d declared outcomes\n\n", len(open))
-	b.WriteString("Intentions to consider within the current scope. Read details with `self brief intent/<name>`.\n\n")
+	fmt.Fprintf(&b, "\n## wanted — %d open\n\n", len(open))
+	b.WriteString("What this person, or an earlier session, wants to become possible. `self brief intent/<name>` says one in full.\n\n")
 	b.WriteString(intentIndex(open[:min(len(open), limit)]))
 	if len(open) > limit {
 		fmt.Fprintf(&b, "\n%d more; `self brief intent/` lists all open intents.\n", len(open)-limit)

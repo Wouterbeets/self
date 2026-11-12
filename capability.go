@@ -83,7 +83,6 @@ type state struct {
 	byKey   map[string]*capability
 	Reject  []*rejection
 	Intents []*intentItem
-	Preview bool
 }
 
 func loadState(home string) (*state, error) {
@@ -91,9 +90,7 @@ func loadState(home string) (*state, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := replay(events, secret(home))
-	st.previewSeed()
-	return st, nil
+	return replay(events, secret(home)), nil
 }
 
 func replay(events []Event, key []byte) *state {

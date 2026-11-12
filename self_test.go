@@ -1309,13 +1309,13 @@ func TestAccountEdgesAreRefused(t *testing.T) {
 }
 
 func TestExecutionPromptCarriesTheDietNotTheProtocol(t *testing.T) {
-	for _, layer := range []string{"core", "session", "first", "execution", "intent", "growth", "loop"} {
+	for _, layer := range []string{"core", "session", "first", "setup", "execution", "intent", "growth", "loop"} {
 		if protocolLayer(layer) == "" {
 			t.Fatalf("PROTOCOL.md lost prompt layer %q", layer)
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"your persistent self", "append-only log", "Only what you append to self", "Context is finite", "views are compressed reads", "verified methods", "event JSONL or silence", "intent.declared", "self help"} {
+	for _, want := range []string{"what earlier sessions on this machine left for you", "leave a command that does it", "write that view if none does", "declare it, so a later session can", "not the story of the session", "event JSONL or silence", "Nothing else you say is kept", "intent.declared", "self help"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}
@@ -1384,7 +1384,7 @@ func TestBriefOnAnEmptyInstance(t *testing.T) {
 	if len(b) > 2500 {
 		t.Fatalf("the empty brief is %d bytes", len(b))
 	}
-	for _, want := range []string{"log: 0 events", "no declared commands yet", "SELF_CALLER", "nothing pending"} {
+	for _, want := range []string{"log: 0 events", "nothing yet: you are the first here", "SELF_CALLER"} {
 		if !strings.Contains(b, want) {
 			t.Fatalf("the empty brief is missing %q:\n%s", want, b)
 		}

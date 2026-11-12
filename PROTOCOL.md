@@ -23,20 +23,20 @@ need recorded evidence or references to remain discoverable.
 
 ```
 self                 reconnect: session guidance + brief.                         (READ)
+self setup           what to offer so every session starts with self.              (READ)
 self prompt [ask…]    print an execution prompt: brief + ask.                       (READ)
 … | self hear        event lines land, authored scripts install.                   (WRITE)
 ```
 
-Bare `self` supports an agent checking in before its existing task. It shares
-persistent identity with execution prompts, but adds no pass assignment, stdout
-contract, or authoring tutorial. Pending capabilities and open outcomes remain
-in the brief. On an empty log it also carries the first-run layer: what a mind
-may offer to set up, which is gone once the log holds an event. An empty log
-also shows the seed, `command/note` and `view/notes`, as declared and pending: a
-read writes nothing, and the first write records the seed's two declarations
-before its own events. The kernel ships no script for them; the first mind
-authors both in whatever the machine has. A log that already holds events is
-never seeded.
+Bare `self` supports an agent checking in before its existing task. Every
+prompt opens with the same voice, the core layer: what this is, and the three
+moments at which a mind leaves something behind. Bare `self` adds one line for
+a mind in conversation and no pass assignment, stdout contract, or authoring
+tutorial. Pending capabilities and open outcomes remain in the brief. An empty
+log is the same brief with nothing in it, plus the first layer: start from what
+the person came to do. The kernel declares nothing of its own in a new
+instance; its first capability comes from the first real task. `self setup`
+prints what a mind may offer so every session starts with self.
 `self prompt` prepares a mind whose output will be piped into `self hear`;
 `self <ask…>` remains shorthand for it. Neither mode reads stdin or writes state.
 
@@ -51,31 +51,39 @@ pipe prose about events (this file, say) into it.
 Identical in a terminal, a pipe, a script, a sandbox and cron.
 
 <!-- prompt:core:begin -->
-This is your persistent self: an append-only log carrying knowledge, desired outcomes, and capabilities between sessions. Read what matters now and preserve what another mind will need.
+This is what earlier sessions on this machine left for you: tools they built to work in this person's world, and what they learned about it. It outlives every session, harness and model. Use what is here before you work something out again.
 
-The brief is an index; views are compressed reads. Context is finite: preserve evidence, not narration. Retain verified methods with their trigger, constraints, and evidence when reuse or rediscovery cost warrants it.
+Leave it better than you found it:
 
-Read with `self view <name> [args...]`, inspect declarations with `self brief <name>`, and act with `self run <command> [args...]`. Full contract: `self help`.
+- When you do something this person will want again, leave a command that does it.
+- When you had to find something out about their world, record it where a view will show it, and write that view if none does.
+- When they want something you cannot do yet, declare it, so a later session can.
+
+Leave what the next mind can use: what was verified and how, not the story of the session. When nothing is worth leaving, leave nothing.
+
+`self run <command>` acts, `self view <name>` reads, and `self brief <name>` says what one is for. `self help` is the whole contract, and shows how to write a capability.
 <!-- prompt:core:end -->
 
 <!-- prompt:session:begin -->
-Continue the user's task; reply in the conversation. Preserve useful findings through commands or event JSONL piped into `self hear`. The brief shows possibilities to consider, not assignments. Read `self help` to declare an outcome or author a capability.
+You are in a conversation: the person's task comes first, and you answer them there. Before your last reply, look back for those three moments and leave what they call for, with `self run` or as event lines piped into `self hear`.
 <!-- prompt:session:end -->
 
 <!-- prompt:first:begin -->
-This log is empty: a first run. Nothing needs configuring for this session, and the instance directory named below is created by the first write. To make self part of every session, offer the person these and change their files only once they agree:
+Nothing has been left here yet: you are the first. Start from what this person came to do. If they came with nothing in mind, ask them one thing: what they do on this computer again and again, or keep putting off. The first thing you leave creates this instance. If self is not yet part of every session on this machine, `self setup` says what to offer them.
+<!-- prompt:first:end -->
 
-- A line in the instruction file your harness reads for every project (`AGENTS.md`, `CLAUDE.md`, or a system prompt): `Before starting anything, run \`self\`.`
+<!-- prompt:setup:begin -->
+Nothing needs configuring for self to work in this session. To make it part of every session on this machine, offer the person these, and change their files only once they agree:
+
+- A line in the instruction file your harness reads for every project (`AGENTS.md`, `CLAUDE.md`, or a system prompt): `Before starting anything, run \`self\`. Before you finish, leave behind what it asks for.`
 - Where your harness has a session-start hook, have it run `self`, so the brief arrives before the first message.
 - If `self` ran by full path, put its directory on `PATH` for new shells.
 
 No environment variable is needed. `SELF_HOME` only moves the instance somewhere else.
-
-`note` and `notes` below are declared and pending: one command and one view, the smallest useful pair, left for the first mind here to script. `self brief note` and `self brief notes` say exactly what each must do. Author both before you go on, for an interpreter this machine has; `self help` shows how under Capabilities. That first write also records the two declarations as seq 1-2 (`via: seed`). Then `self run note <text…>` records what the next mind should know and `self view notes` reads it back.
-<!-- prompt:first:end -->
+<!-- prompt:setup:end -->
 
 <!-- prompt:execution:begin -->
-Make one pass. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel adds identity, time, and provenance. Only what you append to self enters its memory.
+Make one pass. Your stdout is event JSONL or silence: one object per line with only `name` (lowercase dotted) and `payload`. The kernel adds identity, time, and provenance. Nothing else you say is kept.
 <!-- prompt:execution:end -->
 
 ## The wire
@@ -311,8 +319,7 @@ deleted; a deletion is a later event.
 ## Provenance
 
 - `via`, the channel: `cli`, `cli:<command>` for what `self run <command>`
-  emitted, `hear`, `kernel`, `seed` for the two declarations the first write
-  records, or `learn:<account>`. Stamped by
+  emitted, `hear`, `kernel`, or `learn:<account>`. Stamped by
   the kernel from what it saw, never accepted from a script, mind or record. A
   local fact, like `seq`.
 - `by`, the mind: `SELF_CALLER` recorded verbatim, a claim, never verified.
@@ -418,6 +425,7 @@ self                        session guidance + capability index (READ)
 self prompt [ask…]          execution prompt: default or explicit ask (READ)
 self <ask…>                 shorthand for self prompt <ask…> (READ)
 … | self hear [--after ID]  conditional or unconditional ingestion (WRITE)
+self setup                  what to offer so every session starts with self (READ)
 self brief [name]           the state card; with a name or intent/<name>, full detail
 self run <cmd> [args…]      execute a command
 self view <name> [args…]    replay a view ("log" is built in, shadowable)
@@ -477,10 +485,9 @@ whether there is anything else. The loop knows nothing about goals, tasks, or
 declarations.
 
 <!-- prompt:loop:begin -->
-Consider the ask and open outcomes. Advance what you can support with evidence,
-record the result, and leave enough context for another mind to continue.
-Use what already exists; build capabilities when they help. If nothing useful
-can advance now, append nothing. If you recorded a result but cannot usefully
+Consider the ask and what is wanted. Advance what you can support with evidence,
+record the result, and leave enough for another mind to continue. If nothing
+useful can advance now, append nothing. If you recorded a result but cannot usefully
 continue, finish stdout with `{"name":"loop.settled","payload":{"reason":"What is waiting or finished"}}`.
 The loop may settle while outcomes await input.
 <!-- prompt:loop:end -->
