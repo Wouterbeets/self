@@ -1,41 +1,33 @@
 package main
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 )
 
-//go:embed seed/entry
-var seedEntry string
-
-//go:embed seed/journal
-var seedJournal string
-
 const doorSeed = "seed"
 
 var seedEnabled = true
 
 type seedCap struct {
-	typ    string
-	decl   decl
-	script string
+	typ  string
+	decl decl
 }
 
 var seedCaps = []seedCap{
 	{kindCommand, decl{
-		Name:        "entry",
-		Summary:     "record one journal entry",
-		Description: "usage: entry <text…>\n\nAppends one journal.entry {text}. Read entries back with the journal view. This command and that view are the worked example every instance starts with: `self view log --all` shows the four events that declared and installed them, which is the shape to follow when authoring your own (`self help`).",
-	}, seedEntry},
+		Name:        "note",
+		Summary:     "record one note",
+		Description: "usage: note <text…>\n\nAppends one note.added {text}: the words given, joined by single spaces. With no text it prints the usage on stderr, exits 2 and appends nothing.\n\nThe kernel declared this on the first write and left the script to the first mind here. Write it for an interpreter this machine has; `self help` shows how a script is authored.",
+	}},
 	{kindView, decl{
-		Name:        "journal",
-		Summary:     "every journal entry, newest first",
-		Description: "usage: journal\n\nPrints one line per journal.entry, newest first: timestamp, tab, text. An empty journal prints nothing.",
-		Consumes:    []string{"journal.entry"},
-	}, seedJournal},
+		Name:        "notes",
+		Summary:     "every note, newest first",
+		Description: "usage: notes\n\nPrints one line per note.added, newest first: occurred_at, a tab, then the text with newlines shown as spaces. No notes prints nothing.\n\nThe kernel declared this on the first write and left the script to the first mind here.",
+		Consumes:    []string{"note.added"},
+	}},
 }
 
 func (st *state) previewSeed() {
@@ -44,8 +36,7 @@ func (st *state) previewSeed() {
 	}
 	st.Preview = true
 	for _, s := range seedCaps {
-		c := &capability{Type: s.typ, Name: s.decl.Name, Decl: s.decl,
-			Receipt: &receipt{Type: s.typ, Name: s.decl.Name, Script: s.script, Consumes: s.decl.Consumes, By: doorSeed}}
+		c := &capability{Type: s.typ, Name: s.decl.Name, Decl: s.decl}
 		st.byKey[c.key()] = c
 		st.Caps = append(st.Caps, c)
 	}
@@ -63,7 +54,6 @@ func seedLocked(home string, key []byte) error {
 		return nil
 	}
 	var evs []Event
-	var scripts []authored
 	for _, s := range seedCaps {
 		payload, err := json.Marshal(s.decl)
 		if err != nil {
@@ -72,24 +62,10 @@ func seedLocked(home string, key []byte) error {
 		e := newEvent(s.typ+".declared", payload)
 		e.Via = doorSeed
 		evs = append(evs, e)
-		scripts = append(scripts, authored{Type: s.typ, Name: s.decl.Name, Script: s.script})
 	}
-	if err := ingestLocked(home, key, evs, scripts, nil, doorSeed, io.Discard); err != nil {
-		return fmt.Errorf("seed the first write: %w", err)
+	if err := ingestLocked(home, key, evs, nil, nil, doorSeed, io.Discard); err != nil {
+		return fmt.Errorf("record the seed declarations: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "self: first write — seeded command/entry and view/journal as a worked example (seq 1-%d)\n", 2*len(seedCaps))
+	fmt.Fprintf(os.Stderr, "self: first write — declared command/note and view/notes (seq 1-%d); they are pending until a mind authors their scripts\n", len(seedCaps))
 	return nil
-}
-
-func seedNow(home string) error {
-	key, err := ensureSecret(home)
-	if err != nil {
-		return fmt.Errorf("create the instance key before seeding: %w", err)
-	}
-	unlock, err := lockLog(home)
-	if err != nil {
-		return fmt.Errorf("lock the log before seeding: %w", err)
-	}
-	defer unlock()
-	return seedLocked(home, key)
 }

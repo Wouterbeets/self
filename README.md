@@ -72,11 +72,9 @@ entry
 journal · log
 ```
 
-`entry` and `journal` are the one example that ships with self: a new instance
-shows them from its first brief, and its first write records them in the log,
-signed, as the pattern to copy. Everything after that a mind writes, from a
-one-page [lesson](lessons/journal/intent.md) or from its own need, and any
-agent in any harness can use it:
+Neither `entry` nor `journal` ships with self. A mind wrote both from a
+one-page [lesson](lessons/journal/intent.md), the kernel signed them into the
+log, and now any agent in any harness can use them:
 
 ```sh
 self run entry staging database resets every Monday
@@ -86,6 +84,10 @@ self view journal
 ```
 2026-11-10T13:52:47.994022648Z  staging database resets every Monday
 ```
+
+A new instance starts the same way: it declares one command and one view,
+`note` and `notes`, and the first agent to arrive writes their scripts in
+whatever the machine has.
 
 The brief lists names, not history, so it stays short however long the log
 gets. An agent reads the views it needs and leaves the rest.

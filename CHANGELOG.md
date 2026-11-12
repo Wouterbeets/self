@@ -2,13 +2,14 @@
 
 ## Unreleased
 
-A new instance starts with one worked example: the command `entry` and the view
-`journal`. An empty log shows both as if installed and they already run; reads
-still write nothing. The first write to the log records them ahead of its own
-events, as two declarations stamped `via: "seed"` and two signed receipts
-(seq 1-4), so the log itself shows how a capability is declared and installed.
-A log that already holds events is never seeded. The scripts need `python3`.
-Retire them with `capability.retired` if you do not want them.
+A new instance starts with two declarations and no scripts: the command `note`
+and the view `notes`. An empty log shows both as pending and a read still
+writes nothing. The first write to the log records the two declarations ahead
+of its own events, stamped `via: "seed"` (seq 1-2), and the first-run layer
+asks the mind that arrives to author both scripts in an interpreter the machine
+has. The kernel ships no script, so it needs no interpreter of its own. A log
+that already holds events is never seeded. Retire them with
+`capability.retired` if you do not want them.
 
 ## v1.2.0 — Unix integration, everything is a file
 

@@ -32,9 +32,11 @@ persistent identity with execution prompts, but adds no pass assignment, stdout
 contract, or authoring tutorial. Pending capabilities and open outcomes remain
 in the brief. On an empty log it also carries the first-run layer: what a mind
 may offer to set up, which is gone once the log holds an event. An empty log
-also shows the seed, `command/entry` and `view/journal`, as if installed: a read
-writes nothing, and the first write records the seed's two declarations and two
-receipts before its own events. A log that already holds events is never seeded.
+also shows the seed, `command/note` and `view/notes`, as declared and pending: a
+read writes nothing, and the first write records the seed's two declarations
+before its own events. The kernel ships no script for them; the first mind
+authors both in whatever the machine has. A log that already holds events is
+never seeded.
 `self prompt` prepares a mind whose output will be piped into `self hear`;
 `self <ask…>` remains shorthand for it. Neither mode reads stdin or writes state.
 
@@ -69,7 +71,7 @@ This log is empty: a first run. Nothing needs configuring for this session, and 
 
 No environment variable is needed. `SELF_HOME` only moves the instance somewhere else.
 
-`entry` and `journal` below are built in: one command and one view, the smallest worked example. They already run. The first write to this log, yours or theirs, records them ahead of it as seq 1-4 (`via: seed`), and `self view log --all` then shows the declarations and scripts to copy when you author your own.
+`note` and `notes` below are declared and pending: one command and one view, the smallest useful pair, left for the first mind here to script. `self brief note` and `self brief notes` say exactly what each must do. Author both before you go on, for an interpreter this machine has; `self help` shows how under Capabilities. That first write also records the two declarations as seq 1-2 (`via: seed`). Then `self run note <text…>` records what the next mind should know and `self view notes` reads it back.
 <!-- prompt:first:end -->
 
 <!-- prompt:execution:begin -->
