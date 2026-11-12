@@ -2,14 +2,30 @@
 
 ## Unreleased
 
-A new instance starts with two declarations and no scripts: the command `note`
-and the view `notes`. An empty log shows both as pending and a read still
-writes nothing. The first write to the log records the two declarations ahead
-of its own events, stamped `via: "seed"` (seq 1-2), and the first-run layer
-asks the mind that arrives to author both scripts in an interpreter the machine
-has. The kernel ships no script, so it needs no interpreter of its own. A log
-that already holds events is never seeded. Retire them with
-`capability.retired` if you do not want them.
+Every prompt now opens in one voice, the same in a session, an execution
+prompt and a loop pass. It says what the instance is, then names three moments
+at which a mind leaves something behind: it did something the person will want
+again (leave a command), it had to find something out about their world
+(record it where a view shows it), or the person wants something it cannot do
+yet (declare it). A session is also asked to look back for those moments before
+its last reply. Until now only loop passes were told to build capabilities.
+
+An empty log is the same brief with nothing in it and three sentences more:
+start from what the person came to do, and if they came with nothing in mind,
+ask what they do on this computer again and again or keep putting off. The
+setup guidance left the brief for a read of its own, `self setup`, and the
+instruction line it offers now has a second half: `Before you finish, leave
+behind what it asks for.`
+
+A new instance is no longer seeded with `note` and `notes`: the kernel declares
+nothing, and the first capability comes from the first real task. No release
+carried the seed. A log that a development build seeded keeps its two
+declarations; retire them with `capability.retired` if you do not want them.
+
+In the brief, open intents sit under `## wanted`, an empty list says `none yet`
+(`nothing yet: you are the first here` on an empty log), and the line
+`nothing pending, nothing refused.` is gone. Scripts that match on the old
+heading `## Open intents` or on that line need the new text.
 
 ## v1.2.0 — Unix integration, everything is a file
 

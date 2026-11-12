@@ -27,22 +27,23 @@ shell to restart: your self lives in `~/.self`. If the agent cannot find
 `self`, Go's bin directory is not on your `PATH` yet; say `~/go/bin/self`
 instead, and the agent will offer to fix that too.
 
-On an empty log the brief carries a short first-run section. The agent reads
-it and offers to make self part of every session: a line in the instruction
-file your harness reads, and a session-start hook where the harness has one.
-It asks before it changes your files, and the section is gone once the log
-holds its first event.
+On an empty log the brief says so and points the agent at `self setup`, which
+lists what makes self part of every session: a line in the instruction file
+your harness reads, and a session-start hook where the harness has one. The
+agent asks before it changes your files.
 
-From then on, work as usual. The agent reads a short brief, does your task, and
-records what the next mind should know. The first time it needs a new way to
-remember or do something, it writes one, and every later session, in any agent,
-finds it in the brief.
+From then on, work as usual. The agent reads a short brief and does your task.
+The brief asks it to leave something behind at three moments. When it does
+something you will want again, it leaves a command that does it. When it had to
+find something out about your world, it records that where a view shows it.
+When you want something it cannot do yet, it declares it for a later session.
+Every later session, in any agent, finds all of it in the brief.
 
 Prefer to do it by hand? It is one line in `AGENTS.md`, `CLAUDE.md`, or your
 system prompt:
 
 ```md
-Before starting anything, run `self`.
+Before starting anything, run `self`. Before you finish, leave behind what it asks for.
 ```
 
 and, to get the brief before the first message, a session hook. For Claude
@@ -85,9 +86,8 @@ self view journal
 2026-11-10T13:52:47.994022648Z  staging database resets every Monday
 ```
 
-A new instance starts the same way: it declares one command and one view,
-`note` and `notes`, and the first agent to arrive writes their scripts in
-whatever the machine has.
+A new instance starts with nothing in it. Its first capability comes from the
+first real thing you ask for, written in whatever the machine has.
 
 The brief lists names, not history, so it stays short however long the log
 gets. An agent reads the views it needs and leaves the rest.

@@ -18,6 +18,7 @@ const cliUsage = `self — local-first event-sourced runtime
 
 Usage:
   self                        reconnect with your persistent self for the current task
+  self setup                  print what to offer so every session starts with self
   self prompt [ask...]         print a prompt for an event-producing mind
   self <ask...>                shorthand for self prompt <ask...>
   self hear [--after <head>]     ingest event JSONL or authored scripts from stdin
@@ -59,13 +60,17 @@ func main() {
 }
 
 func dispatch(home, verb string, args []string, out io.Writer) error {
-	limits := map[string]int{"": 0, "brief": 1, "rehydrate": 0, "help": 0, "-h": 0, "--help": 0}
+	limits := map[string]int{"": 0, "setup": 0, "brief": 1, "rehydrate": 0, "help": 0, "-h": 0, "--help": 0}
 	if max, fixed := limits[verb]; fixed && len(args) > max {
 		return fmt.Errorf("self %s accepts at most %d argument(s); see self --help", verb, max)
 	}
 	switch verb {
 	case "":
 		return cmdOrient(home, out)
+
+	case "setup":
+		_, err := io.WriteString(out, protocolLayer("setup")+"\n")
+		return err
 
 	case "prompt":
 		return cmdSituate(home, strings.Join(args, " "), out)
@@ -214,14 +219,13 @@ func briefWith(home string, st *state, terse bool) string {
 
 	fmt.Fprintf(&b, "\n## commands — `self run <name> [args…]`\n\n%s\n## views — `self view <name> [args…]`\n\n%s",
 		list(st, kindCommand), list(st, kindView))
+	if terse && len(st.Caps) > 0 {
+		b.WriteString("\n`self brief` says what each is for; `self brief <name>` one in full.\n")
+	}
 
 	if p := st.pending(); len(p) > 0 {
 		b.WriteString("\n## pending — declared, no script yet\n\n")
 		for _, c := range p {
-			if st.Preview {
-				fmt.Fprintf(&b, "- %s (the first write to this log declares it)\n", c.key())
-				continue
-			}
 			fmt.Fprintf(&b, "- %s (declared at seq %d)\n", c.key(), c.DeclSeq)
 		}
 	}
@@ -234,13 +238,9 @@ func briefWith(home string, st *state, terse bool) string {
 	}
 	b.WriteString(intentBrief(st))
 
-	if st.capabilitiesReady() && len(st.openIntents()) == 0 {
-		b.WriteString("\nnothing pending, nothing refused.\n")
-	}
-
 	b.WriteString("\n## where\n\n" +
 		"`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n" +
-		"`self help` the protocol · `self view log` what happened lately · `self brief <name>` one capability in full\n")
+		"`self view log` what happened lately\n")
 	return b.String()
 }
 
@@ -344,11 +344,8 @@ func capabilityList(st *state, typ string) string {
 	if typ == kindView && st.cap(kindView, "log") == nil {
 		fmt.Fprintf(&b, "- log — the last %d events; `--all` for every one (built in, shadowable)\n", builtinLogTail)
 	}
-	if len(caps) == 0 {
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		fmt.Fprintf(&b, "(no declared %ss yet — `self help` shows how to author one)\n", typ)
+	if len(caps) == 0 && typ == kindCommand {
+		b.WriteString(noneYet(st))
 	}
 	return b.String()
 }
@@ -362,9 +359,17 @@ func capabilityNames(st *state, typ string) string {
 		names = append(names, "log")
 	}
 	if len(names) == 0 {
-		return fmt.Sprintf("(no declared %ss yet — `self help` shows how to author one)\n", typ)
+		return noneYet(st)
 	}
-	return strings.Join(names, " · ") + "\n\n`self brief` says what each is for; `self brief <name>` one in full.\n"
+	return strings.Join(names, " · ") + "\n"
+}
+
+// noneYet fills an empty list. An empty log reads as an opening, not a fault.
+func noneYet(st *state) string {
+	if len(st.Events) == 0 {
+		return "nothing yet: you are the first here\n"
+	}
+	return "none yet\n"
 }
 
 func pendingFlag(c *capability) string {
