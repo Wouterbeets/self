@@ -15,7 +15,10 @@ the change now needs them.
   only when the stage changed.
 - `self view ship` lists the tracked changes with their stage.
 - `self view ship actions` prints what a driver should do next: announce,
-  alert, resume, notify, close.
+  alert, resume, notify, ask, answer, close.
+- `self run ship ready <goal>` marks a draft change ready for review on its
+  owner's yes, and `self run ship keep <goal>` records a no. Both record who
+  decided and through which channel.
 - `self view ship.flow` shows each change as steps (plan, build, publish,
   checks, review, staging, production), grouped by who it waits on: you, a
   reviewer, a machine, another goal, or a hold.
@@ -36,6 +39,13 @@ the change now needs them.
   alert clears. A hold a person placed is never released by a machine.
 - A change closed without merging is a decision someone made. It alerts
   nobody.
+- A change is published as a draft and stays one until every required check
+  is green and it can merge. Then its owner is asked once for that version of
+  the change, on the phone with a button and out loud when at the machine.
+  Only the owner's answer makes it ready, and only after the checks are read
+  again at that moment; a machine never undrafts on its own judgment.
+- Nobody else is told about a draft. A change is announced to reviewers only
+  once it is ready for review.
 - A person is told when a change starts needing them: checks failed, changes
   were requested, it is approved and ready, it is running in staging and ready
   for release. Not for progress.
