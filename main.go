@@ -183,8 +183,6 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return cmdComplete(home, args, out)
 
 	case "-h", "--help":
-		// A careful mind asks an unknown binary what it is before running it,
-		// so this door says so, and says the way in is safe.
 		_, err := io.WriteString(out, protocolLayer("core")+"\n\n"+
 			"Run `self` with no arguments to arrive: it only reads, and prints this with everything the instance holds.\n\n"+cliUsage+"\n")
 		return err
@@ -439,8 +437,6 @@ func capabilityList(st *state, typ string) string {
 	return b.String()
 }
 
-// listedInSession is how many capabilities bare `self` still lists a line
-// each, with what they are for and who made them; past it, names only.
 const listedInSession = 12
 
 func capabilityNames(st *state, typ string) string {
@@ -468,8 +464,6 @@ func noneYet(st *state) string {
 	return "none yet\n"
 }
 
-// provenance says who made a capability, how long ago, and what it has put in
-// the log since: the evidence that what a mind leaves here is found and used.
 func provenance(st *state, c *capability) string {
 	if c.Receipt == nil {
 		return ""

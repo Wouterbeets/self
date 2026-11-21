@@ -354,9 +354,6 @@ func prune(root string, keep map[string]bool) (removed int, err error) {
 	return removed, err
 }
 
-// scriptEnv is what a script runs in. A view is a pure function of its events,
-// so its environment is fixed; a command acts in the caller's world, so it
-// keeps the caller's environment and learns where the instance and caller are.
 func scriptEnv(selfHome, work string) []string {
 	if selfHome != "" {
 		cwd, _ := os.Getwd()
@@ -395,9 +392,6 @@ func feed(w io.WriteCloser, events []Event) {
 	}()
 }
 
-// runCommand runs a command and commits the events it printed. diag[0], when
-// given, receives its stderr; diag[1] receives the lines it printed that are
-// not events, as they arrive.
 func runCommand(home string, st *state, name string, args []string, via, by string, diag ...io.Writer) ([]Event, error) {
 	var input []byte
 	if c := st.cap(kindCommand, name); c != nil && c.Decl.Stdin {
@@ -462,8 +456,6 @@ func runCommandOnce(home string, st *state, name string, args []string, via, by 
 		line := strings.TrimSpace(raw)
 		p, ok := eventLine(line)
 		if !ok {
-			// A line that opens like an object was meant as an event and
-			// is not one; anything else is the command talking to its caller.
 			if strings.HasPrefix(line, "{") {
 				parseErr = fmt.Errorf("command %q printed a line that looks like an event and is not one (it needs a lowercase dotted name and a payload): %s", name, trunc(line, 120))
 				continue

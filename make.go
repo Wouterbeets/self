@@ -10,9 +10,6 @@ import (
 	"strings"
 )
 
-// cmdMake declares a capability and installs its script as one batch: the
-// same two wire messages a mind would pipe into `self hear`, assembled so that
-// leaving something behind costs one command and no JSON.
 func cmdMake(home string, args []string, script io.Reader, out io.Writer) error {
 	if len(args) == 0 {
 		if _, err := io.WriteString(out, protocolLayer("make")+"\n"); err != nil {

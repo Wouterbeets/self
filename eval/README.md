@@ -34,7 +34,32 @@ eval/score.py /tmp/runs                               # one row per variant and 
 Run from a copy of `eval/` if you mean to edit it while trials are running: the
 shell reads `run.sh` as it goes.
 
-`score.py` documents its columns. The ones that matter most:
+`run.sh <variant-dir> <model> <out-dir>`: `<variant-dir>` holds the `self`
+binary under test and `line.txt`, the line an install puts in the instruction
+file. `<out-dir>` receives the instance (`home/`), the project (`work/`), and
+per session a transcript (`s1..s3.jsonl`), what `self` printed on arrival
+(`arrive.s1..s3.txt`) and the log afterwards (`events.s1..s3.jsonl`).
+
+`score.py <runs-dir>` reads `<variant>/<model>/<rep>/` directories and prints
+one row per variant and model, each figure a count of trials out of those run:
+
+```
+  ran      the first session ran `self` at all
+  kept     the instance holds at least one event after the first session
+  made     it holds at least one installed capability after the first session
+  reused   the second session ran or read something the first one left
+  recalled the third session ran or read something an earlier one left
+  knew     the log already held the answer to the third session's second
+           question (why the print profile fails) before that session began
+  shown    that answer was in what `self` printed when the third session arrived
+  stopped  sessions the model's safety classifier ended early, of all sessions
+  refused  scripts the kernel refused, summed over the trials
+  caps     installed capabilities at the end, averaged
+  turns    agent turns in sessions two and three, averaged (work not redone)
+  cost     dollars per trial, all three sessions
+```
+
+The ones that matter most:
 
 - **made**: the instance holds an installed capability after session one.
 - **shown**: the answer to session three's second question is in what `self`

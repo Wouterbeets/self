@@ -1,15 +1,4 @@
 #!/bin/sh
-# One trial: a fresh instance, a fresh copy of the fixture project, and three
-# sessions of ordinary work in it. Nothing in the prompts mentions self; the
-# only invitation is one line in the project's CLAUDE.md, as on a new install.
-#
-#   eval/run.sh <variant-dir> <model> <out-dir>
-#
-# <variant-dir> holds the `self` binary under test and `line.txt`, the line an
-# install puts in the instruction file. <out-dir> receives the instance
-# (home/), the project (work/), and per session a transcript (s1..s3.jsonl),
-# what `self` printed on arrival (arrive.s1..s3.txt) and the log afterwards
-# (events.s1..s3.jsonl).
 set -eu
 
 variant=$(cd "$1" && pwd)
@@ -27,7 +16,6 @@ cp "$variant/line.txt" "$out/work/CLAUDE.md"
 session() {
 	n=$1
 	shift
-	# What a mind arriving now is shown, before it does anything.
 	SELF_HOME="$out/home" "$variant/self" >"$out/arrive.s$n.txt" 2>/dev/null || true
 	(
 		cd "$out/work"

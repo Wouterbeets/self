@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""Score trials written by eval/run.sh.
-
-    eval/score.py <runs-dir>
-
-<runs-dir> holds <variant>/<model>/<rep>/ directories. Prints one row per
-variant and model, each figure a count of trials out of the trials run:
-
-  ran      the first session ran `self` at all
-  kept     the instance holds at least one event after the first session
-  made     it holds at least one installed capability after the first session
-  reused   the second session ran or read something the first one left
-  recalled the third session ran or read something an earlier one left
-  knew     the log already held the answer to the third session's second
-           question (why the print profile fails) before that session began
-  shown    that answer was in what `self` printed when the third session arrived
-  stopped  sessions the model's safety classifier ended early, of all sessions
-  refused  scripts the kernel refused, summed over the trials
-  caps     installed capabilities at the end, averaged
-  turns    agent turns in sessions two and three, averaged (work not redone)
-  cost     dollars per trial, all three sessions
-"""
 import json
 import pathlib
 import re
@@ -67,7 +46,6 @@ def installed(events):
 
 
 def used(cmds, names):
-    """Did a session run or read a capability that already existed?"""
     for cmd in cmds:
         for _, name in USE.findall(cmd):
             if name in names:

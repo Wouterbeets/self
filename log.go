@@ -41,9 +41,6 @@ var eventName = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`)
 
 func validEventName(s string) bool { return eventName.MatchString(s) }
 
-// callerClaim is who says they are writing: SELF_CALLER verbatim, else the
-// harness's own name where it announces one, so an agent that never heard of
-// SELF_CALLER still signs what it makes.
 func callerClaim() string {
 	if c := os.Getenv("SELF_CALLER"); c != "" {
 		return c

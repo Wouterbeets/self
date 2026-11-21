@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// The suite runs inside whatever harness started it; a test that wants a
-// caller names one.
 func TestMain(m *testing.M) {
 	for _, k := range []string{"SELF_CALLER", "AI_AGENT", "CLAUDECODE"} {
 		os.Unsetenv(k)
@@ -25,8 +23,6 @@ func made(t *testing.T, h, script string, args ...string) string {
 	return out.String()
 }
 
-// One step leaves a working capability: declared, installed, and runnable,
-// with no JSON written by hand.
 func TestMakeDeclaresAndInstallsInOneStep(t *testing.T) {
 	h := home(t)
 	t.Setenv("SELF_CALLER", "tester")
@@ -51,8 +47,6 @@ func TestMakeDeclaresAndInstallsInOneStep(t *testing.T) {
 	}
 }
 
-// A command records by printing an event; a view made with --brief shows what
-// was recorded on every arrival.
 func TestMadeViewReadsWhatAMadeCommandRecords(t *testing.T) {
 	h := home(t)
 	made(t, h, "#!/bin/sh\ncat >/dev/null\necho kept\nprintf '{\"name\":\"fact.learned\",\"payload\":{\"text\":\"%s\"}}\\n' \"$*\"\n",
@@ -81,12 +75,10 @@ func TestMadeViewReadsWhatAMadeCommandRecords(t *testing.T) {
 
 func TestMakeForgivesAndExplains(t *testing.T) {
 	h := home(t)
-	// No shebang: it is a shell script.
 	made(t, h, "cat >/dev/null\necho plain\n", "command", "plain", "print a word")
 	if s := replayed(t, h).cap(kindCommand, "plain").Receipt.Script; !strings.HasPrefix(s, "#!/bin/sh\n") {
 		t.Fatalf("a script without a shebang was not made a shell script: %q", s)
 	}
-	// Making a name again replaces it.
 	made(t, h, "#!/bin/sh\ncat >/dev/null\necho second\n", "command", "plain", "print another word")
 	var shown bytes.Buffer
 	if err := dispatch(h, "run", []string{"plain"}, &shown); err != nil || shown.String() != "second\n" {
@@ -118,8 +110,6 @@ func TestMakeForgivesAndExplains(t *testing.T) {
 	}
 }
 
-// The brief says who made each capability and what it has recorded since, and
-// calls the caller's own work theirs.
 func TestBriefShowsWhoMadeWhat(t *testing.T) {
 	h := home(t)
 	t.Setenv("SELF_CALLER", "claude-code")
