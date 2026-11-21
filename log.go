@@ -41,7 +41,19 @@ var eventName = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`)
 
 func validEventName(s string) bool { return eventName.MatchString(s) }
 
-func callerClaim() string { return os.Getenv("SELF_CALLER") }
+func callerClaim() string {
+	if c := os.Getenv("SELF_CALLER"); c != "" {
+		return c
+	}
+	if a := os.Getenv("AI_AGENT"); a != "" {
+		name, _, _ := strings.Cut(a, "_")
+		return name
+	}
+	if os.Getenv("CLAUDECODE") != "" {
+		return "claude-code"
+	}
+	return ""
+}
 
 func newEvent(name string, payload json.RawMessage) Event {
 	b := make([]byte, 16)

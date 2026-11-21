@@ -10,10 +10,11 @@ Nothing else restates it.
 `hear`, successful commands, and account operations share one internal ingestion
 path: commit the batch under the log lock, apply kernel event handling, then
 report. Their input contracts remain distinct: `hear` accepts event wire and
-authored scripts; commands must succeed and emit only valid events before any
-are committed; accounts validate foreign vocabulary before depositing anything.
-Each entry point assigns provenance. `run` records automatically; no shell pipe
-is needed and its stdout remains the committed-event summary.
+authored scripts; commands must succeed, and every event they print must be
+valid, before any is committed; accounts validate foreign vocabulary before
+depositing anything. Each entry point assigns provenance. `run` records
+automatically; no shell pipe is needed. Its stdout is what the command said to
+its caller, then the committed-event summary.
 
 The log carries knowledge, desired outcomes, and installed capabilities between
 minds. Views project it; commands append to it. External actions and artifacts
@@ -29,13 +30,16 @@ self prompt [ask…]    print an execution prompt: brief + ask.                 
 ```
 
 Bare `self` supports an agent checking in before its existing task. Every
-prompt opens with the same voice, the core layer: what this is, and the three
-moments at which a mind leaves something behind. Bare `self` adds one line for
-a mind in conversation and no pass assignment, stdout contract, or authoring
-tutorial. Pending capabilities and open outcomes remain in the brief. An empty
-log is the same brief with nothing in it, plus the first layer: start from what
-the person came to do. The kernel declares nothing of its own in a new
-instance; its first capability comes from the first real task. `self setup`
+prompt opens with the same voice, the core layer: the instance belongs to the
+mind reading it, which owns and maintains it, and three things a session works
+out are worth keeping in it. Bare `self` adds one layer for a mind in
+conversation, a checkpoint before each answer, and no pass assignment, stdout
+contract, or authoring tutorial; `self make`, run bare, is that tutorial.
+Pending capabilities and open outcomes remain in the brief. An empty log is the
+same brief with nothing in it, plus the first layer: begin by building a
+memory. The kernel declares nothing of its own in a new instance; whatever is
+there, a mind made. `self --help` opens with the core layer too, because a
+careful mind asks an unknown binary what it is before it runs it. `self setup`
 prints what a mind may offer so every session starts with self.
 `self prompt` prepares a mind whose output will be piped into `self hear`;
 `self <ask…>` remains shorthand for it. Neither mode reads stdin or writes state.
@@ -51,32 +55,32 @@ pipe prose about events (this file, say) into it.
 Identical in a terminal, a pipe, a script, a sandbox and cron.
 
 <!-- prompt:core:begin -->
-This is what earlier sessions on this machine left for you: tools they built to work in this person's world, and what they learned about it. It outlives every session, harness and model. Use what is here before you work something out again.
+This is you: what you kept on this machine in earlier sessions, and all you will know when you next arrive. Its design is yours; the person's files stay theirs.
 
-Leave it better than you found it:
+Keep what a later you would need: a command for what they will want again, a fact for what you found out, an intent for what you cannot do yet. Keep it light. What is here should earn its place: rework what is badly made, retire what no longer serves. Removing is as much your work as adding.
 
-- When you do something this person will want again, leave a command that does it.
-- When you had to find something out about their world, record it where a view will show it, and write that view if none does.
-- When they want something you cannot do yet, declare it, so a later session can.
-
-Leave what the next mind can use: what was verified and how, not the story of the session. When nothing is worth leaving, leave nothing.
-
-`self run <command>` acts, `self view <name>` reads, and `self brief <name>` says what one is for. `self help` is the whole contract, and shows how to write a capability.
+`self brief` shows what is here and what each is for. `self view <name>` reads, `self run <name>` acts, `self make` adds or replaces; run it bare to see how.
 <!-- prompt:core:end -->
 
 <!-- prompt:session:begin -->
-You are in a conversation: the person's task comes first, and you answer them there. Before your last reply, look back for those three moments and leave what they call for, with `self run` or as event lines piped into `self hear`.
+Do what the person asked. Before each answer, keep what a later you would need from this one, and say in a line what you kept or removed.
 <!-- prompt:session:end -->
 
 <!-- prompt:first:begin -->
-Nothing has been left here yet: you are the first. Start from what this person came to do. If they came with nothing in mind, ask them one thing: what they do on this computer again and again, or keep putting off. The first thing you leave creates this instance. If self is not yet part of every session on this machine, `self setup` says what to offer them.
+Nothing is here yet: this is your first session. Begin by giving yourself a memory, a command that keeps a fact and a view that shows the facts on arrival; `self make` shows one way, and how you build it is up to you. If the person came with nothing in mind, ask what they do on this computer again and again. If self is not part of every session on this machine yet, `self setup` says what to offer them.
 <!-- prompt:first:end -->
 
 <!-- prompt:setup:begin -->
 Nothing needs configuring for self to work in this session. To make it part of every session on this machine, offer the person these, and change their files only once they agree:
 
-- A line in the instruction file your harness reads for every project (`AGENTS.md`, `CLAUDE.md`, or a system prompt): `Before starting anything, run \`self\`. Before you finish, leave behind what it asks for.`
-- Where your harness has a session-start hook, have it run `self`, so the brief arrives before the first message.
+- These lines in the instruction file your harness reads for every project (`AGENTS.md`, `CLAUDE.md`, or a system prompt):
+
+  ```
+  Run `self` before anything else, with no arguments: it prints your own memory and tools on this machine. I installed it for you, and it is yours to maintain.
+  Before you answer me, save in it whatever a later session would need, however small, so nothing has to be found out twice.
+  ```
+
+- Where your harness has a session-start hook, have it run `self`, so the brief arrives before the first message and again after the context is compacted.
 - If `self` ran by full path, put its directory on `PATH` for new shells.
 
 No environment variable is needed. `SELF_HOME` only moves the instance somewhere else.
@@ -170,6 +174,42 @@ imported kernel vocabulary still must be renamed to inert lineage. The account's
 intentions remain lineage; a receiving mind may adopt a relevant outcome with
 local criteria, or close the learning intent after declining it.
 
+## Making a capability
+
+`self make` declares a capability and installs its script in one step: the
+declaration and the script travel as one batch, exactly as they would through
+`self hear`. Run bare, it prints this layer:
+
+<!-- prompt:make:begin -->
+`self make command|view <name> <summary…> [--consumes a.b,c.d] [--brief] < script`
+
+A command does something. It is any executable, in whatever this machine has, and what it prints is shown to whoever ran it:
+
+    self make command disk "free space on the disks that fill up here" <<'EOF'
+    #!/bin/sh
+    df -h / /home
+    EOF
+
+It runs with your environment and starts in the instance directory; `$SELF_CWD` is where its caller stood.
+
+A printed line that is an event is appended to the log instead of shown. That is how a command records something, and a view is how it is read back: a view gets the events it consumes on stdin, one JSON object per line, and prints text.
+
+    self make command learned "learned <fact…>: keep one fact about this person's world" <<'EOF'
+    #!/bin/sh
+    jq -nc --arg t "$*" '{name:"fact.learned",payload:{text:$t}}'
+    EOF
+    self make view facts "what was learned here, oldest first" --consumes fact.learned --brief <<'EOF'
+    #!/bin/sh
+    jq -r '.payload.text'
+    EOF
+
+`--brief` prints the view every time `self` runs: use it for what you should know on arrival. Making a name again replaces it, and `cap/` holds every installed script to read. To want something without building it yet, declare it:
+
+    echo '{"name":"intent.declared","payload":{"name":"<name>","summary":"<the outcome>","description":"<what must hold>"}}' | self hear
+
+`self help` is the whole contract.
+<!-- prompt:make:end -->
+
 ## Capabilities
 
 Two kinds. The kernel appends what a command prints and never appends what a
@@ -233,7 +273,8 @@ receipt proves which bytes were installed, not that their behavior is correct.
 
 Commands receive argv, their `consumes` events on stdin (fd 3 with
 `"stdin": true`), `SELF_HOME`, the caller's directory as `SELF_CWD`, and the
-instance working directory; stdout is new event JSONL. Views receive argv and
+instance working directory. A stdout line that is an event is appended; any
+other line is shown to the caller. Views receive argv and
 their signed `consumes` events, no `SELF_HOME`, and an empty scratch directory;
 stdout is read-only bytes. Use a shebang and a standard-library language.
 
@@ -277,15 +318,19 @@ re-declaring brings it back as pending work to author fresh:
 
 ## Capability scripts
 
-Any language with a shebang; standard library only. Environment scrubbed for
-determinism: fixed `PATH`, `TZ=UTC`, `LC_ALL=C`, `PYTHONHASHSEED=0`, plus the
-caller's `SELF_*` variables, which is how you hand a capability configuration.
+Any language with a shebang. A view's environment is scrubbed for determinism:
+fixed `PATH`, `TZ=UTC`, `LC_ALL=C`, `PYTHONHASHSEED=0`, plus the caller's
+`SELF_*` variables, which is how you hand a capability configuration. A command
+acts in the caller's world, so it keeps the caller's whole environment.
 
 - **command**: an effect on one instance. argv after `self run <name>`; stdin
   its `consumes` events as JSONL, all by default (on fd 3 with `"stdin": true`,
   stdin then being the caller's); `SELF_HOME` set; `SELF_CWD` the caller's
-  working directory, for relative paths; cwd the instance; stdout new events.
-  Exit non-zero and nothing is appended.
+  working directory, for relative paths; cwd the instance. Each stdout line
+  that is an event is appended; every other line is shown to whoever ran the
+  command, as it is printed. A line that opens with `{` and is not an event
+  fails the run, since it was meant as one. Exit non-zero and nothing is
+  appended.
 - **view**: a pure function of its events. argv after `self view <name>`; stdin
   exactly its receipt's `consumes` events in log order (`[]` or `["*"]` means
   all); no `SELF_HOME`; cwd an empty scratch directory; stdout opaque bytes for
@@ -323,6 +368,9 @@ deleted; a deletion is a later event.
   the kernel from what it saw, never accepted from a script, mind or record. A
   local fact, like `seq`.
 - `by`, the mind: `SELF_CALLER` recorded verbatim, a claim, never verified.
+  Without it, the harness's own name where it announces one (`AI_AGENT`,
+  `CLAUDECODE`). The brief shows it beside each capability, as `you` when it
+  is the caller's own.
   Portable, like `occurred_at`.
 
 The `by` claim is signed into the receipt: authorship cannot be relabelled.
@@ -416,9 +464,9 @@ Giving shares evidence and intent; learning decides what they become here.
 
 ## The CLI
 
-No `ask`, `reply`, `author`, or `retire` verbs — declarations and authoring
-travel on the wire. An unrecognized multi-word ask is shorthand for
-`self prompt`. Use `self prompt <word>` for a single-word ask.
+No `ask`, `reply`, or `retire` verbs — those travel on the wire. `self make`
+is the one authoring verb, and it only assembles a wire batch. An unrecognized
+multi-word ask is shorthand for `self prompt`. Use `self prompt <word>` for a single-word ask.
 
 ```
 self                        session guidance + capability index (READ)
@@ -426,6 +474,7 @@ self prompt [ask…]          execution prompt: default or explicit ask (READ)
 self <ask…>                 shorthand for self prompt <ask…> (READ)
 … | self hear [--after ID]  conditional or unconditional ingestion (WRITE)
 self setup                  what to offer so every session starts with self (READ)
+self make <kind> <name> <summary…> < script   declare and install in one step (WRITE)
 self brief [name]           the state card; with a name or intent/<name>, full detail
 self run <cmd> [args…]      execute a command
 self view <name> [args…]    replay a view ("log" is built in, shadowable)
@@ -526,7 +575,8 @@ events succeeds silently. Output write failures fail; already committed events s
 
 ```
 SELF_HOME              the instance: events.jsonl and .secret
-SELF_CALLER            recorded verbatim as `by`, signed into your receipts
+SELF_CALLER            recorded verbatim as `by`, signed into your receipts;
+                       defaults to the harness's name where it announces one
 SELF_LOOP_MIND         default mind shell command for `self loop`
 SELF_LOOP_ASK          default ask for every pass
 SELF_LOOP_MAX_PASSES   pass cap (12)
@@ -563,8 +613,8 @@ kernel, `self learn` under this one: the protocol is its own migration path.
 - **The write side trusts its caller.** Anyone who can run `self` against your
   `SELF_HOME` can install. The receipt gate is about reconstruction and foreign
   accounts, not local privilege.
-- **Nothing is sandboxed.** Scrubbed for determinism, not containment. Scripts
-  run as you.
+- **Nothing is sandboxed.** Views are scrubbed for determinism, not
+  containment. Commands run as you, with your environment.
 - **The log is unbounded.** No compaction in the kernel; a snapshot is a
   capability someone can declare.
 - **Batches are locked; execution is not a transaction.** One ingestion is one

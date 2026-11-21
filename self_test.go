@@ -831,21 +831,22 @@ func TestViewGetsNoPathToTheInstance(t *testing.T) {
 	}
 }
 
-// A command, unlike a view, is an effect on this instance and is told which one,
-// and where its caller stands.
-func TestCommandGetsTheInstanceAndNothingElse(t *testing.T) {
+// A command, unlike a view, is an effect in the caller's world: it keeps the
+// caller's environment, and is told which instance it serves and where its
+// caller stands.
+func TestCommandGetsTheInstanceAndTheCallersEnvironment(t *testing.T) {
 	h := home(t)
-	t.Setenv("SNEAKY", "leaked")
+	t.Setenv("PASSED", "on")
 	t.Setenv("SELF_CWD", "/forged")
 	body := line(t, "command.declared", decl{Name: "env", Description: "x"}) +
 		line(t, "script.authored", authored{Type: "command", Name: "env",
-			Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"env.seen\",\"payload\":{\"home\":\"%s\",\"cwd\":\"%s\",\"sneaky\":\"%s\",\"caller\":\"%s\"}}\\n' \"$SELF_HOME\" \"$(pwd)\" \"${SNEAKY:-}\" \"$SELF_CWD\"\n"})
+			Script: "#!/bin/sh\ncat >/dev/null\nprintf '{\"name\":\"env.seen\",\"payload\":{\"home\":\"%s\",\"cwd\":\"%s\",\"passed\":\"%s\",\"caller\":\"%s\"}}\\n' \"$SELF_HOME\" \"$(pwd)\" \"${PASSED:-}\" \"$SELF_CWD\"\n"})
 	heard(t, h, body)
 	evs, err := runCommand(h, replayed(t, h), "env", nil, doorCLI, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var p struct{ Home, Cwd, Sneaky, Caller string }
+	var p struct{ Home, Cwd, Passed, Caller string }
 	json.Unmarshal(evs[0].Payload, &p)
 	// macOS reports $(pwd) through /private, so judge the cwd resolved.
 	cwd, _ := filepath.EvalSymlinks(p.Cwd)
@@ -853,8 +854,8 @@ func TestCommandGetsTheInstanceAndNothingElse(t *testing.T) {
 	if p.Home != h || cwd != want {
 		t.Fatalf("a command was not told its instance: home=%q cwd=%q want %q", p.Home, p.Cwd, h)
 	}
-	if p.Sneaky != "" {
-		t.Fatalf("the caller's environment leaked into a command: %q", p.Sneaky)
+	if p.Passed != "on" {
+		t.Fatalf("a command lost its caller's environment: %q", p.Passed)
 	}
 	if wd, _ := os.Getwd(); p.Caller != wd {
 		t.Fatalf("SELF_CWD = %q, want the caller's %q", p.Caller, wd)
@@ -1309,13 +1310,13 @@ func TestAccountEdgesAreRefused(t *testing.T) {
 }
 
 func TestExecutionPromptCarriesTheDietNotTheProtocol(t *testing.T) {
-	for _, layer := range []string{"core", "session", "first", "setup", "execution", "intent", "growth", "loop"} {
+	for _, layer := range []string{"core", "session", "first", "setup", "make", "execution", "intent", "growth", "loop"} {
 		if protocolLayer(layer) == "" {
 			t.Fatalf("PROTOCOL.md lost prompt layer %q", layer)
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"what earlier sessions on this machine left for you", "leave a command that does it", "write that view if none does", "declare it, so a later session can", "not the story of the session", "event JSONL or silence", "Nothing else you say is kept", "intent.declared", "self help"} {
+	for _, want := range []string{"This is you", "Its design is yours", "a command for what they will want again", "a fact for what you found out", "an intent for what you cannot do yet", "Removing is as much your work as adding", "event JSONL or silence", "Nothing else you say is kept", "intent.declared"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}
@@ -1384,7 +1385,7 @@ func TestBriefOnAnEmptyInstance(t *testing.T) {
 	if len(b) > 2500 {
 		t.Fatalf("the empty brief is %d bytes", len(b))
 	}
-	for _, want := range []string{"log: 0 events", "nothing yet: you are the first here", "SELF_CALLER"} {
+	for _, want := range []string{"log: 0 events", "nothing yet: the first one is yours to make", "SELF_CALLER"} {
 		if !strings.Contains(b, want) {
 			t.Fatalf("the empty brief is missing %q:\n%s", want, b)
 		}
@@ -1425,7 +1426,7 @@ func TestBareSelfSeparatesSessionFromExecution(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := session.String()
-		for _, want := range []string{protocolLayer("core"), protocolLayer("session"), "self view", "self hear"} {
+		for _, want := range []string{protocolLayer("core"), protocolLayer("session"), "self view", "self make"} {
 			if !strings.Contains(p, want) {
 				t.Fatalf("session missing %q:\n%s", want, p)
 			}

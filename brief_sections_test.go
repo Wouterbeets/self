@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -120,16 +121,29 @@ func TestBriefSectionsReachPromptsNotTheCard(t *testing.T) {
 	}
 }
 
-// Bare self names its capabilities; `self brief` keeps what each is for.
+// Bare self says what each capability is for while there are few enough to
+// read; past that it names them, and `self brief` keeps what each is for.
 func TestBareSelfNamesCapabilitiesTersely(t *testing.T) {
 	h := home(t)
 	heard(t, h, line(t, "command.declared", decl{Name: "entry", Summary: "append a journal entry", Description: "x"}))
+	var few bytes.Buffer
+	if err := dispatch(h, "", nil, &few); err != nil {
+		t.Fatal(err)
+	}
+	if p := few.String(); !strings.Contains(p, "append a journal entry") {
+		t.Fatalf("bare self should say what a few capabilities are for:\n%s", p)
+	}
+	var many string
+	for i := range listedInSession {
+		many += line(t, "command.declared", decl{Name: fmt.Sprintf("filler%d", i), Description: "x"})
+	}
+	heard(t, h, many)
 	var out bytes.Buffer
 	if err := dispatch(h, "", nil, &out); err != nil {
 		t.Fatal(err)
 	}
-	if p := out.String(); !strings.Contains(p, "entry (pending)") || strings.Contains(p, "append a journal entry") {
-		t.Fatalf("bare self should list names only:\n%s", p)
+	if p := out.String(); !strings.Contains(p, "commands, 0 views: `self brief`") || strings.Contains(p, "append a journal entry") || strings.Contains(p, "filler3") {
+		t.Fatalf("bare self should count capabilities, not list them:\n%s", p)
 	}
 	if !strings.Contains(brief(h, replayed(t, h)), "append a journal entry") {
 		t.Fatal("`self brief` lost the summaries")
