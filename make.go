@@ -15,8 +15,10 @@ import (
 // leaving something behind costs one command and no JSON.
 func cmdMake(home string, args []string, script io.Reader, out io.Writer) error {
 	if len(args) == 0 {
-		_, err := io.WriteString(out, protocolLayer("make")+"\n")
-		return err
+		if _, err := io.WriteString(out, protocolLayer("make")+"\n"); err != nil {
+			return fmt.Errorf("print make examples: %w", err)
+		}
+		return nil
 	}
 	const usage = "usage: self make command|view <name> <summary…> [--consumes a.b,c.d] [--brief] < script — bare `self make` shows worked examples"
 	if len(args) < 2 || (args[0] != kindCommand && args[0] != kindView) {
@@ -60,7 +62,7 @@ func cmdMake(home string, args []string, script io.Reader, out io.Writer) error 
 	}
 	body, err := io.ReadAll(script)
 	if err != nil {
-		return err
+		return fmt.Errorf("read the script from stdin: %w", err)
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
 		return fmt.Errorf("no script arrived on stdin\n%s", usage)
@@ -71,15 +73,17 @@ func cmdMake(home string, args []string, script io.Reader, out io.Writer) error 
 
 	payload, err := json.Marshal(d)
 	if err != nil {
-		return err
+		return fmt.Errorf("encode the %s declaration: %w", typ, err)
 	}
 	by := callerClaim()
 	e := newEvent(typ+".declared", payload)
 	e.Via, e.By = doorCLI, by
 	if err := ingest(home, []Event{e}, []authored{{Type: typ, Name: name, Script: string(body)}}, nil, by, io.Discard); err != nil {
-		return err
+		return fmt.Errorf("make %s/%s: %w", typ, name, err)
 	}
 	verb := map[string]string{kindCommand: "run", kindView: "view"}[typ]
-	_, err = fmt.Fprintf(out, "made %s/%s — try it now: `self %s %s`. Every later session finds it in the brief.\n", typ, name, verb, name)
-	return err
+	if _, err := fmt.Fprintf(out, "made %s/%s — try it now: `self %s %s`. Every later session finds it in the brief.\n", typ, name, verb, name); err != nil {
+		return fmt.Errorf("report what was made: %w", err)
+	}
+	return nil
 }
