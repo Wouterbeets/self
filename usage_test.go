@@ -92,3 +92,18 @@ func TestKeptOnPurposeIsNotUntouched(t *testing.T) {
 		t.Fatalf("a keep older than 30 days still shielded it: %v", u)
 	}
 }
+
+func TestAKeptIntentIsNotStale(t *testing.T) {
+	h := home(t)
+	heard(t, h, line(t, "intent.declared", intentItem{Name: "x/long", Description: "Something long."}))
+	heard(t, h, line(t, "intent.kept", map[string]string{"name": "x/long", "reason": "waiting on a real deploy"}))
+	st := replayed(t, h)
+	st.Events[len(st.Events)-2].OccurredAt = time.Now().Add(-2 * untouchedAfter)
+	if w := wantedLine(st); strings.Contains(w, "over 30 days") {
+		t.Fatalf("a kept intent read as stale: %q", w)
+	}
+	st.Events[len(st.Events)-1].OccurredAt = time.Now().Add(-2 * untouchedAfter)
+	if w := wantedLine(st); !strings.Contains(w, "1 open over 30 days") {
+		t.Fatalf("a keep older than 30 days still shielded it: %q", w)
+	}
+}

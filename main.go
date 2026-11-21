@@ -251,10 +251,23 @@ func wantedLine(st *state) string {
 		return ""
 	}
 	line := fmt.Sprintf("%d wanted (`self brief intent/`)", len(open))
+	kept := map[string]time.Time{}
+	for i := range st.Events {
+		if e := &st.Events[i]; e.Name == "intent.kept" {
+			var k struct{ Name string }
+			if json.Unmarshal(e.Payload, &k) == nil && e.OccurredAt.After(kept[k.Name]) {
+				kept[k.Name] = e.OccurredAt
+			}
+		}
+	}
 	var oldest *intentItem
 	stale := 0
 	for _, w := range open {
-		if at := eventAt(st, w.Seq); !at.IsZero() && time.Since(at) >= untouchedAfter {
+		at := eventAt(st, w.Seq)
+		if k := kept[w.Name]; k.After(at) {
+			at = k
+		}
+		if !at.IsZero() && time.Since(at) >= untouchedAfter {
 			stale++
 			if oldest == nil || w.Seq < oldest.Seq {
 				oldest = w
@@ -262,7 +275,7 @@ func wantedLine(st *state) string {
 		}
 	}
 	if stale > 0 {
-		line += fmt.Sprintf("; %d open over 30 days, oldest intent/%s. Pursue or close them", stale, oldest.Name)
+		line += fmt.Sprintf("; %d open over 30 days, oldest intent/%s. Pursue, close, or keep one with an intent.kept event and its reason", stale, oldest.Name)
 	}
 	return line + ".\n"
 }

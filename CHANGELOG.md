@@ -30,7 +30,8 @@ Bare `self` lists a line per capability with its summary while the instance
 holds 12 or fewer. Beyond that it counts them and names only the commands used
 lately, the commands untouched for 30 days (to rework, retire, or keep on
 purpose with a `capability.kept` event and its reason), and how many intents
-have been open over 30 days, with the oldest. Running a command stamps its use
+have been open over 30 days, with the oldest (to pursue, close, or keep with an
+`intent.kept` event and its reason). Running a command stamps its use
 under `used/`, outside the log; views stay pure reads and are not stamped. The
 `where` section moved out of bare `self` into `self brief`.
 
