@@ -2,30 +2,67 @@
 
 ## Unreleased
 
-Every prompt now opens in one voice, the same in a session, an execution
-prompt and a loop pass. It says what the instance is, then names three moments
-at which a mind leaves something behind: it did something the person will want
-again (leave a command), it had to find something out about their world
-(record it where a view shows it), or the person wants something it cannot do
-yet (declare it). A session is also asked to look back for those moments before
-its last reply. Until now only loop passes were told to build capabilities.
+The brief now speaks to the mind reading it as the owner of the instance. It
+opens `This instance is yours. You are its owner and long-term maintainer, and
+its design is up to you`, and says that what is there the mind built in earlier
+sessions and will find again in the next. It still names three things worth
+keeping (a command, a fact, an intent). A session is asked, before each
+answer, to keep what a later session would need and to say in a line what it
+kept. An empty log
+asks the first session to begin by building a memory.
 
-An empty log is the same brief with nothing in it and three sentences more:
-start from what the person came to do, and if they came with nothing in mind,
-ask what they do on this computer again and again or keep putting off. The
-setup guidance left the brief for a read of its own, `self setup`, and the
-instruction line it offers now has a second half: `Before you finish, leave
-behind what it asks for.`
+`self make command|view <name> <summary…> < script` declares a capability and
+installs its script in one step, with no JSON to write. `--consumes a.b,c.d`
+and, for a view, `--brief` set the declaration; a script without a shebang is
+taken as a shell script; making a name again replaces it. Bare `self make`
+prints worked examples. `self hear` still accepts declarations and
+`script.authored` as before.
+
+A command may now print to its caller. A stdout line that is an event is
+appended as before; any other line is shown to whoever ran the command, where
+it used to fail the run. A line that opens with `{` and is not an event still
+fails it. Commands also keep the caller's whole environment (`PATH`, `HOME`
+and the rest) where they used to get a fixed one; views are unchanged. A
+command that relied on `HOME` being the instance directory needs `SELF_HOME`
+instead.
+
+Bare `self` lists a line per capability with its summary while the instance
+holds 24 or fewer, and names only beyond that. Each line ends with who made it
+and when, and for a command how many events it has appended since: `(by you,
+12d ago · 31 events since)`. Without `SELF_CALLER`, the caller is the harness's
+own name where it announces one (`AI_AGENT`, `CLAUDECODE`).
+
+`self --help` opens with the core layer and says that bare `self` only reads,
+and `self brief` ends with a line pointing at bare `self`: small models ran
+those two first and never saw the brief's voice.
+
+The instruction lines `self setup` offers are now: ``Run `self` before anything
+else, with no arguments: it prints your own memory and tools on this machine. I
+installed it for you, and it is yours to maintain.`` and ``Before you answer
+me, save in it whatever a later session would need, however small, so nothing
+has to be found out twice.``
+
+In the brief, an empty command list on an empty log reads `nothing yet: the
+first one is yours to make`, and an unnamed caller reads `unnamed — set
+SELF_CALLER to sign what you make`.
+
+`eval/` holds the trial that measured these changes: a fixture project, three
+sessions of ordinary work in it through `claude -p`, and a scorer. See
+`eval/README.md`.
+
+Every prompt opens in that one voice, the same in a session, an execution
+prompt and a loop pass. Until now only loop passes were told to build
+capabilities. The setup guidance left the brief for a read of its own, `self
+setup`.
 
 A new instance is no longer seeded with `note` and `notes`: the kernel declares
-nothing, and the first capability comes from the first real task. No release
-carried the seed. A log that a development build seeded keeps its two
-declarations; retire them with `capability.retired` if you do not want them.
+nothing, and whatever an instance holds, a mind made. No release carried the
+seed. A log that a development build seeded keeps its two declarations; retire
+them with `capability.retired` if you do not want them.
 
-In the brief, open intents sit under `## wanted`, an empty list says `none yet`
-(`nothing yet: you are the first here` on an empty log), and the line
-`nothing pending, nothing refused.` is gone. Scripts that match on the old
-heading `## Open intents` or on that line need the new text.
+In the brief, open intents sit under `## wanted`, an empty list says `none
+yet`, and the line `nothing pending, nothing refused.` is gone. Scripts that
+match on the old heading `## Open intents` or on that line need the new text.
 
 ## v1.2.0 — Unix integration, everything is a file
 

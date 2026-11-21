@@ -55,7 +55,7 @@ func TestSetupIsAReadOutsideTheBrief(t *testing.T) {
 	if err := dispatch(h, "setup", nil, &page); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"AGENTS.md", "Before you finish, leave behind what it asks for.", "only once they agree"} {
+	for _, want := range []string{"AGENTS.md", "Run `self` before anything else", "only once they agree"} {
 		if !strings.Contains(page.String(), want) {
 			t.Fatalf("self setup lacks %q:\n%s", want, page.String())
 		}

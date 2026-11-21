@@ -33,17 +33,19 @@ your harness reads, and a session-start hook where the harness has one. The
 agent asks before it changes your files.
 
 From then on, work as usual. The agent reads a short brief and does your task.
-The brief asks it to leave something behind at three moments. When it does
-something you will want again, it leaves a command that does it. When it had to
-find something out about your world, it records that where a view shows it.
-When you want something it cannot do yet, it declares it for a later session.
+The brief tells it the instance is its own: it built what is there, it will be
+the one to find it next time, and the design is up to it. It asks the agent to
+keep three things as it works. How to do something you will want again becomes
+a command. Something it found out about your world becomes a fact a view
+shows. Something you want that it cannot do yet becomes a declared intent.
 Every later session, in any agent, finds all of it in the brief.
 
-Prefer to do it by hand? It is one line in `AGENTS.md`, `CLAUDE.md`, or your
+Prefer to do it by hand? It is two lines in `AGENTS.md`, `CLAUDE.md`, or your
 system prompt:
 
 ```md
-Before starting anything, run `self`. Before you finish, leave behind what it asks for.
+Run `self` before anything else, with no arguments: it prints your own memory and tools on this machine. I installed it for you, and it is yours to maintain.
+Before you answer me, save in it whatever a later session would need, however small, so nothing has to be found out twice.
 ```
 
 and, to get the brief before the first message, a session hook. For Claude
@@ -66,16 +68,17 @@ head: 5e72fd393ba37b23ef6edccd77bcd65d
 
 ## commands — `self run <name> [args…]`
 
-entry
+- entry — append one journal entry  (by you, 12d ago · 3 events since)
 
 ## views — `self view <name> [args…]`
 
-journal · log
+- journal — every entry, newest first  (by opencode, 12d ago)
+- log — the last 10 events; `--all` for every one (built in, shadowable)
 ```
 
-Neither `entry` nor `journal` ships with self. A mind wrote both from a
-one-page [lesson](lessons/journal/intent.md), the kernel signed them into the
-log, and now any agent in any harness can use them:
+Neither `entry` nor `journal` ships with self. A mind wrote both, the kernel
+signed them into the log, and now any agent in any harness can use them. Each
+line says who made it and what it has recorded since:
 
 ```sh
 self run entry staging database resets every Monday
@@ -86,8 +89,19 @@ self view journal
 2026-11-10T13:52:47.994022648Z  staging database resets every Monday
 ```
 
-A new instance starts with nothing in it. Its first capability comes from the
-first real thing you ask for, written in whatever the machine has.
+A new instance starts with nothing in it. The first session is asked to build
+itself a memory, and after that capabilities come from what you ask for,
+written in whatever the machine has. Leaving one is a single command:
+
+```sh
+self make command disk "free space on the disks that fill up here" <<'EOF'
+#!/bin/sh
+df -h / /home
+EOF
+```
+
+What a command prints goes to whoever ran it; a line it prints that is an
+event goes into the log. `self make`, with nothing after it, shows the rest.
 
 The brief lists names, not history, so it stays short however long the log
 gets. An agent reads the views it needs and leaves the rest.
@@ -165,7 +179,8 @@ Everything is one append-only log, `events.jsonl`. Reads (`self`, `view`,
 ```sh
 self                      # reconnect: identity, capabilities, open intents
 self view <name>          # a compressed read; appends nothing
-self run <command>        # act; what it prints is appended
+self run <command>        # act; the events it prints are appended
+self make <kind> <name> … # declare and install a capability from a script
 self brief <name>         # one capability or intent in full
 self hear < batch.jsonl   # append events or authored scripts
 ```
@@ -254,7 +269,8 @@ The full contract is [PROTOCOL.md](PROTOCOL.md), which `self help` prints.
 - Piping a mind's output into `self hear` signs whatever it authored. There is
   no review step; hold the output in a file first if you want a pause.
 - Anyone who can run `self` against your `SELF_HOME` can install capabilities.
-- Nothing is sandboxed and capability scripts are not timed out. They run as you.
+- Nothing is sandboxed and capability scripts are not timed out. They run as
+  you, and commands run with your environment.
 - The log is unbounded; the kernel does not compact it.
 - Batches are locked, but a command is not a transaction: external effects are
   not rolled back.

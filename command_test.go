@@ -13,15 +13,18 @@ func TestCommandOutputIsAnAtomicEventBatch(t *testing.T) {
 	for _, tc := range []struct {
 		name, output, exit string
 		ok                 bool
+		events             int
 	}{
-		{"valid", `{"name":"note.added","payload":{"text":"hello"},"via":"forged","by":"forged","seq":999}`, "0", true},
-		{"null", `{"name":"note.added","payload":null}`, "0", true},
-		{"missing payload", `{"name":"note.added"}`, "0", false},
-		{"invalid name", `{"name":"note","payload":{}}`, "0", false},
-		{"prose", `not an event`, "0", false},
-		{"quoted JSON", "`{\"name\":\"note.added\",\"payload\":{}}`", "0", false},
-		{"authored script", `{"name":"script.authored","payload":{}}`, "0", false},
-		{"failed producer", `{"name":"note.added","payload":{}}`, "7", false},
+		{"valid", `{"name":"note.added","payload":{"text":"hello"},"via":"forged","by":"forged","seq":999}`, "0", true, 2},
+		{"null", `{"name":"note.added","payload":null}`, "0", true, 2},
+		{"missing payload", `{"name":"note.added"}`, "0", false, 0},
+		{"invalid name", `{"name":"note","payload":{}}`, "0", false, 0},
+		{"unfinished object", `{"name":"note.added","payload":`, "0", false, 0},
+		// What is not an event is the command talking to its caller.
+		{"prose", `not an event`, "0", true, 1},
+		{"quoted JSON", "`{\"name\":\"note.added\",\"payload\":{}}`", "0", true, 1},
+		{"authored script", `{"name":"script.authored","payload":{}}`, "0", false, 0},
+		{"failed producer", `{"name":"note.added","payload":{}}`, "7", false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := home(t)
@@ -50,8 +53,8 @@ func TestCommandOutputIsAnAtomicEventBatch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(events) != 2 {
-				t.Fatalf("got %d events", len(events))
+			if len(events) != tc.events {
+				t.Fatalf("got %d events, want %d", len(events), tc.events)
 			}
 			for _, e := range events {
 				if e.Via != doorCLI || e.By != "test-caller" || e.Seq == 999 {
@@ -179,7 +182,7 @@ func TestCommandRetirementUsesSharedIngestion(t *testing.T) {
 	}{
 		{"success", "", true},
 		{"failed producer", "exit 7\n", false},
-		{"malformed suffix", "printf 'not an event\\n'\n", false},
+		{"malformed suffix", "printf '{\"name\":\"broken\"\\n'\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := home(t)
