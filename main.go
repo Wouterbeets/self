@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -19,6 +20,7 @@ const cliUsage = `self — local-first event-sourced runtime
 Usage:
   self                        reconnect with your persistent self for the current task
   self setup                  print what to offer so every session starts with self
+  self make <kind> <name> <summary...> < script   declare and install a capability in one step
   self prompt [ask...]         print a prompt for an event-producing mind
   self <ask...>                shorthand for self prompt <ask...>
   self hear [--after <head>]     ingest event JSONL or authored scripts from stdin
@@ -72,6 +74,9 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		_, err := io.WriteString(out, protocolLayer("setup")+"\n")
 		return err
 
+	case "make":
+		return cmdMake(home, args, os.Stdin, out)
+
 	case "prompt":
 		return cmdSituate(home, strings.Join(args, " "), out)
 
@@ -96,7 +101,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		page := brief(home, st)
+		page := brief(home, st) + "\n`self` with no arguments says what this instance is for and what to keep in it.\n"
 		if len(args) > 0 {
 			if page, err = briefOne(st, args[0]); err != nil {
 				return err
@@ -127,7 +132,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			page, err = runViewDiag(home, st, name, said, rest...)
 		} else {
 			var evs []Event
-			evs, err = runCommand(home, st, name, rest, doorCLI+":"+name, callerClaim(), said)
+			evs, err = runCommand(home, st, name, rest, doorCLI+":"+name, callerClaim(), said, out)
 			for _, e := range evs {
 				page = fmt.Appendf(page, "%d\t%s\t%s\n", e.Seq, e.Name, trunc(compact(e.Payload), 160))
 			}
@@ -175,7 +180,10 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return cmdComplete(home, args, out)
 
 	case "-h", "--help":
-		_, err := io.WriteString(out, cliUsage+"\n")
+		// A careful mind asks an unknown binary what it is before running it,
+		// so this door says so, and says the way in is safe.
+		_, err := io.WriteString(out, protocolLayer("core")+"\n\n"+
+			"Run `self` with no arguments to arrive: it only reads, and prints this with everything the instance holds.\n\n"+cliUsage+"\n")
 		return err
 
 	case "help":
@@ -207,7 +215,7 @@ func briefWith(home string, st *state, terse bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# self — %s\n\n", home)
 
-	caller := cmp.Or(callerClaim(), `unset — export SELF_CALLER="<who you are>" so your writes are attributable`)
+	caller := cmp.Or(callerClaim(), `unnamed — set SELF_CALLER to sign what you make`)
 	fmt.Fprintf(&b, "log: %d events    caller: %s\n", len(st.Events), caller)
 	fmt.Fprintf(&b, "head: %s\n", head(st.Events))
 	if !terse && anyClipped(st) {
@@ -219,7 +227,7 @@ func briefWith(home string, st *state, terse bool) string {
 
 	fmt.Fprintf(&b, "\n## commands — `self run <name> [args…]`\n\n%s\n## views — `self view <name> [args…]`\n\n%s",
 		list(st, kindCommand), list(st, kindView))
-	if terse && len(st.Caps) > 0 {
+	if terse && len(st.Caps) > listedInSession {
 		b.WriteString("\n`self brief` says what each is for; `self brief <name>` one in full.\n")
 	}
 
@@ -239,7 +247,7 @@ func briefWith(home string, st *state, terse bool) string {
 	b.WriteString(intentBrief(st))
 
 	b.WriteString("\n## where\n\n" +
-		"`events.jsonl` the log, authoritative · `cap/` installed scripts, derived · `.secret` the signing key\n" +
+		"`events.jsonl` the log, authoritative · `cap/` installed scripts, to read · `.secret` the signing key\n" +
 		"`self view log` what happened lately\n")
 	return b.String()
 }
@@ -339,7 +347,7 @@ func capabilityList(st *state, typ string) string {
 	var b strings.Builder
 	caps := st.list(typ)
 	for _, c := range caps {
-		fmt.Fprintf(&b, "- %s — %s%s\n", c.Name, c.Decl.summary(), pendingMark(c))
+		fmt.Fprintf(&b, "- %s — %s%s%s\n", c.Name, c.Decl.summary(), provenance(st, c), pendingMark(c))
 	}
 	if typ == kindView && st.cap(kindView, "log") == nil {
 		fmt.Fprintf(&b, "- log — the last %d events; `--all` for every one (built in, shadowable)\n", builtinLogTail)
@@ -350,7 +358,14 @@ func capabilityList(st *state, typ string) string {
 	return b.String()
 }
 
+// listedInSession is how many capabilities bare `self` still lists a line
+// each, with what they are for and who made them; past it, names only.
+const listedInSession = 24
+
 func capabilityNames(st *state, typ string) string {
+	if len(st.Caps) <= listedInSession {
+		return capabilityList(st, typ)
+	}
 	var names []string
 	for _, c := range st.list(typ) {
 		names = append(names, c.Name+pendingFlag(c))
@@ -367,9 +382,51 @@ func capabilityNames(st *state, typ string) string {
 // noneYet fills an empty list. An empty log reads as an opening, not a fault.
 func noneYet(st *state) string {
 	if len(st.Events) == 0 {
-		return "nothing yet: you are the first here\n"
+		return "nothing yet: the first one is yours to make\n"
 	}
 	return "none yet\n"
+}
+
+// provenance says who made a capability, how long ago, and what it has put in
+// the log since: the evidence that what a mind leaves here is found and used.
+func provenance(st *state, c *capability) string {
+	if c.Receipt == nil {
+		return ""
+	}
+	who := c.Receipt.By
+	if who != "" && who == callerClaim() {
+		who = "you"
+	}
+	parts := []string{ago(time.Since(c.RcptAt))}
+	if who != "" {
+		parts[0] = "by " + who + ", " + parts[0]
+	}
+	if c.Type == kindCommand {
+		n, via := 0, doorCLI+":"+c.Name
+		for i := range st.Events {
+			if st.Events[i].Via == via {
+				n++
+			}
+		}
+		if n == 1 {
+			parts = append(parts, "1 event since")
+		} else if n > 1 {
+			parts = append(parts, fmt.Sprintf("%d events since", n))
+		}
+	}
+	return "  (" + strings.Join(parts, " · ") + ")"
+}
+
+func ago(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
 func pendingFlag(c *capability) string {

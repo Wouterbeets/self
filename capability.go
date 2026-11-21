@@ -59,6 +59,7 @@ type capability struct {
 	DeclSeq int
 	Receipt *receipt
 	RcptSeq int
+	RcptAt  time.Time
 	Reject  *rejection
 }
 
@@ -138,7 +139,7 @@ func (st *state) apply(events []Event) {
 				continue
 			}
 			c := live(r.Type, r.Name)
-			c.Receipt, c.RcptSeq = &r, e.Seq
+			c.Receipt, c.RcptSeq, c.RcptAt = &r, e.Seq, e.OccurredAt
 			delete(rejects, r.Type+"/"+r.Name)
 			for k, rej := range rejects {
 				if !validCapability(rej.Type, rej.Name) {
@@ -353,17 +354,26 @@ func prune(root string, keep map[string]bool) (removed int, err error) {
 	return removed, err
 }
 
+// scriptEnv is what a script runs in. A view is a pure function of its events,
+// so its environment is fixed; a command acts in the caller's world, so it
+// keeps the caller's environment and learns where the instance and caller are.
 func scriptEnv(selfHome, work string) []string {
+	if selfHome != "" {
+		cwd, _ := os.Getwd()
+		env := []string{"SELF_HOME=" + selfHome, "SELF_CWD=" + cwd}
+		for _, kv := range os.Environ() {
+			if k, _, ok := strings.Cut(kv, "="); ok && k != "SELF_HOME" && k != "SELF_CWD" {
+				env = append(env, kv)
+			}
+		}
+		return env
+	}
 	env := []string{
 		"HOME=" + work,
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"TZ=UTC",
 		"LC_ALL=C",
 		"PYTHONHASHSEED=0", // otherwise set iteration is per-process random
-	}
-	if selfHome != "" {
-		cwd, _ := os.Getwd()
-		env = append(env, "SELF_HOME="+selfHome, "SELF_CWD="+cwd)
 	}
 	for _, kv := range os.Environ() {
 		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "SELF_") && k != "SELF_HOME" && k != "SELF_CWD" {
@@ -385,6 +395,9 @@ func feed(w io.WriteCloser, events []Event) {
 	}()
 }
 
+// runCommand runs a command and commits the events it printed. diag[0], when
+// given, receives its stderr; diag[1] receives the lines it printed that are
+// not events, as they arrive.
 func runCommand(home string, st *state, name string, args []string, via, by string, diag ...io.Writer) ([]Event, error) {
 	var input []byte
 	if c := st.cap(kindCommand, name); c != nil && c.Decl.Stdin {
@@ -411,9 +424,12 @@ func runCommandOnce(home string, st *state, name string, args []string, via, by 
 	}
 	c := st.cap(kindCommand, name)
 	events := consumed(st.Events, c.Receipt.Consumes)
-	stderr := io.Writer(os.Stderr)
+	stderr, shown := io.Writer(os.Stderr), io.Discard
 	if len(diag) > 0 && diag[0] != nil {
 		stderr = diag[0]
+	}
+	if len(diag) > 1 && diag[1] != nil {
+		shown = diag[1]
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Env, cmd.Dir, cmd.Stderr = scriptEnv(home, home), home, stderr
@@ -442,13 +458,17 @@ func runCommandOnce(home string, st *state, name string, args []string, via, by 
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1024*1024), lineLimit)
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
+		raw := sc.Text()
+		line := strings.TrimSpace(raw)
 		p, ok := eventLine(line)
 		if !ok {
-			parseErr = fmt.Errorf("command %q printed a line that is not an event: %s", name, trunc(line, 120))
+			// A line that opens like an object was meant as an event and
+			// is not one; anything else is the command talking to its caller.
+			if strings.HasPrefix(line, "{") {
+				parseErr = fmt.Errorf("command %q printed a line that looks like an event and is not one (it needs a lowercase dotted name and a payload): %s", name, trunc(line, 120))
+				continue
+			}
+			fmt.Fprintln(shown, raw)
 			continue
 		}
 		e := newEvent(p.Name, p.Payload)
