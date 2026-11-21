@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.3.0 — this is you, and it travels light
 
 The brief now speaks to the mind reading it as the instance itself: `This is
 you: what you kept on this machine in earlier sessions, and all you will know
