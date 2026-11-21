@@ -141,6 +141,9 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			io.WriteString(os.Stderr, unfoldFailed(st, typ, name, said.n == 0))
 			return err
 		}
+		if verb == "run" {
+			stampUse(home, typ, name)
+		}
 		_, err = out.Write(page)
 		return err
 
@@ -205,7 +208,64 @@ func brief(home string, st *state) string { return briefWith(home, st, false) }
 // sessionBrief is what bare `self` shows a mind already busy with a task: the
 // capabilities by name only, leaving room for the brief sections. `self brief`
 // and execution prompts keep the summaries.
-func sessionBrief(home string, st *state) string { return briefWith(home, st, true) }
+func sessionBrief(home string, st *state) string {
+	if len(st.Caps) <= listedInSession {
+		return briefWith(home, st, true)
+	}
+	var b strings.Builder
+	caller := cmp.Or(callerClaim(), "unnamed: set SELF_CALLER to sign what you make")
+	fmt.Fprintf(&b, "# self · %s · %d events · caller %s\n\n", home, len(st.Events), caller)
+	if len(st.Events) > 0 && st.Key == nil {
+		b.WriteString("**no .secret beside this log**: no receipt can verify, so this instance has no capabilities.\n\n")
+	}
+	fmt.Fprintf(&b, "%d commands, %d views: `self brief` says what each is for.\n", len(st.list(kindCommand)), len(st.list(kindView)))
+	last := lastUses(home, st)
+	if names := lately(st, last, 10); len(names) > 0 {
+		fmt.Fprintf(&b, "Used lately: %s\n", strings.Join(names, " · "))
+	}
+	b.WriteString(untouchedLine(home, st, last))
+	if p, r := len(st.pending()), len(st.Reject); p+r > 0 {
+		fmt.Fprintf(&b, "%d declared without a script, %d refused: `self brief` lists them.\n", p, r)
+	}
+	b.WriteString(wantedLine(st))
+	return b.String()
+}
+
+func untouchedLine(home string, st *state, last map[string]time.Time) string {
+	names := untouched(home, st, last)
+	if len(names) == 0 {
+		return ""
+	}
+	const shown = 8
+	more := ""
+	if len(names) > shown {
+		more = fmt.Sprintf(" and %d more", len(names)-shown)
+		names = names[:shown]
+	}
+	return fmt.Sprintf("Untouched for 30 days: %s%s. Rework, retire, or keep one on purpose with a capability.kept event and its reason.\n", strings.Join(names, " · "), more)
+}
+
+func wantedLine(st *state) string {
+	open := st.openIntents()
+	if len(open) == 0 {
+		return ""
+	}
+	line := fmt.Sprintf("%d wanted (`self brief intent/`)", len(open))
+	var oldest *intentItem
+	stale := 0
+	for _, w := range open {
+		if at := eventAt(st, w.Seq); !at.IsZero() && time.Since(at) >= untouchedAfter {
+			stale++
+			if oldest == nil || w.Seq < oldest.Seq {
+				oldest = w
+			}
+		}
+	}
+	if stale > 0 {
+		line += fmt.Sprintf("; %d open over 30 days, oldest intent/%s. Pursue or close them", stale, oldest.Name)
+	}
+	return line + ".\n"
+}
 
 func briefWith(home string, st *state, terse bool) string {
 	list := capabilityList
@@ -244,7 +304,15 @@ func briefWith(home string, st *state, terse bool) string {
 			fmt.Fprintf(&b, "- %s (seq %d): %s\n", where, r.Seq, oneLine(r.Reason))
 		}
 	}
+	if terse {
+		if u := untouchedLine(home, st, lastUses(home, st)); u != "" {
+			b.WriteString("\n" + u)
+		}
+	}
 	b.WriteString(intentBrief(st))
+	if terse {
+		return b.String()
+	}
 
 	b.WriteString("\n## where\n\n" +
 		"`events.jsonl` the log, authoritative · `cap/` installed scripts, to read · `.secret` the signing key\n" +
@@ -360,7 +428,7 @@ func capabilityList(st *state, typ string) string {
 
 // listedInSession is how many capabilities bare `self` still lists a line
 // each, with what they are for and who made them; past it, names only.
-const listedInSession = 24
+const listedInSession = 12
 
 func capabilityNames(st *state, typ string) string {
 	if len(st.Caps) <= listedInSession {

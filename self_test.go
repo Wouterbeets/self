@@ -1316,7 +1316,7 @@ func TestExecutionPromptCarriesTheDietNotTheProtocol(t *testing.T) {
 		}
 	}
 	p := situated(t, home(t), "an ask")
-	for _, want := range []string{"This instance is yours", "its design is up to you", "`self make` a command that does it", "where a view shows it", "declare it for a later session", "event JSONL or silence", "Nothing else you say is kept", "intent.declared"} {
+	for _, want := range []string{"This is you", "Its design is yours", "a command for what they will want again", "a fact for what you found out", "an intent for what you cannot do yet", "Removing is as much your work as adding", "event JSONL or silence", "Nothing else you say is kept", "intent.declared"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("diet prompt is missing %q:\n%s", want, p)
 		}

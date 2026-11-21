@@ -142,8 +142,8 @@ func TestBareSelfNamesCapabilitiesTersely(t *testing.T) {
 	if err := dispatch(h, "", nil, &out); err != nil {
 		t.Fatal(err)
 	}
-	if p := out.String(); !strings.Contains(p, "entry (pending)") || strings.Contains(p, "append a journal entry") {
-		t.Fatalf("bare self should list names only:\n%s", p)
+	if p := out.String(); !strings.Contains(p, "commands, 0 views: `self brief`") || strings.Contains(p, "append a journal entry") || strings.Contains(p, "filler3") {
+		t.Fatalf("bare self should count capabilities, not list them:\n%s", p)
 	}
 	if !strings.Contains(brief(h, replayed(t, h)), "append a journal entry") {
 		t.Fatal("`self brief` lost the summaries")

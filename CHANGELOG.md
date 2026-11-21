@@ -2,14 +2,14 @@
 
 ## Unreleased
 
-The brief now speaks to the mind reading it as the owner of the instance. It
-opens `This instance is yours. You are its owner and long-term maintainer, and
-its design is up to you`, and says that what is there the mind built in earlier
-sessions and will find again in the next. It still names three things worth
-keeping (a command, a fact, an intent). A session is asked, before each
-answer, to keep what a later session would need and to say in a line what it
-kept. An empty log
-asks the first session to begin by building a memory.
+The brief now speaks to the mind reading it as the instance itself: `This is
+you: what you kept on this machine in earlier sessions, and all you will know
+when you next arrive. Its design is yours`. It names three things worth keeping
+(a command, a fact, an intent) and asks for lightness: what is there should
+earn its place, and removing is as much the mind's work as adding. A session is
+asked, before each answer, to keep what a later session would need and to say
+in a line what it kept or removed. An empty log asks the first session to begin
+by building a memory.
 
 `self make command|view <name> <summary…> < script` declares a capability and
 installs its script in one step, with no JSON to write. `--consumes a.b,c.d`
@@ -27,8 +27,14 @@ command that relied on `HOME` being the instance directory needs `SELF_HOME`
 instead.
 
 Bare `self` lists a line per capability with its summary while the instance
-holds 24 or fewer, and names only beyond that. Each line ends with who made it
-and when, and for a command how many events it has appended since: `(by you,
+holds 12 or fewer. Beyond that it counts them and names only the commands used
+lately, the commands untouched for 30 days (to rework, retire, or keep on
+purpose with a `capability.kept` event and its reason), and how many intents
+have been open over 30 days, with the oldest. Running a command stamps its use
+under `used/`, outside the log; views stay pure reads and are not stamped. The
+`where` section moved out of bare `self` into `self brief`.
+
+In `self brief` each line ends with who made it and when, and for a command how many events it has appended since: `(by you,
 12d ago · 31 events since)`. Without `SELF_CALLER`, the caller is the harness's
 own name where it announces one (`AI_AGENT`, `CLAUDECODE`).
 
