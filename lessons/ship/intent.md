@@ -39,6 +39,20 @@ the change now needs them.
 - A person is told when a change starts needing them: checks failed, changes
   were requested, it is approved and ready, it is running in staging and ready
   for release. Not for progress.
+- A failing check is the change's failure only when the change could have
+  caused it. Three kinds are not, and get no alert, no repair and no hold; a
+  hold the driver placed for one is released:
+  - a gate that stays red until someone else acts, such as an approval or an
+    apply step. The person is told once, when the gate is all that is left;
+  - a check that is failing on the default branch too. The driver records
+    what fails there on each tick, and says once that the branch is red and
+    which changes wait on it;
+  - a check that fails on several tracked changes at once and is known not to
+    be required, because a change whose required checks pass fails it. One
+    message names the check and the changes, not one per change.
+- A check that fails on several changes at once and may be required gets one
+  repair at a time, not one per change. Changes that share commits share
+  failures, and parallel repairs of the same fault collide.
 - One driver. Two instances driving the same changes double every message and
   race on every hold.
 - Each change says in one line who it waits on and what happens next. The
