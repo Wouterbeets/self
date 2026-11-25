@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.4.0 — a smaller kernel, and a cleaner brief
+
+The kernel drops everything that belongs outside it and simplifies how the brief
+and usage are built:
+
+- **Removed sidecars and dead subsystems**: `cmd/self-serve`, `cmd/self-browse`,
+  `self loop`, `self completion` / `self __complete`, and the `view/` and `bin/`
+  directory projection cache are gone. One binary (`self`), one authoritative
+  log (`events.jsonl`), and `cap/` for installed scripts.
+- **No `used/` sidecar directory**: recent and 30-day untouched tracking now
+  derives purely from the log (`via: "cli:<name>"` and `capability.kept`
+  events, checking the log's own age for the 30-day window).
+- **Rationalised `self` and `self brief`**: unified the brief builders, dropped
+  dead helpers, and moved command provenance counts from an O(commands × events)
+  scan to a single pass over the log.
+- **Removed legacy aliases and CLI ambiguity**: bare `self <ask…>` no longer
+  implicitly runs `prompt` (it prints usage and suggests `self prompt "…"`),
+  and the legacy `work.declared` / `work.closed` / `work/` intent aliases are
+  gone from replay and `self brief`.
+- **Foreign import guard**: `capability.kept` and `intent.kept` are now refused
+  on foreign `self learn` alongside the other kernel events.
+- **Release builds**: fixed cross-compilation environment propagation in
+  `.github/workflows/release.yml` so `darwin/*` and `linux/arm64` release
+  binaries build for their target OS and architecture.
+
 ## v1.3.0 — this is you, and it travels light
 
 The brief now speaks to the mind reading it as the instance itself: `This is
