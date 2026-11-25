@@ -2,10 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -13,33 +9,7 @@ import (
 
 const untouchedAfter = 30 * 24 * time.Hour
 
-func usedDir(home string) string { return filepath.Join(home, "used") }
-
-func stampUse(home, typ, name string) {
-	dir := usedDir(home)
-	if os.MkdirAll(dir, 0o755) != nil {
-		return
-	}
-	since := filepath.Join(dir, ".since")
-	if _, err := os.Stat(since); errors.Is(err, fs.ErrNotExist) {
-		os.WriteFile(since, nil, 0o644)
-	}
-	p := filepath.Join(dir, typ+"."+name)
-	now := time.Now()
-	if os.Chtimes(p, now, now) != nil {
-		os.WriteFile(p, nil, 0o644)
-	}
-}
-
-func trackedSince(home string) (time.Time, bool) {
-	fi, err := os.Stat(filepath.Join(usedDir(home), ".since"))
-	if err != nil {
-		return time.Time{}, false
-	}
-	return fi.ModTime(), true
-}
-
-func lastUses(home string, st *state) map[string]time.Time {
+func lastUses(st *state) map[string]time.Time {
 	last := map[string]time.Time{}
 	prefix := doorCLI + ":"
 	for i := range st.Events {
@@ -58,16 +28,17 @@ func lastUses(home string, st *state) map[string]time.Time {
 			}
 		}
 	}
-	entries, _ := os.ReadDir(usedDir(home))
-	for _, d := range entries {
-		if d.IsDir() || strings.HasPrefix(d.Name(), ".") {
-			continue
-		}
-		if fi, err := d.Info(); err == nil && fi.ModTime().After(last[d.Name()]) {
-			last[d.Name()] = fi.ModTime()
+	return last
+}
+
+func viaCounts(st *state) map[string]int {
+	counts := map[string]int{}
+	for i := range st.Events {
+		if v := st.Events[i].Via; v != "" {
+			counts[v]++
 		}
 	}
-	return last
+	return counts
 }
 
 func lately(st *state, last map[string]time.Time, n int) []string {
@@ -82,16 +53,15 @@ func lately(st *state, last map[string]time.Time, n int) []string {
 		}
 	}
 	sort.SliceStable(uses, func(i, j int) bool { return uses[i].at.After(uses[j].at) })
-	var names []string
+	names := make([]string, 0, min(len(uses), n))
 	for _, u := range uses[:min(len(uses), n)] {
 		names = append(names, u.name)
 	}
 	return names
 }
 
-func untouched(home string, st *state, last map[string]time.Time) []string {
-	since, ok := trackedSince(home)
-	if !ok || time.Since(since) < untouchedAfter {
+func untouched(st *state, last map[string]time.Time) []string {
+	if len(st.Events) == 0 || time.Since(st.Events[0].OccurredAt) < untouchedAfter {
 		return nil
 	}
 	var names []string

@@ -22,25 +22,18 @@ Usage:
   self setup                  print what to offer so every session starts with self
   self make <kind> <name> <summary...> < script   declare and install a capability in one step
   self prompt [ask...]         print a prompt for an event-producing mind
-  self <ask...>                shorthand for self prompt <ask...>
   self hear [--after <head>]     ingest event JSONL or authored scripts from stdin
   self brief [name]             the state; with a name or intent/<name>, full detail
   self run <command> [args...]  execute a command capability and append its events
   self view <name> [args...]    replay a pure view; built-in log is always available
-  self loop [opts] [-- mind...] run a mind until the log stops changing (quiet passes in a row)
   self learn [--into <intent>] <account-dir>  deposit and interpret an account
   self watch [opts] [prefix]   wait for events without appending
   self give <selector> <dir>    write an event or capability account
   self rehydrate                rebuild derived capability files from the log
-  self completion <shell>       print a completion script (zsh|bash|fish)
   self help                     print the complete protocol
 
-Loop:
-  self loop --help
-  SELF_LOOP_MIND='<shell command>' self loop
-
 Environment:
-  SELF_HOME, SELF_CALLER, SELF_LOOP_MIND, SELF_LOOP_ASK, SELF_LOOP_MAX_PASSES, SELF_LOOP_SETTLE, SELF_LOOP_TIMEOUT`
+  SELF_HOME, SELF_CALLER`
 
 func main() {
 	home := homeDir()
@@ -89,7 +82,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		}
 		input, err := io.ReadAll(os.Stdin)
 		if err != nil {
-			return err
+			return fmt.Errorf("read stdin: %w", err)
 		}
 		return cmdHear(home, input, out, args...)
 
@@ -111,7 +104,6 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return err
 
 	case "run", "view":
-		// Discovery only reads state: never mint a missing instance key here.
 		st, err := loadState(home)
 		if err != nil {
 			return err
@@ -121,7 +113,7 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			typ, arg = kindCommand, "command"
 		}
 		if len(args) == 0 {
-			_, err := fmt.Fprintf(out, "usage: self %s <%s> [args...]\n\n%s", verb, arg, capabilityList(st, typ))
+			_, err := fmt.Fprintf(out, "usage: self %s <%s> [args...]\n\n%s", verb, arg, capabilityList(st, typ, viaCounts(st)))
 			return err
 		}
 		name, rest := args[0], args[1:]
@@ -141,14 +133,8 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 			io.WriteString(os.Stderr, unfoldFailed(st, typ, name, said.n == 0))
 			return err
 		}
-		if verb == "run" {
-			stampUse(home, typ, name)
-		}
 		_, err = out.Write(page)
 		return err
-
-	case "loop":
-		return cmdLoop(home, args, out, os.Stderr)
 
 	case "learn":
 		if len(args) == 3 && args[0] == "--into" && validIntentName(args[1]) {
@@ -168,20 +154,6 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 	case "rehydrate":
 		return rehydrate(home)
 
-	case "completion":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: self completion <zsh|bash|fish>")
-		}
-		script, ok := completionShims[args[0]]
-		if !ok {
-			return fmt.Errorf("no completion for %q — shells: zsh bash fish", args[0])
-		}
-		_, err := io.WriteString(out, script)
-		return err
-
-	case "__complete":
-		return cmdComplete(home, args, out)
-
 	case "-h", "--help":
 		_, err := io.WriteString(out, protocolLayer("core")+"\n\n"+
 			"Run `self` with no arguments to arrive: it only reads, and prints this with everything the instance holds.\n\n"+cliUsage+"\n")
@@ -192,36 +164,79 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 		return err
 
 	default:
-		// One bare unknown word is a mistyped verb, not an ask.
-		if len(args) == 0 && !strings.ContainsAny(verb, " \t\n") {
-			fmt.Fprintf(os.Stderr, "%s\n\n", cliUsage)
-			return fmt.Errorf("unknown verb %q — to make an ask, use: self prompt %q", verb, verb)
-		}
-		return cmdSituate(home, strings.Join(append([]string{verb}, args...), " "), out)
+		fmt.Fprintf(os.Stderr, "%s\n\n", cliUsage)
+		return fmt.Errorf("unknown verb %q — to make an ask, use: self prompt %q", verb, strings.Join(append([]string{verb}, args...), " "))
 	}
 }
 
-func brief(home string, st *state) string { return briefWith(home, st, false) }
+const listedInSession = 12
 
-// sessionBrief is what bare `self` shows a mind already busy with a task: the
-// capabilities by name only, leaving room for the brief sections. `self brief`
-// and execution prompts keep the summaries.
-func sessionBrief(home string, st *state) string {
-	if len(st.Caps) <= listedInSession {
-		return briefWith(home, st, true)
+func writeBriefHeader(b *strings.Builder, home string, st *state, full bool) {
+	caller := cmp.Or(callerClaim(), "unnamed — set SELF_CALLER to sign what you make")
+	if full {
+		fmt.Fprintf(b, "# self — %s\n\nlog: %d events    caller: %s\nhead: %s\n", home, len(st.Events), caller, head(st.Events))
+		if anyClipped(st) {
+			b.WriteString("lines below are clipped; `self brief <name>` prints one declaration in full\n")
+		}
+	} else {
+		fmt.Fprintf(b, "# self · %s · %d events · caller %s\n\n", home, len(st.Events), caller)
 	}
-	var b strings.Builder
-	caller := cmp.Or(callerClaim(), "unnamed: set SELF_CALLER to sign what you make")
-	fmt.Fprintf(&b, "# self · %s · %d events · caller %s\n\n", home, len(st.Events), caller)
 	if len(st.Events) > 0 && st.Key == nil {
-		b.WriteString("**no .secret beside this log**: no receipt can verify, so this instance has no capabilities.\n\n")
+		b.WriteString("**no .secret beside this log** — no receipt can verify, so this instance has no capabilities.\n\n")
 	}
+}
+
+func writeIssues(b *strings.Builder, st *state) {
+	if p := st.pending(); len(p) > 0 {
+		b.WriteString("\n## pending — declared, no script yet\n\n")
+		for _, c := range p {
+			fmt.Fprintf(b, "- %s (declared at seq %d)\n", c.key(), c.DeclSeq)
+		}
+	}
+	if len(st.Reject) > 0 {
+		b.WriteString("\n## refused — standing, until authored or retired\n\n")
+		for _, r := range st.Reject {
+			where := cmp.Or(strings.Trim(r.Type+"/"+r.Name, "/"), "(unnamed)")
+			fmt.Fprintf(b, "- %s (seq %d): %s\n", where, r.Seq, oneLine(r.Reason))
+		}
+	}
+}
+
+func brief(home string, st *state) string {
+	var b strings.Builder
+	writeBriefHeader(&b, home, st, true)
+	counts := viaCounts(st)
+	fmt.Fprintf(&b, "\n## commands — `self run <name> [args…]`\n\n%s\n## views — `self view <name> [args…]`\n\n%s",
+		capabilityList(st, kindCommand, counts), capabilityList(st, kindView, counts))
+	writeIssues(&b, st)
+	b.WriteString(intentBrief(st))
+	b.WriteString("\n## where\n\n" +
+		"`events.jsonl` the log, authoritative · `cap/` installed scripts, to read · `.secret` the signing key\n" +
+		"`self view log` what happened lately\n")
+	return b.String()
+}
+
+func orientBrief(home string, st *state) string {
+	var b strings.Builder
+	last := lastUses(st)
+	if len(st.Caps) <= listedInSession {
+		writeBriefHeader(&b, home, st, true)
+		counts := viaCounts(st)
+		fmt.Fprintf(&b, "\n## commands — `self run <name> [args…]`\n\n%s\n## views — `self view <name> [args…]`\n\n%s",
+			capabilityList(st, kindCommand, counts), capabilityList(st, kindView, counts))
+		writeIssues(&b, st)
+		if u := untouchedLine(st, last); u != "" {
+			b.WriteString("\n" + u)
+		}
+		b.WriteString(intentBrief(st))
+		return b.String()
+	}
+	writeBriefHeader(&b, home, st, false)
 	fmt.Fprintf(&b, "%d commands, %d views: `self brief` says what each is for.\n", len(st.list(kindCommand)), len(st.list(kindView)))
-	last := lastUses(home, st)
 	if names := lately(st, last, 10); len(names) > 0 {
 		fmt.Fprintf(&b, "Used lately: %s\n", strings.Join(names, " · "))
 	}
-	b.WriteString(untouchedLine(home, st, last))
+	b.WriteString(untouchedLine(st, last))
 	if p, r := len(st.pending()), len(st.Reject); p+r > 0 {
 		fmt.Fprintf(&b, "%d declared without a script, %d refused: `self brief` lists them.\n", p, r)
 	}
@@ -229,8 +244,8 @@ func sessionBrief(home string, st *state) string {
 	return b.String()
 }
 
-func untouchedLine(home string, st *state, last map[string]time.Time) string {
-	names := untouched(home, st, last)
+func untouchedLine(st *state, last map[string]time.Time) string {
+	names := untouched(st, last)
 	if len(names) == 0 {
 		return ""
 	}
@@ -278,64 +293,11 @@ func wantedLine(st *state) string {
 	return line + ".\n"
 }
 
-func briefWith(home string, st *state, terse bool) string {
-	list := capabilityList
-	if terse {
-		list = capabilityNames
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "# self — %s\n\n", home)
-
-	caller := cmp.Or(callerClaim(), `unnamed — set SELF_CALLER to sign what you make`)
-	fmt.Fprintf(&b, "log: %d events    caller: %s\n", len(st.Events), caller)
-	fmt.Fprintf(&b, "head: %s\n", head(st.Events))
-	if !terse && anyClipped(st) {
-		b.WriteString("lines below are clipped; `self brief <name>` prints one declaration in full\n")
-	}
-	if len(st.Events) > 0 && st.Key == nil {
-		b.WriteString("\n**no .secret beside this log** — no receipt can verify, so this instance has no capabilities.\n")
-	}
-
-	fmt.Fprintf(&b, "\n## commands — `self run <name> [args…]`\n\n%s\n## views — `self view <name> [args…]`\n\n%s",
-		list(st, kindCommand), list(st, kindView))
-	if terse && len(st.Caps) > listedInSession {
-		b.WriteString("\n`self brief` says what each is for; `self brief <name>` one in full.\n")
-	}
-
-	if p := st.pending(); len(p) > 0 {
-		b.WriteString("\n## pending — declared, no script yet\n\n")
-		for _, c := range p {
-			fmt.Fprintf(&b, "- %s (declared at seq %d)\n", c.key(), c.DeclSeq)
-		}
-	}
-	if len(st.Reject) > 0 {
-		b.WriteString("\n## refused — standing, until authored or retired\n\n")
-		for _, r := range st.Reject {
-			where := cmp.Or(strings.Trim(r.Type+"/"+r.Name, "/"), "(unnamed)")
-			fmt.Fprintf(&b, "- %s (seq %d): %s\n", where, r.Seq, oneLine(r.Reason))
-		}
-	}
-	if terse {
-		if u := untouchedLine(home, st, lastUses(home, st)); u != "" {
-			b.WriteString("\n" + u)
-		}
-	}
-	b.WriteString(intentBrief(st))
-	if terse {
-		return b.String()
-	}
-
-	b.WriteString("\n## where\n\n" +
-		"`events.jsonl` the log, authoritative · `cap/` installed scripts, to read · `.secret` the signing key\n" +
-		"`self view log` what happened lately\n")
-	return b.String()
-}
-
 func unfoldMissing(st *state, typ, name string) string {
 	if st.cap(typ, name) != nil || st.cap(otherKind(typ), name) != nil || (typ == kindView && name == "log") {
 		return ""
 	}
-	return fmt.Sprintf("self: no %s %q in this log. What there is:\n\n%s\n", typ, name, capabilityList(st, typ))
+	return fmt.Sprintf("self: no %s %q in this log. What there is:\n\n%s\n", typ, name, capabilityList(st, typ, viaCounts(st)))
 }
 
 func unfoldFailed(st *state, typ, name string, silent bool) string {
@@ -370,9 +332,6 @@ func otherKind(typ string) string {
 }
 
 func briefOne(st *state, selector string) (string, error) {
-	if name, ok := strings.CutPrefix(selector, "work/"); ok {
-		return intentDetail(st, name)
-	}
 	if name, ok := strings.CutPrefix(selector, "intent/"); ok {
 		return intentDetail(st, name)
 	}
@@ -422,11 +381,11 @@ func briefOne(st *state, selector string) (string, error) {
 	return b.String(), nil
 }
 
-func capabilityList(st *state, typ string) string {
+func capabilityList(st *state, typ string, counts map[string]int) string {
 	var b strings.Builder
 	caps := st.list(typ)
 	for _, c := range caps {
-		fmt.Fprintf(&b, "- %s — %s%s%s\n", c.Name, c.Decl.summary(), provenance(st, c), pendingMark(c))
+		fmt.Fprintf(&b, "- %s — %s%s%s\n", c.Name, c.Decl.summary(), provenance(c, counts), pendingMark(c))
 	}
 	if typ == kindView && st.cap(kindView, "log") == nil {
 		fmt.Fprintf(&b, "- log — the last %d events; `--all` for every one (built in, shadowable)\n", builtinLogTail)
@@ -437,26 +396,6 @@ func capabilityList(st *state, typ string) string {
 	return b.String()
 }
 
-const listedInSession = 12
-
-func capabilityNames(st *state, typ string) string {
-	if len(st.Caps) <= listedInSession {
-		return capabilityList(st, typ)
-	}
-	var names []string
-	for _, c := range st.list(typ) {
-		names = append(names, c.Name+pendingFlag(c))
-	}
-	if typ == kindView && st.cap(kindView, "log") == nil {
-		names = append(names, "log")
-	}
-	if len(names) == 0 {
-		return noneYet(st)
-	}
-	return strings.Join(names, " · ") + "\n"
-}
-
-// noneYet fills an empty list. An empty log reads as an opening, not a fault.
 func noneYet(st *state) string {
 	if len(st.Events) == 0 {
 		return "nothing yet: the first one is yours to make\n"
@@ -464,7 +403,7 @@ func noneYet(st *state) string {
 	return "none yet\n"
 }
 
-func provenance(st *state, c *capability) string {
+func provenance(c *capability, counts map[string]int) string {
 	if c.Receipt == nil {
 		return ""
 	}
@@ -477,12 +416,7 @@ func provenance(st *state, c *capability) string {
 		parts[0] = "by " + who + ", " + parts[0]
 	}
 	if c.Type == kindCommand {
-		n, via := 0, doorCLI+":"+c.Name
-		for i := range st.Events {
-			if st.Events[i].Via == via {
-				n++
-			}
-		}
+		n := counts[doorCLI+":"+c.Name]
 		if n == 1 {
 			parts = append(parts, "1 event since")
 		} else if n > 1 {
@@ -502,13 +436,6 @@ func ago(d time.Duration) string {
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-}
-
-func pendingFlag(c *capability) string {
-	if c.Pending() {
-		return " (pending)"
-	}
-	return ""
 }
 
 func anyClipped(st *state) bool {

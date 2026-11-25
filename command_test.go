@@ -138,7 +138,6 @@ func TestCLIOutputFailure(t *testing.T) {
 		args []string
 	}{
 		{"run", nil}, {"view", nil}, {"brief", nil}, {"help", nil},
-		{"loop", []string{"--help"}},
 		{"view", []string{"journal"}}, {"run", []string{"entry", "committed"}},
 	} {
 		if err := dispatch(h, tc.verb, tc.args, closedOutput{}); !errors.Is(err, io.ErrClosedPipe) {

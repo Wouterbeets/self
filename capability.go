@@ -297,7 +297,6 @@ func rehydrate(home string) error {
 	if err != nil {
 		return err
 	}
-	defer project(home, true) // deferred first, so it runs after unlock
 	defer unlock()
 	events, err := readEvents(home)
 	if err != nil {

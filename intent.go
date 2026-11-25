@@ -47,7 +47,7 @@ func (st *state) applyIntent(e Event) {
 		return
 	}
 	switch e.Name {
-	case "intent.declared", "work.declared":
+	case "intent.declared":
 		var w intentItem
 		if json.Unmarshal(e.Payload, &w) != nil || !validIntentName(w.Name) || strings.TrimSpace(w.Description) == "" {
 			return
@@ -58,7 +58,7 @@ func (st *state) applyIntent(e Event) {
 		} else {
 			st.Intents = append(st.Intents, &w)
 		}
-	case "intent.closed", "work.closed":
+	case "intent.closed":
 		var c intentClosure
 		if json.Unmarshal(e.Payload, &c) != nil || strings.TrimSpace(c.Reason) == "" || (c.Outcome != "completed" && c.Outcome != "dropped") {
 			return

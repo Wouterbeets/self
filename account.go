@@ -18,8 +18,8 @@ import (
 var refused = func() map[string]bool {
 	set := map[string]bool{}
 	for _, name := range strings.Fields(`
-		intent.declared intent.closed command.declared view.declared script.authored
-		script.installed script.rejected capability.retired lesson.learned account.given loop.settled
+		intent.declared intent.closed intent.kept command.declared view.declared script.authored
+		script.installed script.rejected capability.retired capability.kept lesson.learned account.given loop.settled
 		work.declared work.closed kernel.initialized projector.declared script.compiled self.asked
 		self.replied self.reflected learn.orchestrated capability.revision.requested`) {
 		set[name] = true
@@ -181,7 +181,6 @@ func cmdLearn(home, ref string, out io.Writer, into ...string) error {
 	if err != nil {
 		return err
 	}
-	project(home, false)
 	st, err := loadState(home)
 	if err != nil {
 		return err

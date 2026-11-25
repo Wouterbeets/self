@@ -22,7 +22,6 @@ func TestIntentLifecycleAndReadOnlyDiscovery(t *testing.T) {
 	}{
 		{"", nil}, {"prompt", nil}, {"brief", nil},
 		{"brief", []string{"intent/"}}, {"brief", []string{"intent/fit"}},
-		{"__complete", []string{"brief", "intent/"}},
 	} {
 		var out bytes.Buffer
 		if err := dispatch(h, tc.verb, tc.args, &out); err != nil {
@@ -137,107 +136,6 @@ func TestIntentAccountsRequireLocalAdoption(t *testing.T) {
 		if len(replayed(t, destination).Events) != before {
 			t.Fatal("rejected account partly deposited")
 		}
-	}
-}
-
-func TestLoopCanSettleWithUnresolvedIntent(t *testing.T) {
-	h := home(t)
-	heard(t, h, line(t, "intent.declared", intentItem{Name: "weigh-spool", Description: "Waiting for a physical measurement."}))
-	var out, diag bytes.Buffer
-	if err := cmdLoop(h, []string{"--max-passes", "3", "--settle", "2", "--", "sh", "-c", "cat >/dev/null"}, &out, &diag); err != nil {
-		t.Fatal(err)
-	}
-	if len(replayed(t, h).openIntents()) != 1 || !strings.Contains(diag.String(), "converged after 2") {
-		t.Fatal("quiet work did not survive convergence")
-	}
-}
-
-func TestIntentFixturesRunAcrossPersonas(t *testing.T) {
-	for _, tc := range []struct{ fixture, name, result, evidence string }{
-		{"printer", "enclosure-fit", "print.assessed", "143.75"},
-		{"household", "thursday-dinner", "shopping.prepared", "tomatoes"},
-		{"author", "sum-filament", "artifact.written", "negative input rejected"},
-	} {
-		t.Run(tc.fixture, func(t *testing.T) {
-			h := home(t)
-			fixture, err := os.ReadFile(filepath.Join("testdata", "intent", tc.fixture+".jsonl"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			heard(t, h, string(fixture))
-			mind, err := filepath.Abs(filepath.Join("testdata", "intent", "mind.py"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var out, diag bytes.Buffer
-			if err := cmdLoop(h, []string{"--max-passes", "4", "--timeout", "5s", "--", "python3", mind}, &out, &diag); err != nil {
-				t.Fatal(err)
-			}
-			st := replayed(t, h)
-			if len(st.openIntents()) != 0 || len(st.Caps) != 0 {
-				t.Fatal("work required capabilities or failed to close")
-			}
-			detail, err := intentDetail(st, tc.name)
-			if err != nil || !strings.Contains(detail, tc.evidence) {
-				t.Fatalf("missing evidence: %s %v", detail, err)
-			}
-			found := false
-			for _, e := range st.Events {
-				if e.Name == tc.result {
-					found = true
-				}
-			}
-			if !found {
-				t.Fatalf("missing domain result %s", tc.result)
-			}
-			if !strings.Contains(diag.String(), "converged after 3") {
-				t.Fatalf("did not stop after useful work: %s", &diag)
-			}
-		})
-	}
-}
-
-func TestPrinterMindWaitsForMissingMeasurement(t *testing.T) {
-	h := home(t)
-	fixture, err := os.ReadFile(filepath.Join("testdata", "intent", "printer.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, withoutMeasurement, ok := strings.Cut(string(fixture), "\n")
-	if !ok {
-		t.Fatal("missing fixture lines")
-	}
-	heard(t, h, withoutMeasurement)
-	mind, err := filepath.Abs(filepath.Join("testdata", "intent", "mind.py"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	before := len(replayed(t, h).Events)
-	var out, diag bytes.Buffer
-	if err := cmdLoop(h, []string{"--max-passes", "3", "--", "python3", mind}, &out, &diag); err != nil {
-		t.Fatal(err)
-	}
-	st := replayed(t, h)
-	if len(st.Events) != before || len(st.openIntents()) != 1 {
-		t.Fatal("missing evidence produced a result or closed work")
-	}
-}
-
-func TestLegacyIntentAndWorkCompatibility(t *testing.T) {
-	h := home(t)
-	heard(t, h, line(t, "intent.declared", map[string]string{"account": "old", "intent": "Historical account purpose"})+
-		line(t, "work.declared", intentItem{Name: "old-work", Description: "An outcome declared before the rename."}))
-	st := replayed(t, h)
-	if len(st.openIntents()) != 1 || st.intent("old-work") == nil {
-		t.Fatal("legacy account opened, or legacy work disappeared")
-	}
-	detail, err := briefOne(st, "work/old-work")
-	if err != nil || !strings.Contains(detail, "intent/old-work") {
-		t.Fatal("legacy selector no longer resolves")
-	}
-	heard(t, h, line(t, "intent.closed", intentClosure{Name: "old-work", Outcome: "completed", Reason: "Closed through the new vocabulary."}))
-	if len(replayed(t, h).openIntents()) != 0 {
-		t.Fatal("new closure did not close legacy declaration")
 	}
 }
 

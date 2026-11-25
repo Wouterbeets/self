@@ -126,30 +126,6 @@ func TestWatchReadOnlyFilteringAndMissingCursor(t *testing.T) {
 	}
 }
 
-func TestLoopExplicitSettlementIsScopedToSuccessfulStdout(t *testing.T) {
-	for _, tc := range []struct {
-		wire, suffix string
-		settled      bool
-	}{
-		{`{"name":"note.saved","payload":{}}
-{"name":"loop.settled","payload":{"reason":"Waiting for input"}}`, "", true},
-		{`{"name":"loop.settled","payload":{"reason":""}}`, "", false},
-		{`{"name":"loop.settled","payload":{"reason":"Wait"}}`, "; exit 1", false},
-		{`{"name":"loop.settled","payload":{"reason":"Wait"}}
-{"name":"note.saved","payload":{}}`, "", false},
-	} {
-		h := home(t)
-		var diag bytes.Buffer
-		// A previous writer's settlement cannot stop this pass.
-		heard(t, h, `{"name":"loop.settled","payload":{"reason":"Earlier pass"}}`)
-		cmd := "cat >/dev/null; printf '%s\\n' '" + tc.wire + "'" + tc.suffix
-		err := cmdLoop(h, []string{"--max-passes", "1", "--", "/bin/sh", "-c", cmd}, io.Discard, &diag)
-		if (err == nil) != tc.settled {
-			t.Fatalf("settlement=%v: %v\n%s", tc.settled, err, diag.String())
-		}
-	}
-}
-
 func TestAtomicCommandDecidesFromTheLogItCommits(t *testing.T) {
 	// claim: succeeds only while no claim is in the log; count: numbers ticks.
 	claim := "#!/bin/sh\nif grep -q '\"name\":\"slot.claimed\"'; then echo held >&2; exit 3; fi\n" +

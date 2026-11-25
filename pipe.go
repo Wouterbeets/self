@@ -38,7 +38,7 @@ func cmdOrient(home string, out io.Writer) error {
 	if len(st.Events) == 0 {
 		layers = append(layers, protocolLayer("first"))
 	}
-	_, err = io.WriteString(out, strings.Join(layers, "\n\n")+"\n\n"+sessionBrief(home, st)+briefSections(home, st))
+	_, err = io.WriteString(out, strings.Join(layers, "\n\n")+"\n\n"+orientBrief(home, st)+briefSections(home, st))
 	return err
 }
 
@@ -175,7 +175,6 @@ func ingest(home string, evs []Event, scripts []authored, prose []string, by str
 		}
 		return ingestLocked(home, key, evs, scripts, prose, by, &report)
 	}()
-	project(home, false)
 	if _, werr := out.Write(report.Bytes()); werr != nil && err == nil {
 		return werr
 	}

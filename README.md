@@ -141,7 +141,7 @@ intent club-dues  "Who has not paid this season's subscription?" \
 intent prep-list  "What do we prep before Friday's service?" \
   "From the bookings and the menu: quantities per dish, and what must be ordered by Wednesday."
 
-self loop -- claude -p   # run a mind until the log stops changing
+self prompt | claude -p | self hear   # run one pass against the log
 ```
 
 Three people, three instances that end up with nothing in common: a filament
@@ -185,11 +185,6 @@ self brief <name>         # one capability or intent in full
 self hear < batch.jsonl   # append events or authored scripts
 ```
 
-Opt in to plain files with `mkdir ~/.self/view ~/.self/bin`. After each
-write, `view/<name>` holds what `self view <name>` prints, for `cat`, `grep -r`
-and editors; `bin/<name>` runs `self run <name>`, so with
-`PATH=~/.self/bin:$PATH` capabilities are ordinary commands.
-
 A capability is an ordinary executable in any language. `self rehydrate`
 rebuilds all of them from `events.jsonl` and `.secret`, with no model and no
 network: the log is the whole self.
@@ -199,7 +194,6 @@ prints events on stdout:
 
 ```sh
 self prompt "track my long-running goals" | claude -p | self hear
-self loop -- claude -p                           # run until the log settles
 self learn lessons/memory | claude -p | self hear # grow a lesson's capabilities
 ```
 
@@ -212,8 +206,6 @@ beside your code.
 `events.jsonl` and `.secret` are the whole self, so those two files are what
 you back up or move to another machine. `.secret` signs your capabilities:
 never commit it or share it.
-
-`self completion zsh|bash|fish` prints shell completion.
 
 ## Lessons
 
@@ -256,11 +248,9 @@ The full contract is [PROTOCOL.md](PROTOCOL.md), which `self help` prints.
 
 ## Optional adapters
 
-- `self-serve` / `self-browse`: a local browser view. GET reads views;
-  commands require POST.
 - [`examples/mind-claude`](examples/mind-claude),
   [`examples/mind-opencode`](examples/mind-opencode): wrap a harness as a mind
-  with a live trace on stderr: `self loop -- examples/mind-claude`.
+  with a live trace on stderr: `self prompt | examples/mind-claude | self hear`.
 - [`examples/mind-stub`](examples/mind-stub): a mind with no model, for the
   offline demo and for tests.
 
