@@ -26,9 +26,9 @@ Usage:
   self brief [name]             the state; with a name or intent/<name>, full detail
   self run <command> [args...]  execute a command capability and append its events
   self view <name> [args...]    replay a pure view; built-in log is always available
-  self learn [--into <intent>] <account-dir>  deposit and interpret an account
+  self learn [--into <intent>] <dir|file|->  deposit and interpret an account
   self watch [opts] [prefix]   wait for events without appending
-  self give <selector> <dir>    write an event or capability account
+  self give <selector> <dir|->  write an event or capability account
   self rehydrate                rebuild derived capability files from the log
   self help                     print the complete protocol
 
@@ -138,18 +138,18 @@ func dispatch(home, verb string, args []string, out io.Writer) error {
 
 	case "learn":
 		if len(args) == 3 && args[0] == "--into" && validIntentName(args[1]) {
-			return cmdLearn(home, args[2], out, args[1])
+			return cmdLearnFrom(home, args[2], os.Stdin, out, args[1])
 		}
 		if len(args) != 1 {
-			return fmt.Errorf("usage: self learn [--into <intent-name>] <account-dir>")
+			return fmt.Errorf("usage: self learn [--into <intent-name>] <account-dir|file|->")
 		}
-		return cmdLearn(home, args[0], out)
+		return cmdLearnFrom(home, args[0], os.Stdin, out)
 
 	case "give":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: self give <event-prefix | command/<name> | view/<name>> <dir>")
+			return fmt.Errorf("usage: self give <event-prefix | command/<name> | view/<name>> <dir|->")
 		}
-		return cmdGive(home, args[0], args[1])
+		return cmdGiveOut(home, args[0], args[1], out)
 
 	case "rehydrate":
 		return rehydrate(home)

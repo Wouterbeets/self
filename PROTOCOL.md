@@ -160,9 +160,9 @@ leases, or domain schemas are prescribed by the kernel. Shopping items, spool
 measurements, calendar entries, and goal hierarchies remain domain records.
 External artifacts need durable references; they are not rebuilt by `rehydrate`.
 
-`self give intent. <dir>` exports the intent lifecycle as inert `lineage.*` evidence.
-`learn` declares a local intent to interpret the account.
-`self learn --into <intent-name> <dir>` groups deliveries under one named intent;
+`self give intent. <dir|->` exports the intent lifecycle as inert `lineage.*` evidence (`-` writes a single JSON account `{name, intent, record}` to stdout).
+`learn` declares a local intent to interpret the account, reading a directory (`intent.md` + optional `record.jsonl`), a JSON account file, or `-` on stdin (e.g. `curl -fsS <url> | self learn -`).
+`self learn --into <intent-name> <dir|file|->` groups deliveries under one named intent;
 a new delivery revises/reopens that intent. Earlier descriptions and receipts
 remain in the log. Repeating an identical delivery (account name, intent text,
 record bytes, and grouping name) appends nothing and prints the prompt again.
@@ -477,9 +477,9 @@ self brief [name]           the state card; with a name or intent/<name>, full d
 self run <cmd> [args…]      execute a command
 self view <name> [args…]    replay a view ("log" is built in, shadowable)
 self view log [--all]       last 10 events, or every one
-self learn [--into ID] <dir> deposit an account, print its learning prompt
+self learn [--into ID] <dir|file|-> deposit an account, print its learning prompt
 self watch [opts] [prefix]  wait for (--follow: stream) matching events (READ)
-self give <sel> <dir>       write an account from the log
+self give <sel> <dir|->     write an account from the log
 self rehydrate              make cap/ match the log
 self help                   this file
 ```
